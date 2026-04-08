@@ -1,2 +1,2 @@
-# What is this?
-IDK yet
+# Ampwave
+Your music, unlocked
