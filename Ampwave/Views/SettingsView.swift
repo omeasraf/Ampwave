@@ -75,23 +75,23 @@ struct SettingsView: View {
       setupContext()
     }
     .overlay {
-        if isResetting {
-            ZStack {
-                Color.black.opacity(0.4)
-                    .ignoresSafeArea()
-                
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    Text("Resetting Library...")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                }
-                .padding(30)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 20))
-            }
+      if isResetting {
+        ZStack {
+          Color.black.opacity(0.4)
+            .ignoresSafeArea()
+
+          VStack(spacing: 16) {
+            ProgressView()
+              .scaleEffect(1.5)
+            Text("Resetting Library...")
+              .font(.headline)
+              .foregroundStyle(.white)
+          }
+          .padding(30)
+          .background(.ultraThinMaterial)
+          .clipShape(RoundedRectangle(cornerRadius: 20))
         }
+      }
     }
   }
 
@@ -302,7 +302,7 @@ struct SettingsView: View {
             get: { preferences.autoFetchLyrics },
             set: { preferences.autoFetchLyrics = $0 }
           ))
-          
+
         Toggle(
           "Prefer Online Artwork",
           isOn: Binding(
@@ -367,11 +367,13 @@ struct SettingsView: View {
           .foregroundStyle(.secondary)
       }
 
-      Link(destination: URL(string: "https://github.com/omeasraf/openstream")!) {
+      Link(destination: URL(string: "https://github.com/omeasraf/ampwave")!) {
         Label("GitHub", systemImage: "link")
       }
 
-      Link(destination: URL(string: "https://openstream.app/privacy")!) {
+      Link(
+        destination: URL(string: "https://github.com/omeasraf/AmpwaveDocs/blob/main/privacy.md")!
+      ) {
         Label("Privacy Policy", systemImage: "hand.raised")
       }
     } header: {
