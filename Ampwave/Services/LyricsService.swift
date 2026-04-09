@@ -59,21 +59,17 @@ final class LyricsService {
 
   func fetchOnlineLyrics(for song: LibrarySong) async -> SyncedLyric? {
     if let lyrics = await fetchFromLRCLIB(song: song) {
-      cacheLyrics(lyrics)
+      let cached = cacheLyrics(lyrics)
       // Update song.lyrics with the plain text or LRC if possible
-      if let synced = getCachedLyrics(for: song) {
-        song.lyrics = LRCParser.toLRC(synced.lines)
-      }
-      return lyrics
+      song.lyrics = LRCParser.toLRC(cached.lines)
+      return cached
     }
 
     // Fallback to lyrics.ovh if LRCLIB has nothing
     if let lyrics = await fetchFromLyricsOVH(song: song) {
-      cacheLyrics(lyrics)
-      if let synced = getCachedLyrics(for: song) {
-        song.lyrics = synced.lines.map(\.text).joined(separator: "\n")
-      }
-      return lyrics
+      let cached = cacheLyrics(lyrics)
+      song.lyrics = cached.lines.map(\.text).joined(separator: "\n")
+      return cached
     }
 
     return nil
@@ -194,8 +190,9 @@ final class LyricsService {
     return allLyrics.first(where: { $0.songId == song.id })
   }
 
-  private func cacheLyrics(_ lyrics: SyncedLyric) {
-    guard let modelContext = modelContext else { return }
+  @discardableResult
+  private func cacheLyrics(_ lyrics: SyncedLyric) -> SyncedLyric {
+    guard let modelContext = modelContext else { return lyrics }
 
     let descriptor = FetchDescriptor<SyncedLyric>()
 
@@ -206,11 +203,13 @@ final class LyricsService {
       existing.source = lyrics.source
       existing.language = lyrics.language
       existing.lastUpdated = Date()
+      try? modelContext.save()
+      return existing
     } else {
       modelContext.insert(lyrics)
+      try? modelContext.save()
+      return lyrics
     }
-
-    try? modelContext.save()
   }
 
   func clearCachedLyrics(for song: LibrarySong) {

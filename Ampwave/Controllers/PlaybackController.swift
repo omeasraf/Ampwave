@@ -567,20 +567,36 @@ final class PlaybackController {
   }
 
   private func updateCurrentLyric() {
-    guard let lyrics = currentLyrics else {
+    guard let song = currentItem, 
+          let lyrics = currentLyrics, 
+          lyrics.songId == song.id else {
       currentLyricIndex = nil
       return
     }
 
-    currentLyricIndex = lyrics.lineIndex(at: currentTime)
+    // Defensive check for potential detachment/deallocation
+    do {
+      currentLyricIndex = lyrics.lineIndex(at: currentTime)
+    } catch {
+      print("Warning: Failed to update lyric index (likely detached context)")
+      currentLyricIndex = nil
+    }
   }
 
   var currentLyricLine: LyricLine? {
-    guard let index = currentLyricIndex,
-      let lyrics = currentLyrics,
-      index < lyrics.lines.count
+    guard let song = currentItem,
+          let index = currentLyricIndex,
+          let lyrics = currentLyrics,
+          lyrics.songId == song.id,
+          index >= 0
     else { return nil }
-    return lyrics.lines[index]
+    
+    // Safely check lines count
+    let linesCount = (try? lyrics.lines.count) ?? 0
+    if index < linesCount {
+      return lyrics.lines[index]
+    }
+    return nil
   }
 
   func refreshLyrics() async {

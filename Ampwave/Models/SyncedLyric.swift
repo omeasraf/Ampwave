@@ -3,7 +3,6 @@
 //  Ampwave
 //
 //  Model for time-synced lyrics (LRC format).
-//  Supports karaoke-style highlighting and auto-scrolling.
 //
 
 import Foundation
