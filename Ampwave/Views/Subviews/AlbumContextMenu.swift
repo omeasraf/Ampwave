@@ -91,9 +91,11 @@ extension View {
 struct SongContextMenuModifier: ViewModifier {
   let song: LibrarySong
   let onEdit: (() -> Void)?
+  let onDelete: (() -> Void)?
 
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
+    @State private var isDeletingShown = false
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -135,6 +137,16 @@ struct SongContextMenuModifier: ViewModifier {
         } label: {
           Label("Add to Playlist", systemImage: "text.badge.plus")
         }
+          
+          Button {
+              if let onDelete {
+                  onDelete()
+              } else {
+                  isDeletingShown = true
+              }
+          } label: {
+              Label("Delete", systemImage: "trash")
+          }
       }
       .sheet(isPresented: $isEditingShown) {
         SongEditSheet(song: song, isPresented: $isEditingShown)
@@ -156,7 +168,7 @@ struct SongContextMenuModifier: ViewModifier {
 }
 
 extension View {
-  func songContextMenu(song: LibrarySong, onEdit: (() -> Void)? = nil) -> some View {
-    modifier(SongContextMenuModifier(song: song, onEdit: onEdit))
+  func songContextMenu(song: LibrarySong, onEdit: (() -> Void)? = nil, onDelete: (() -> Void)? = nil) -> some View {
+      modifier(SongContextMenuModifier(song: song, onEdit: onEdit, onDelete: onDelete))
   }
 }
