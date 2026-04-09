@@ -504,19 +504,19 @@ struct SettingsView: View {
     print("[DEBUG] SettingsView.resetLibrary: Starting full reset")
 
     Task {
-      // 1. Delete all Library Songs
+      // Delete all Library Songs
       print("[DEBUG] SettingsView.resetLibrary: Deleting songs")
       for song in library.songs {
         modelContext.delete(song)
       }
 
-      // 2. Delete all Albums
+      // Delete all Albums
       print("[DEBUG] SettingsView.resetLibrary: Deleting albums")
       for album in library.albums {
         modelContext.delete(album)
       }
 
-      // 3. Delete custom and smart playlists
+      // Delete custom and smart playlists
       print("[DEBUG] SettingsView.resetLibrary: Deleting playlists")
       for playlist in playlistManager.playlists {
         if playlist.playlistType == .custom || playlist.playlistType == .smart
@@ -526,7 +526,7 @@ struct SettingsView: View {
         }
       }
 
-      // 4. Delete history and statistics
+      // Delete history and statistics
       print("[DEBUG] SettingsView.resetLibrary: Deleting history and stats")
       do {
         let historyDescriptor = FetchDescriptor<ListeningHistory>()
@@ -544,11 +544,12 @@ struct SettingsView: View {
         print("[DEBUG] SettingsView.resetLibrary: Error fetching history/stats: \(error)")
       }
 
-      // 5. Clear artwork cache
-      print("[DEBUG] SettingsView.resetLibrary: Clearing artwork cache")
+      // Clear artwork cache and song files
+      print("[DEBUG] SettingsView.resetLibrary: Clearing artwork cache and song files")
       clearCache()
+      library.deleteAllFiles()
 
-      // 6. Save and reload
+      // Save and reload
       print("[DEBUG] SettingsView.resetLibrary: Saving changes")
       do {
         try modelContext.save()

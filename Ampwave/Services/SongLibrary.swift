@@ -256,7 +256,7 @@ final class SongLibrary {
     return audioFiles
   }
 
-  private func fileHash(at url: URL) -> String? {
+  nonisolated private func fileHash(at url: URL) async -> String? {
     do {
       let handle = try FileHandle(forReadingFrom: url)
       defer { try? handle.close() }
@@ -336,15 +336,32 @@ final class SongLibrary {
       }
     }
 
-    // 1. Offload heavy I/O to a background task
-    print("[DEBUG] SongLibrary.importFile: Offloading I/O to background task")
-    let ioResult = await Task.detached(priority: .userInitiated) {
-      print("[DEBUG] SongLibrary.importFile.detached: Calculating hash for \(url.lastPathComponent)")
-        guard let hash = await self.fileHash(at: url) else {
-        print("[DEBUG] SongLibrary.importFile.detached: Failed to calculate hash for \(url.lastPathComponent)")
-        return nil as (String, ExtractedAudioMetadata, URL, Int)?
-      }
+    // Calculate hash first to check if it already exists
+    print("[DEBUG] SongLibrary.importFile: Calculating hash for \(url.lastPathComponent)")
+    guard let fileHash = await self.fileHash(at: url) else {
+      print("[DEBUG] SongLibrary.importFile: Failed to calculate hash for \(url.lastPathComponent)")
+      return nil
+    }
 
+    // Perform SwiftData operations on Main Actor
+    print("[DEBUG] SongLibrary.importFile: Checking for existing song with hash: \(fileHash)")
+    do {
+      var descriptor = FetchDescriptor<LibrarySong>(
+        predicate: #Predicate<LibrarySong> { $0.fileHash == fileHash }
+      )
+      descriptor.fetchLimit = 1
+      let count = try modelContext.fetchCount(descriptor)
+      if count > 0 {
+        print("[DEBUG] SongLibrary.importFile: Song already exists in library (hash: \(fileHash))")
+        return nil
+      }
+    } catch {
+      print("[DEBUG] SongLibrary.importFile: Error checking for existing song: \(error)")
+    }
+
+    // Offload remaining heavy I/O to a background task
+    print("[DEBUG] SongLibrary.importFile: Offloading remaining I/O to background task")
+    let ioResult = await Task.detached(priority: .userInitiated) {
       // Extract metadata (this also does I/O)
       print("[DEBUG] SongLibrary.importFile.detached: Extracting metadata for \(url.lastPathComponent)")
       let metadata = await AudioMetadataExtractor.extract(from: url)
@@ -376,35 +393,17 @@ final class SongLibrary {
         try FileManager.default.copyItem(at: url, to: destinationURL)
       } catch {
         print("[DEBUG] SongLibrary.importFile.detached: Failed to copy file: \(error)")
-        return nil
+        return nil as (ExtractedAudioMetadata, URL, Int)?
       }
 
       let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
       print("[DEBUG] SongLibrary.importFile.detached: I/O completed for \(url.lastPathComponent)")
 
-      return (hash, metadata, destinationURL, fileSize)
+      return (metadata, destinationURL, fileSize)
     }.value
 
-    guard let (fileHash, metadata, destinationURL, fileSize) = ioResult else {
+    guard let (metadata, destinationURL, fileSize) = ioResult else {
       print("[DEBUG] SongLibrary.importFile: I/O task failed for \(url.lastPathComponent)")
-      return nil
-    }
-
-    // 2. Perform SwiftData operations on Main Actor
-    print("[DEBUG] SongLibrary.importFile: Performing SwiftData operations for \(url.lastPathComponent)")
-    // Skip if already in library
-    do {
-      var descriptor = FetchDescriptor<LibrarySong>(
-        predicate: #Predicate<LibrarySong> { $0.fileHash == fileHash }
-      )
-      descriptor.fetchLimit = 1
-      let count = try modelContext.fetchCount(descriptor)
-      if count > 0 {
-        print("[DEBUG] SongLibrary.importFile: Song already exists in library (hash: \(fileHash))")
-        return nil
-      }
-    } catch {
-      print("[DEBUG] SongLibrary.importFile: Error checking for existing song: \(error)")
       return nil
     }
 
@@ -468,7 +467,7 @@ final class SongLibrary {
   private func importFileInPlace(at url: URL, modelContext: ModelContext) async -> LibrarySong? {
     let fileName = url.lastPathComponent
 
-    guard let fileHash = fileHash(at: url) else { return nil }
+    guard let fileHash = await fileHash(at: url) else { return nil }
     let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
 
     // Skip if already in library
@@ -828,6 +827,12 @@ final class SongLibrary {
     }
 
     return "\(nameWithoutExt) (\(UUID().uuidString.prefix(8)))\(ext)"
+  }
+
+  func deleteAllFiles() {
+    print("[DEBUG] SongLibrary.deleteAllFiles: Deleting all files in \(songsDirectory.path)")
+    try? fileManager.removeItem(at: songsDirectory)
+    try? fileManager.createDirectory(at: songsDirectory, withIntermediateDirectories: true)
   }
 
   // MARK: - Persistence
