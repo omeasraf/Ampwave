@@ -429,6 +429,12 @@ struct SettingsView: View {
             ) {
                 Label("GitHub", systemImage: "link")
             }
+            
+            Link(
+                destination: URL(string: "https://discord.com/invite/gKChVVHRKW")!
+            ) {
+                Label("Discord", systemImage: "person.3.fill")
+            }
 
             Link(
                 destination: URL(

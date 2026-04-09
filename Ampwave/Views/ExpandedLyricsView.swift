@@ -61,7 +61,6 @@ struct ExpandedLyricsView: View {
               .padding(.horizontal, 40)
             }
             .id(playback.currentItem?.id)
-            .id(playback.currentItem?.id)
             .onChange(of: playback.currentLyricIndex) { _, newIndex in
               guard let idx = newIndex else { return }
               if !isUserScrolling {
@@ -82,6 +81,23 @@ struct ExpandedLyricsView: View {
                 scrollTimeout?.invalidate()
               }
             }
+          }
+        } else if let plainLyrics = playback.currentItem?.lyrics, !plainLyrics.isEmpty {
+          // Plain text fallback
+          ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 20) {
+              Spacer().frame(height: 100)
+              
+              Text(plainLyrics)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .lineSpacing(8)
+                .padding(.horizontal, 30)
+              
+              Spacer().frame(height: 100)
+            }
+            .frame(maxWidth: .infinity)
           }
         } else {
           VStack(spacing: 20) {
@@ -124,6 +140,16 @@ struct ExpandedLyricsView: View {
         }
       }
       .preferredColorScheme(.dark)
+      .onAppear {
+        #if os(iOS)
+        UIApplication.shared.isIdleTimerDisabled = true
+        #endif
+      }
+      .onDisappear {
+        #if os(iOS)
+        UIApplication.shared.isIdleTimerDisabled = false
+        #endif
+      }
     }
   }
 
@@ -203,6 +229,27 @@ struct CompactLyricsView: View {
               scrollTimeout?.invalidate()
             }
           }
+        }
+        .frame(height: 200)
+        .background(artworkColor)
+        .cornerRadius(10)
+        .contentShape(Rectangle())
+        .onTapGesture {
+          onExpand()
+        }
+      } else if let plainLyrics = playback.currentItem?.lyrics, !plainLyrics.isEmpty {
+        // Plain text fallback
+        ScrollView(.vertical, showsIndicators: false) {
+          VStack(spacing: 12) {
+            Spacer().frame(height: 40)
+            Text(plainLyrics)
+              .font(.system(size: 15, weight: .medium))
+              .foregroundStyle(.primary)
+              .multilineTextAlignment(.center)
+              .padding(.horizontal, 20)
+            Spacer().frame(height: 40)
+          }
+          .frame(maxWidth: .infinity)
         }
         .frame(height: 200)
         .background(artworkColor)
