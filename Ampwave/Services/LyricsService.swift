@@ -27,14 +27,52 @@ final class LyricsService {
       return cached
     }
 
+    // Check for local .lrc file first
+    let url = SongLibrary.shared.getFileURL(for: song)
+    let lrcURL = url.deletingPathExtension().appendingPathExtension("lrc")
+    if FileManager.default.fileExists(atPath: lrcURL.path) {
+      if let lrcContent = try? String(contentsOf: lrcURL, encoding: .utf8) {
+        let lines = LRCParser.parse(lrcContent)
+        if !lines.isEmpty {
+          let lyrics = SyncedLyric(
+            songId: song.id,
+            lines: lines,
+            source: .lrclib, // Local but we use .lrclib for now
+            language: nil
+          )
+          cacheLyrics(lyrics)
+          song.lyrics = lrcContent
+          return lyrics
+        }
+      }
+    }
+
+    // Skip online if autoFetchLyrics is false or if song already has embedded lyrics
+    guard let modelContext = modelContext else { return nil }
+    let settings = AppSettings.getOrCreate(in: modelContext)
+    if !settings.autoFetchLyrics && (song.lyrics != nil && !song.lyrics!.isEmpty) {
+      return nil
+    }
+
+    return await fetchOnlineLyrics(for: song)
+  }
+
+  func fetchOnlineLyrics(for song: LibrarySong) async -> SyncedLyric? {
     if let lyrics = await fetchFromLRCLIB(song: song) {
       cacheLyrics(lyrics)
+      // Update song.lyrics with the plain text or LRC if possible
+      if let synced = getCachedLyrics(for: song) {
+        song.lyrics = LRCParser.toLRC(synced.lines)
+      }
       return lyrics
     }
 
     // Fallback to lyrics.ovh if LRCLIB has nothing
     if let lyrics = await fetchFromLyricsOVH(song: song) {
       cacheLyrics(lyrics)
+      if let synced = getCachedLyrics(for: song) {
+        song.lyrics = synced.lines.map(\.text).joined(separator: "\n")
+      }
       return lyrics
     }
 
@@ -190,6 +228,29 @@ final class LyricsService {
 
   func refreshLyrics(for song: LibrarySong) async -> SyncedLyric? {
     clearCachedLyrics(for: song)
-    return await fetchLyrics(for: song)
+    return await fetchOnlineLyrics(for: song)
+  }
+
+  func saveLyrics(for song: LibrarySong, content: String) {
+    guard let modelContext = modelContext else { return }
+
+    let lines = LRCParser.parse(content)
+    if !lines.isEmpty {
+      // It's LRC format
+      let syncedLyric = SyncedLyric(
+        songId: song.id,
+        lines: lines,
+        source: .lrclib,  // Mark as manual/local if possible, but .lrclib is fine for now
+        language: nil
+      )
+      cacheLyrics(syncedLyric)
+    } else {
+      // It's plain text - we don't store plain text in SyncedLyric for now,
+      // but we might want to clear existing synced lyrics if user explicitly puts plain text
+      clearCachedLyrics(for: song)
+    }
+
+    song.lyrics = content
+    try? modelContext.save()
   }
 }

@@ -15,11 +15,14 @@ final class AppSettings: Identifiable {
   var groupSongsByAlbum: Bool = true
   /// Whether to automatically merge duplicate albums with same name and artist
   var mergeAlbumDuplicates: Bool = true
+  /// Whether to automatically fetch lyrics from online sources
+  var autoFetchLyrics: Bool = false
 
-  init(groupSongsByAlbum: Bool = true, mergeAlbumDuplicates: Bool = true) {
+  init(groupSongsByAlbum: Bool = true, mergeAlbumDuplicates: Bool = true, autoFetchLyrics: Bool = false) {
     self.id = UUID()
     self.groupSongsByAlbum = groupSongsByAlbum
     self.mergeAlbumDuplicates = mergeAlbumDuplicates
+    self.autoFetchLyrics = autoFetchLyrics
   }
 
   /// Gets or creates the singleton app settings instance

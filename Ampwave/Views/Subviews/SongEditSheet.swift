@@ -18,6 +18,8 @@ struct SongEditSheet: View {
   @State private var year: String
   @State private var genre: String
   @State private var trackNumber: String
+  @State private var lyrics: String
+  @State private var isLoadingLyrics: Bool = false
 
   private var library: SongLibrary { SongLibrary.shared }
 
@@ -30,6 +32,7 @@ struct SongEditSheet: View {
     _year = State(initialValue: song.year.map(String.init) ?? "")
     _genre = State(initialValue: song.genre ?? "")
     _trackNumber = State(initialValue: song.trackNumber.map(String.init) ?? "")
+    _lyrics = State(initialValue: song.lyrics ?? "")
   }
 
   var body: some View {
@@ -51,6 +54,33 @@ struct SongEditSheet: View {
             #if os(iOS)
               .keyboardType(.numberPad)
             #endif
+        }
+
+        Section("Lyrics") {
+          HStack {
+            Text("Content")
+            Spacer()
+            if isLoadingLyrics {
+              ProgressView()
+                .controlSize(.small)
+            } else {
+              Button("Fetch Online") {
+                Task {
+                  isLoadingLyrics = true
+                  if let _ = await LyricsService.shared.fetchOnlineLyrics(for: song) {
+                    lyrics = song.lyrics ?? ""
+                  }
+                  isLoadingLyrics = false
+                }
+              }
+              .font(.caption)
+              .buttonStyle(.bordered)
+            }
+          }
+          
+          TextEditor(text: $lyrics)
+            .frame(minHeight: 200)
+            .font(.system(.body, design: .monospaced))
         }
       }
       .navigationTitle("Edit Song")
@@ -104,6 +134,9 @@ struct SongEditSheet: View {
     if let trackInt = Int(trackNumber), trackInt > 0 {
       song.trackNumber = trackInt
     }
+
+    // Save lyrics
+    LyricsService.shared.saveLyrics(for: song, content: lyrics)
 
     // Persist changes
     if let modelContext = library.modelContext {

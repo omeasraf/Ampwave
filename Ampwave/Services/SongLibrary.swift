@@ -414,6 +414,18 @@ final class SongLibrary {
     let artworkPath: String?
     if let data = metadata.artwork { artworkPath = await cacheArtwork(data) } else { artworkPath = nil }
 
+    // Check for companion .lrc file in the source location
+    var songLyrics = metadata.lyrics
+    let lrcURL = url.deletingPathExtension().appendingPathExtension("lrc")
+    if FileManager.default.fileExists(atPath: lrcURL.path) {
+        if let lrcContent = try? String(contentsOf: lrcURL, encoding: .utf8) {
+            songLyrics = lrcContent
+            // Optionally copy the .lrc file to destination too
+            let destLrcURL = destinationURL.deletingPathExtension().appendingPathExtension("lrc")
+            try? FileManager.default.copyItem(at: lrcURL, to: destLrcURL)
+        }
+    }
+
     print("[DEBUG] SongLibrary.importFile: Creating LibrarySong object")
     let song = LibrarySong(
       title: metadata.title,
@@ -422,7 +434,7 @@ final class SongLibrary {
       fileHash: fileHash,
       size: fileSize,
       duration: metadata.duration,
-      lyrics: metadata.lyrics,
+      lyrics: songLyrics,
       album: metadata.album,
       albumArtist: metadata.albumArtist,
       genre: metadata.genre,
@@ -436,6 +448,11 @@ final class SongLibrary {
 
     print("[DEBUG] SongLibrary.importFile: Inserting song into modelContext")
     modelContext.insert(song)
+
+    // Save lyrics to SyncedLyric if it's LRC format
+    if let lyrics = songLyrics {
+        LyricsService.shared.saveLyrics(for: song, content: lyrics)
+    }
 
     // Link to album
     print("[DEBUG] SongLibrary.importFile: Linking to album")
@@ -483,7 +500,17 @@ final class SongLibrary {
     }
 
     let metadata = await AudioMetadataExtractor.extract(from: url)
-      let artworkPath: String? = await {
+    
+    // Check for companion .lrc file
+    var songLyrics = metadata.lyrics
+    let lrcURL = url.deletingPathExtension().appendingPathExtension("lrc")
+    if fileManager.fileExists(atPath: lrcURL.path) {
+        if let lrcContent = try? String(contentsOf: lrcURL, encoding: .utf8) {
+            songLyrics = lrcContent
+        }
+    }
+
+    let artworkPath: String? = await {
       if let data = metadata.artwork {
         return await cacheArtwork(data)
       } else {
@@ -498,7 +525,7 @@ final class SongLibrary {
       fileHash: fileHash,
       size: fileSize,
       duration: metadata.duration,
-      lyrics: metadata.lyrics,
+      lyrics: songLyrics,
       album: metadata.album,
       albumArtist: metadata.albumArtist,
       genre: metadata.genre,
@@ -511,6 +538,11 @@ final class SongLibrary {
     )
 
     modelContext.insert(song)
+
+    // Save lyrics to SyncedLyric if it's LRC format
+    if let lyrics = songLyrics {
+        LyricsService.shared.saveLyrics(for: song, content: lyrics)
+    }
 
     // Link to album
     let primaryArtist =
