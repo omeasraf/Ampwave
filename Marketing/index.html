@@ -1,0 +1,112 @@
+<style>
+  @import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Serif+Display:ital@0;1&display=swap");
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  .wrap {
+    display: flex;
+    flex-direction: row;
+    gap: 16px;
+    padding: 32px 24px;
+    background: #080808;
+    align-items: flex-start;
+    overflow-x: auto;
+    min-width: max-content;
+  }
+  .slide {
+    width: 180px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  .tagline {
+    font-size: 10px;
+    font-weight: 600;
+    color: #ff4d8d;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-align: center;
+    font-family: "DM Sans", sans-serif;
+  }
+  .headline {
+    font-family: "DM Serif Display", serif;
+    font-size: 18px;
+    color: #fff;
+    text-align: center;
+    line-height: 1.2;
+  }
+  .sub {
+    font-size: 10px;
+    color: #666;
+    text-align: center;
+    line-height: 1.5;
+    font-family: "DM Sans", sans-serif;
+  }
+  .phone-frame {
+    width: 170px;
+    height: 368px;
+    border-radius: 32px;
+    border: 2px solid #2a2a2a;
+    overflow: hidden;
+    background: #000;
+    box-shadow:
+      0 0 0 1px #111,
+      0 24px 60px rgba(0, 0, 0, 0.8);
+  }
+  .phone-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top center;
+    display: block;
+  }
+</style>
+
+<div class="wrap">
+  <div class="slide">
+    <div class="tagline">Made for music lovers</div>
+    <div class="headline">Your music,<br /><em>offline & free</em></div>
+    <div class="phone-frame"><img src="./home.PNG" alt="Home screen" /></div>
+    <div class="sub">Recently played &<br />personalized mixes</div>
+  </div>
+
+  <div class="slide">
+    <div class="tagline">Full library control</div>
+    <div class="headline">Every song,<br /><em>right at hand</em></div>
+    <div class="phone-frame">
+      <img src="./library.PNG" alt="Library screen" />
+    </div>
+    <div class="sub">Songs, albums, artists<br />& playlists - all local</div>
+  </div>
+
+  <div class="slide">
+    <div class="tagline">Beautiful playback</div>
+    <div class="headline">Music that<br /><em>feels alive</em></div>
+    <div class="phone-frame">
+      <img src="./nowPlaying.PNG" alt="Now playing screen" />
+    </div>
+    <div class="sub">Full player, lyrics &<br />queue - no account</div>
+  </div>
+
+  <div class="slide">
+    <div class="tagline">Sing along</div>
+    <div class="headline">Lyrics that<br /><em>follow you</em></div>
+    <div class="phone-frame">
+      <img src="./lyrics.PNG" alt="Lyrics screen" />
+    </div>
+    <div class="sub">Synced lyrics, works<br />fully offline always</div>
+  </div>
+
+  <div class="slide">
+    <div class="tagline">Own your library</div>
+    <div class="headline">Bring your<br /><em>own files</em></div>
+    <div class="phone-frame">
+      <img src="./settings.PNG" alt="Settings screen" />
+    </div>
+    <div class="sub">MP3, FLAC, WAV & more.<br />No cloud, ever</div>
+  </div>
+</div>
