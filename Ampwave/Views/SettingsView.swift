@@ -27,9 +27,17 @@ struct SettingsView: View {
         ListeningHistoryTracker.shared
     }
     private var metadataService: MetadataService { MetadataService.shared }
-    
-    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+
+    let version =
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+    var buildConfiguration: String {
+        #if DEBUG
+            return "Debug"
+        #else
+            return "Release"
+        #endif
+    }
 
     var body: some View {
         List {
@@ -391,7 +399,8 @@ struct SettingsView: View {
             } label: {
                 Label(
                     "Reset Statistics",
-                    systemImage: "exclamationmark.arrow.trianglehead.2.clockwise.rotate.90"
+                    systemImage:
+                        "exclamationmark.arrow.trianglehead.2.clockwise.rotate.90"
                 )
             }
         } header: {
@@ -405,6 +414,13 @@ struct SettingsView: View {
                 Label("Version", systemImage: "info.circle")
                 Spacer()
                 Text("\(version ?? "-") (\(build ?? "-"))")
+                    .foregroundStyle(.secondary)
+            }
+            
+            HStack {
+                Label("Build Type", systemImage: "wrench.and.screwdriver")
+                Spacer()
+                Text(buildConfiguration)
                     .foregroundStyle(.secondary)
             }
 
