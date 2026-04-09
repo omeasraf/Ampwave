@@ -356,7 +356,7 @@ struct SearchResultsView: View {
       ForEach(playlists) { playlist in
         NavigationLink(destination: PlaylistView(playlist: playlist)) {
           HStack(spacing: 12) {
-              PlaylistArtworkView(artworkPath: playlist.artworkPath, size: 50, icon: playlist.icon)
+            PlaylistArtworkView(artworkPath: playlist.artworkPath, size: 50, icon: playlist.icon)
 
             VStack(alignment: .leading, spacing: 2) {
               Text(playlist.name)
@@ -387,7 +387,7 @@ struct TopResultCard: View {
       playback.play(song, from: .search)
     } label: {
       HStack(spacing: 16) {
-          AlbumArtworkView(artworkPath: song.artworkPath, size: 80)
+        AlbumArtworkView(artworkPath: song.artworkPath, size: 80)
 
         VStack(alignment: .leading, spacing: 4) {
           Text(song.title)

@@ -67,7 +67,7 @@ struct SongEditSheet: View {
               Button("Fetch Online") {
                 Task {
                   isLoadingLyrics = true
-                  if let _ = await LyricsService.shared.fetchOnlineLyrics(for: song) {
+                  if await LyricsService.shared.fetchOnlineLyrics(for: song) != nil {
                     lyrics = song.lyrics ?? ""
                   }
                   isLoadingLyrics = false
@@ -77,7 +77,7 @@ struct SongEditSheet: View {
               .buttonStyle(.bordered)
             }
           }
-          
+
           TextEditor(text: $lyrics)
             .frame(minHeight: 200)
             .font(.system(.body, design: .monospaced))

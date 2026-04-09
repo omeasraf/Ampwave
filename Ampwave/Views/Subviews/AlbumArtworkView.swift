@@ -84,5 +84,5 @@ struct AlbumArtworkView: View {
 }
 
 #Preview {
-    AlbumArtworkView(artworkPath: nil, size: 50)
+  AlbumArtworkView(artworkPath: nil, size: 50)
 }

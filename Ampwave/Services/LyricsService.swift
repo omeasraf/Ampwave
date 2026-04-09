@@ -37,7 +37,7 @@ final class LyricsService {
           let lyrics = SyncedLyric(
             songId: song.id,
             lines: lines,
-            source: .lrclib, // Local but we use .lrclib for now
+            source: .lrclib,  // Local but we use .lrclib for now
             language: nil
           )
           cacheLyrics(lyrics)

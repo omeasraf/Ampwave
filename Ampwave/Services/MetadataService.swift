@@ -30,7 +30,7 @@ final class MetadataService {
 
   // Rate limiting - now MainActor isolated
   @MainActor private var lastRequestTime: Date?
-  private let minimumRequestInterval: TimeInterval = 1.5 // Safer base rate limit
+  private let minimumRequestInterval: TimeInterval = 1.5  // Safer base rate limit
 
   // App identifier for MusicBrainz (required)
   private let appIdentifier = "AmpwavePlayer/1.0 (https://github.com/omeasraf/Ampwave)"
@@ -49,9 +49,11 @@ final class MetadataService {
 
     while attempt < retries {
       if attempt > 0 {
-        print("[DEBUG] MetadataService: Retrying request (attempt \(attempt + 1)/\(retries)) after \(backoffDelay)s...")
+        print(
+          "[DEBUG] MetadataService: Retrying request (attempt \(attempt + 1)/\(retries)) after \(backoffDelay)s..."
+        )
         try? await Task.sleep(nanoseconds: UInt64(backoffDelay * 1_000_000_000))
-        backoffDelay *= 2.0 // Exponential backoff
+        backoffDelay *= 2.0  // Exponential backoff
       }
 
       var request = URLRequest(url: url)
@@ -60,7 +62,7 @@ final class MetadataService {
 
       do {
         let (data, response) = try await URLSession.shared.data(for: request)
-        
+
         if let httpResponse = response as? HTTPURLResponse {
           if httpResponse.statusCode == 200 {
             return data
@@ -68,18 +70,23 @@ final class MetadataService {
             // Check for Retry-After header
             var retryAfter: TimeInterval = backoffDelay
             if let retryAfterHeader = httpResponse.value(forHTTPHeaderField: "Retry-After"),
-               let seconds = Double(retryAfterHeader) {
-                retryAfter = seconds
-                print("[DEBUG] MetadataService: MusicBrainz requested Retry-After \(seconds)s")
+              let seconds = Double(retryAfterHeader)
+            {
+              retryAfter = seconds
+              print("[DEBUG] MetadataService: MusicBrainz requested Retry-After \(seconds)s")
             } else {
-                print("[DEBUG] MetadataService: Rate limited (HTTP \(httpResponse.statusCode)) - no header found")
+              print(
+                "[DEBUG] MetadataService: Rate limited (HTTP \(httpResponse.statusCode)) - no header found"
+              )
             }
-            
+
             attempt += 1
             backoffDelay = max(backoffDelay, retryAfter)
             continue
           } else {
-            print("[DEBUG] MetadataService: Server error (HTTP \(httpResponse.statusCode)) for \(url.absoluteString)")
+            print(
+              "[DEBUG] MetadataService: Server error (HTTP \(httpResponse.statusCode)) for \(url.absoluteString)"
+            )
             return nil
           }
         }
@@ -250,12 +257,12 @@ final class MetadataService {
 
   private func searchRecording(song: LibrarySong) async -> MusicBrainzRecording? {
     let query = "recording:\"\(song.title)\" AND artist:\"\(song.artist)\""
-    
+
     var components = URLComponents(string: "\(musicBrainzDefaultURL)/recording")
     components?.queryItems = [
       URLQueryItem(name: "query", value: query),
       URLQueryItem(name: "fmt", value: "json"),
-      URLQueryItem(name: "limit", value: "5")
+      URLQueryItem(name: "limit", value: "5"),
     ]
 
     guard let url = components?.url else { return nil }
@@ -275,12 +282,12 @@ final class MetadataService {
   private func searchRelease(album: Album) async -> MusicBrainzRelease? {
     let artistName = album.artist ?? "Unknown Artist"
     let query = "release:\"\(album.name)\" AND artist:\"\(artistName)\""
-    
+
     var components = URLComponents(string: "\(musicBrainzDefaultURL)/release")
     components?.queryItems = [
       URLQueryItem(name: "query", value: query),
       URLQueryItem(name: "fmt", value: "json"),
-      URLQueryItem(name: "limit", value: "5")
+      URLQueryItem(name: "limit", value: "5"),
     ]
 
     guard let url = components?.url else { return nil }
@@ -299,12 +306,12 @@ final class MetadataService {
 
   private func searchArtist(artist: Artist) async -> MusicBrainzArtist? {
     let query = "\"\(artist.name)\""
-    
+
     var components = URLComponents(string: "\(musicBrainzDefaultURL)/artist")
     components?.queryItems = [
       URLQueryItem(name: "query", value: query),
       URLQueryItem(name: "fmt", value: "json"),
-      URLQueryItem(name: "limit", value: "5")
+      URLQueryItem(name: "limit", value: "5"),
     ]
 
     guard let url = components?.url else { return nil }

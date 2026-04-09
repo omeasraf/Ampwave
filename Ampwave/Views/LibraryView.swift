@@ -290,11 +290,11 @@ struct PlaylistsListView: View {
       ForEach(filteredPlaylists) { playlist in
         NavigationLink(destination: PlaylistView(playlist: playlist)) {
           HStack(spacing: 12) {
-              PlaylistArtworkView(
-                artworkPath: playlist.artworkPath,
-                size: 60,
-                icon: playlist.icon
-              )
+            PlaylistArtworkView(
+              artworkPath: playlist.artworkPath,
+              size: 60,
+              icon: playlist.icon
+            )
 
             VStack(alignment: .leading, spacing: 2) {
               Text(playlist.name)

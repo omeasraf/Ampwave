@@ -5,14 +5,13 @@
 //  Created by Ome Asraf on 4/9/26.
 //
 
-
 internal import SwiftUI
 
 struct PlaylistArtworkView: View {
   let artworkPath: String?
   let size: CGFloat
   let icon: PlaylistIcon?
-    
+
   #if os(iOS)
     @State private var image: UIImage?
   #else

@@ -87,14 +87,14 @@ struct ExpandedLyricsView: View {
           ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 20) {
               Spacer().frame(height: 100)
-              
+
               Text(plainLyrics)
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
                 .lineSpacing(8)
                 .padding(.horizontal, 30)
-              
+
               Spacer().frame(height: 100)
             }
             .frame(maxWidth: .infinity)
@@ -142,12 +142,12 @@ struct ExpandedLyricsView: View {
       .preferredColorScheme(.dark)
       .onAppear {
         #if os(iOS)
-        UIApplication.shared.isIdleTimerDisabled = true
+          UIApplication.shared.isIdleTimerDisabled = true
         #endif
       }
       .onDisappear {
         #if os(iOS)
-        UIApplication.shared.isIdleTimerDisabled = false
+          UIApplication.shared.isIdleTimerDisabled = false
         #endif
       }
     }

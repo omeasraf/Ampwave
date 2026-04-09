@@ -8,7 +8,7 @@
 import Foundation
 
 enum IndexingStatus: Equatable {
-    case idle
-    case indexing(String)
-    case complete
+  case idle
+  case indexing(String)
+  case complete
 }

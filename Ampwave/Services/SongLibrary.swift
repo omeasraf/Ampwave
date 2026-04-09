@@ -263,11 +263,11 @@ final class SongLibrary {
 
       var hasher = SHA256()
       while true {
-          let data = try autoreleasepool {
-              try handle.read(upToCount: 65536)
-          }
-          guard let data = data, !data.isEmpty else { break }
-          hasher.update(data: data)
+        let data = try autoreleasepool {
+          try handle.read(upToCount: 65536)
+        }
+        guard let data = data, !data.isEmpty else { break }
+        hasher.update(data: data)
       }
 
       let hash = hasher.finalize()
@@ -301,11 +301,13 @@ final class SongLibrary {
 
     for (index, url) in urls.enumerated() {
       // Update status every file for better feedback
-      print("[DEBUG] SongLibrary.importFiles: Processing file \(index + 1)/\(totalCount): \(url.lastPathComponent)")
+      print(
+        "[DEBUG] SongLibrary.importFiles: Processing file \(index + 1)/\(totalCount): \(url.lastPathComponent)"
+      )
       indexingStatus = .indexing("Importing \(index + 1)/\(totalCount)…")
 
-      if let _ = await importFile(
-        from: url, modelContext: modelContext, groupByAlbum: groupByAlbum)
+      if await importFile(
+        from: url, modelContext: modelContext, groupByAlbum: groupByAlbum) != nil
       {
         importedCount += 1
         print("[DEBUG] SongLibrary.importFiles: Successfully imported \(url.lastPathComponent)")
@@ -319,7 +321,7 @@ final class SongLibrary {
         saveContext()
         // Process changes to help clear memory and let system catch up
         modelContext.processPendingChanges()
-        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s to allow system cleanup
+        try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1s to allow system cleanup
       }
     }
 
@@ -328,7 +330,8 @@ final class SongLibrary {
       saveContext()
       await loadSongs()
     }
-    print("[DEBUG] SongLibrary.importFiles: Completed. Imported \(importedCount)/\(totalCount) files")
+    print(
+      "[DEBUG] SongLibrary.importFiles: Completed. Imported \(importedCount)/\(totalCount) files")
   }
 
   private func importFile(from url: URL, modelContext: ModelContext, groupByAlbum: Bool) async
@@ -370,7 +373,8 @@ final class SongLibrary {
     print("[DEBUG] SongLibrary.importFile: Offloading remaining I/O to background task")
     let ioResult = await Task.detached(priority: .userInitiated) {
       // Extract metadata (this also does I/O)
-      print("[DEBUG] SongLibrary.importFile.detached: Extracting metadata for \(url.lastPathComponent)")
+      print(
+        "[DEBUG] SongLibrary.importFile.detached: Extracting metadata for \(url.lastPathComponent)")
       let metadata = await AudioMetadataExtractor.extract(from: url)
 
       // Prepare destination
@@ -419,18 +423,22 @@ final class SongLibrary {
     // Cache artwork
     print("[DEBUG] SongLibrary.importFile: Caching artwork")
     let artworkPath: String?
-    if let data = metadata.artwork { artworkPath = await cacheArtwork(data) } else { artworkPath = nil }
+    if let data = metadata.artwork {
+      artworkPath = await cacheArtwork(data)
+    } else {
+      artworkPath = nil
+    }
 
     // Check for companion .lrc file in the source location
     var songLyrics = metadata.lyrics
     let lrcURL = url.deletingPathExtension().appendingPathExtension("lrc")
     if FileManager.default.fileExists(atPath: lrcURL.path) {
-        if let lrcContent = try? String(contentsOf: lrcURL, encoding: .utf8) {
-            songLyrics = lrcContent
-            // Optionally copy the .lrc file to destination too
-            let destLrcURL = destinationURL.deletingPathExtension().appendingPathExtension("lrc")
-            try? FileManager.default.copyItem(at: lrcURL, to: destLrcURL)
-        }
+      if let lrcContent = try? String(contentsOf: lrcURL, encoding: .utf8) {
+        songLyrics = lrcContent
+        // Optionally copy the .lrc file to destination too
+        let destLrcURL = destinationURL.deletingPathExtension().appendingPathExtension("lrc")
+        try? FileManager.default.copyItem(at: lrcURL, to: destLrcURL)
+      }
     }
 
     print("[DEBUG] SongLibrary.importFile: Creating LibrarySong object")
@@ -458,7 +466,7 @@ final class SongLibrary {
 
     // Save lyrics to SyncedLyric if it's LRC format
     if let lyrics = songLyrics {
-        LyricsService.shared.saveLyrics(for: song, content: lyrics)
+      LyricsService.shared.saveLyrics(for: song, content: lyrics)
     }
 
     // Link to album
@@ -507,14 +515,14 @@ final class SongLibrary {
     }
 
     let metadata = await AudioMetadataExtractor.extract(from: url)
-    
+
     // Check for companion .lrc file
     var songLyrics = metadata.lyrics
     let lrcURL = url.deletingPathExtension().appendingPathExtension("lrc")
     if fileManager.fileExists(atPath: lrcURL.path) {
-        if let lrcContent = try? String(contentsOf: lrcURL, encoding: .utf8) {
-            songLyrics = lrcContent
-        }
+      if let lrcContent = try? String(contentsOf: lrcURL, encoding: .utf8) {
+        songLyrics = lrcContent
+      }
     }
 
     let artworkPath: String? = await {
@@ -548,7 +556,7 @@ final class SongLibrary {
 
     // Save lyrics to SyncedLyric if it's LRC format
     if let lyrics = songLyrics {
-        LyricsService.shared.saveLyrics(for: song, content: lyrics)
+      LyricsService.shared.saveLyrics(for: song, content: lyrics)
     }
 
     // Link to album
@@ -641,7 +649,8 @@ final class SongLibrary {
       needsSave = true
     }
 
-    if let genre = metadata.genre, !genre.isEmpty, song.genre == nil || song.genre?.isEmpty == true {
+    if let genre = metadata.genre, !genre.isEmpty, song.genre == nil || song.genre?.isEmpty == true
+    {
       print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating genre to \(genre)")
       song.genre = genre
       needsSave = true
@@ -902,4 +911,3 @@ final class SongLibrary {
     )
   }
 }
-

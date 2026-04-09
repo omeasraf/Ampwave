@@ -291,7 +291,7 @@ final class PlaybackController {
           self?.isLoading = false
           self?.player?.play()
           self?.isPlaying = true
-          
+
           // Ensure we have the most accurate duration from the player item
           let itemDuration = CMTimeGetSeconds(item.duration)
           if itemDuration.isFinite, itemDuration > 0 {
@@ -567,9 +567,10 @@ final class PlaybackController {
   }
 
   private func updateCurrentLyric() {
-    guard let song = currentItem, 
-          let lyrics = currentLyrics, 
-          lyrics.songId == song.id else {
+    guard let song = currentItem,
+      let lyrics = currentLyrics,
+      lyrics.songId == song.id
+    else {
       currentLyricIndex = nil
       return
     }
@@ -585,12 +586,12 @@ final class PlaybackController {
 
   var currentLyricLine: LyricLine? {
     guard let song = currentItem,
-          let index = currentLyricIndex,
-          let lyrics = currentLyrics,
-          lyrics.songId == song.id,
-          index >= 0
+      let index = currentLyricIndex,
+      let lyrics = currentLyrics,
+      lyrics.songId == song.id,
+      index >= 0
     else { return nil }
-    
+
     // Safely check lines count
     let linesCount = (try? lyrics.lines.count) ?? 0
     if index < linesCount {

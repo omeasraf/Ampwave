@@ -18,7 +18,9 @@ final class AppSettings: Identifiable {
   /// Whether to automatically fetch lyrics from online sources
   var autoFetchLyrics: Bool = false
 
-  init(groupSongsByAlbum: Bool = true, mergeAlbumDuplicates: Bool = true, autoFetchLyrics: Bool = false) {
+  init(
+    groupSongsByAlbum: Bool = true, mergeAlbumDuplicates: Bool = true, autoFetchLyrics: Bool = false
+  ) {
     self.id = UUID()
     self.groupSongsByAlbum = groupSongsByAlbum
     self.mergeAlbumDuplicates = mergeAlbumDuplicates

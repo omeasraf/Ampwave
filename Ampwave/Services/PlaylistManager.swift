@@ -65,7 +65,7 @@ final class PlaylistManager {
         )
       } else if likedSongsPlaylist?.icon == nil {
         // Backfill icon for existing databases created before icon persistence was fixed.
-          likedSongsPlaylist?.icon = PlaylistIcon(icon:  "heart.fill", color: .accent)
+        likedSongsPlaylist?.icon = PlaylistIcon(icon: "heart.fill", color: .accent)
         save()
       }
     }
@@ -455,4 +455,3 @@ final class PlaylistManager {
     return createPlaylist(name: name, songs: songs)
   }
 }
-
