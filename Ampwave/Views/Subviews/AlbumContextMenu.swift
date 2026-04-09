@@ -93,6 +93,7 @@ struct SongContextMenuModifier: ViewModifier {
   let onEdit: (() -> Void)?
 
   @State private var showingAddToPlaylist = false
+  @State private var isEditingShown = false
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -111,6 +112,16 @@ struct SongContextMenuModifier: ViewModifier {
         }
 
         Button {
+          if let onEdit {
+            onEdit()
+          } else {
+            isEditingShown = true
+          }
+        } label: {
+          Label("Edit", systemImage: "pencil")
+        }
+
+        Button {
           _ = playlistManager.toggleLike(song: song)
         } label: {
           Label(
@@ -124,14 +135,9 @@ struct SongContextMenuModifier: ViewModifier {
         } label: {
           Label("Add to Playlist", systemImage: "text.badge.plus")
         }
-
-        if let onEdit {
-          Button {
-            onEdit()
-          } label: {
-            Label("Edit", systemImage: "pencil")
-          }
-        }
+      }
+      .sheet(isPresented: $isEditingShown) {
+        SongEditSheet(song: song, isPresented: $isEditingShown)
       }
       .confirmationDialog("Add Song to Playlist", isPresented: $showingAddToPlaylist) {
         ForEach(availablePlaylists) { playlist in

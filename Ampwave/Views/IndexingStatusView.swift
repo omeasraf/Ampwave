@@ -26,7 +26,7 @@ struct IndexingStatusView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity)
-                .background(.primary)
+                .background(.accent)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: library.indexingStatus)

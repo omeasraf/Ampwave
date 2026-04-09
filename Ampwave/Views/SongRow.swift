@@ -12,7 +12,6 @@ struct SongRow: View {
   let isCurrent: Bool
   var showArtwork: Bool = true
 
-  @State private var isEditingShown = false
   private var playback: PlaybackController { PlaybackController.shared }
 
   var body: some View {
@@ -42,22 +41,7 @@ struct SongRow: View {
       }
     }
     .padding(.vertical, 4)
-    .contextMenu {
-      Button(action: {
-        playback.play(song)
-      }) {
-        Label("Play", systemImage: "play.fill")
-      }
-
-      Button(action: {
-        isEditingShown = true
-      }) {
-        Label("Edit", systemImage: "pencil")
-      }
-    }
-    .sheet(isPresented: $isEditingShown) {
-      SongEditSheet(song: song, isPresented: $isEditingShown)
-    }
+    .songContextMenu(song: song)
   }
 }
 
@@ -67,7 +51,6 @@ struct CompactSongRow: View {
   let song: LibrarySong
   let isCurrent: Bool
 
-  @State private var isEditingShown = false
   private var playback: PlaybackController { PlaybackController.shared }
 
   var body: some View {
@@ -95,22 +78,7 @@ struct CompactSongRow: View {
       }
     }
     .padding(.vertical, 4)
-    .contextMenu {
-      Button(action: {
-        playback.play(song)
-      }) {
-        Label("Play", systemImage: "play.fill")
-      }
-
-      Button(action: {
-        isEditingShown = true
-      }) {
-        Label("Edit", systemImage: "pencil")
-      }
-    }
-    .sheet(isPresented: $isEditingShown) {
-      SongEditSheet(song: song, isPresented: $isEditingShown)
-    }
+    .songContextMenu(song: song)
   }
 }
 
@@ -121,7 +89,6 @@ struct NumberedSongRow: View {
   let song: LibrarySong
   let isCurrent: Bool
 
-  @State private var isEditingShown = false
   private var playback: PlaybackController { PlaybackController.shared }
 
   var body: some View {
@@ -156,21 +123,6 @@ struct NumberedSongRow: View {
       Spacer()
     }
     .padding(.vertical, 4)
-    .contextMenu {
-      Button(action: {
-        playback.play(song)
-      }) {
-        Label("Play", systemImage: "play.fill")
-      }
-
-      Button(action: {
-        isEditingShown = true
-      }) {
-        Label("Edit", systemImage: "pencil")
-      }
-    }
-    .sheet(isPresented: $isEditingShown) {
-      SongEditSheet(song: song, isPresented: $isEditingShown)
-    }
+    .songContextMenu(song: song)
   }
 }

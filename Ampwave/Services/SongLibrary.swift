@@ -262,8 +262,12 @@ final class SongLibrary {
       defer { try? handle.close() }
 
       var hasher = SHA256()
-      while let data = try handle.read(upToCount: 65536), !data.isEmpty {  // Larger chunks for speed
-        hasher.update(data: data)
+      while true {
+          let data = try autoreleasepool {
+              try handle.read(upToCount: 65536)
+          }
+          guard let data = data, !data.isEmpty else { break }
+          hasher.update(data: data)
       }
 
       let hash = hasher.finalize()
@@ -313,6 +317,9 @@ final class SongLibrary {
       if importedCount % 5 == 0 && importedCount > 0 {
         print("[DEBUG] SongLibrary.importFiles: Periodic save (count: \(importedCount))")
         saveContext()
+        // Process changes to help clear memory and let system catch up
+        modelContext.processPendingChanges()
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s to allow system cleanup
       }
     }
 
