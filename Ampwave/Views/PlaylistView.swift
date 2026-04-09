@@ -116,10 +116,10 @@ struct PlaylistView: View {
     
     private var playlistHeader: some View {
         VStack(spacing: 20) {
-            AlbumArtworkView(
+            PlaylistArtworkView(
                 artworkPath: playlist.artworkPath,
                 size: 200,
-                icon: playlist.icon ?? (playlist.playlistType == .likedSongs ? "heart.fill" : nil)
+                icon: playlist.icon
             )
             
             VStack(spacing: 8) {

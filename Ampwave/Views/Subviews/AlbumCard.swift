@@ -15,7 +15,7 @@ struct AlbumCard: View {
   var body: some View {
     NavigationLink(destination: AlbumView(album: album)) {
       VStack(alignment: .leading, spacing: 8) {
-        AlbumArtworkView(artworkPath: album.artworkPath, size: 140, icon: nil)
+        AlbumArtworkView(artworkPath: album.artworkPath, size: 140)
 
         VStack(alignment: .leading, spacing: 2) {
           Text(album.name)

@@ -110,8 +110,7 @@ struct AlbumView: View {
         VStack(spacing: 16) {
             AlbumArtworkView(
                 artworkPath: album.artworkPath,
-                size: 200,
-                icon: nil
+                size: 200
             )
 
             VStack(spacing: 4) {

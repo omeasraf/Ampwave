@@ -267,10 +267,8 @@ final class PlaybackController {
     isPlaying = true
     isLoading = false
 
-    // Load duration if not available
-    if duration <= 0 {
-      loadDuration(from: item)
-    }
+    // Load duration from the player item to ensure accuracy
+    loadDuration(from: item)
 
     updateNowPlaying()
     historyTracker.songStarted(song, source: source, playlistId: playlistId)
@@ -293,6 +291,13 @@ final class PlaybackController {
           self?.isLoading = false
           self?.player?.play()
           self?.isPlaying = true
+          
+          // Ensure we have the most accurate duration from the player item
+          let itemDuration = CMTimeGetSeconds(item.duration)
+          if itemDuration.isFinite, itemDuration > 0 {
+            self?.duration = itemDuration
+            self?.updateNowPlaying()
+          }
         case .failed:
           self?.isLoading = false
           self?.isPlaying = false
@@ -630,10 +635,8 @@ final class PlaybackController {
     let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
     timeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) {
       [weak self] time in
-      Task { @MainActor in
-        self?.currentTime = time.seconds
-        self?.updateCurrentLyric()
-      }
+      self?.currentTime = time.seconds
+      self?.updateCurrentLyric()
     }
 
     // Add end of playback observer

@@ -9,6 +9,7 @@
 import Foundation
 import SwiftData
 internal import SwiftUI
+import UIKit
 
 @Model
 final class Playlist: Identifiable, Hashable {
@@ -22,7 +23,7 @@ final class Playlist: Identifiable, Hashable {
     var lastModifiedDate: Date
     var artworkPath: String?
     
-    var icon: String?
+    var icon: PlaylistIcon?
     
     // MARK: - Playlist Type
     var playlistType: PlaylistType
@@ -42,7 +43,7 @@ final class Playlist: Identifiable, Hashable {
         description: String? = nil,
         playlistType: PlaylistType = .custom,
         artworkPath: String? = nil,
-        icon: String? = nil
+        icon: PlaylistIcon? = nil
     ) {
         self.id = UUID()
         self.name = name
@@ -122,6 +123,26 @@ final class Playlist: Identifiable, Hashable {
     }
 }
 
+// MARK: - Playlist Icon
+@Model
+final class PlaylistIcon: Identifiable, Hashable {
+    // MARK: - Identity
+    @Attribute(.unique) var id: UUID
+    var icon: String
+    var colorHex: String
+    
+    init(icon: String, color: Color) {
+        self.id = UUID()
+        self.icon = icon
+        self.colorHex = color.toHexString()
+    }
+    
+    var color: Color {
+        get { Color(hex: colorHex) }
+        set { colorHex = newValue.toHexString() }
+    }
+}
+
 // MARK: - Helpers
 
 extension Sequence where Element: Hashable {
@@ -130,3 +151,26 @@ extension Sequence where Element: Hashable {
         return filter { seen.insert($0).inserted }
     }
 }
+extension Color {
+    /// Returns the hex string representation for this Color (assuming UIColor backend).
+    func toHexString() -> String {
+        let uiColor = UIColor(self)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let rgb: Int = (Int)(r*255)<<16 | (Int)(g*255)<<8 | (Int)(b*255)<<0
+        return String(format: "#%06x", rgb)
+    }
+    
+    /// Initializes Color from a hex string.
+    init(hex: String) {
+        var hex = hex
+        if hex.hasPrefix("#") { hex.removeFirst() }
+        var int = UInt64()
+        Scanner(string: hex).scanHexInt64(&int)
+        let r = Double((int >> 16) & 0xFF) / 255.0
+        let g = Double((int >> 8) & 0xFF) / 255.0
+        let b = Double(int & 0xFF) / 255.0
+        self = Color(red: r, green: g, blue: b)
+    }
+}
+

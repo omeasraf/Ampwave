@@ -61,11 +61,11 @@ final class PlaylistManager {
           name: "Liked Songs",
           description: "All your favorite songs in one place",
           playlistType: .likedSongs,
-          icon: "heart.fill"
+          icon: PlaylistIcon(icon: "heart.fill", color: .accent)
         )
       } else if likedSongsPlaylist?.icon == nil {
         // Backfill icon for existing databases created before icon persistence was fixed.
-        likedSongsPlaylist?.icon = "heart.fill"
+          likedSongsPlaylist?.icon = PlaylistIcon(icon:  "heart.fill", color: .accent)
         save()
       }
     }
@@ -79,7 +79,7 @@ final class PlaylistManager {
     description: String? = nil,
     playlistType: PlaylistType = .custom,
     songs: [LibrarySong] = [],
-    icon: String? = nil
+    icon: PlaylistIcon? = nil
   ) -> Playlist? {
     guard let modelContext = modelContext else { return nil }
 

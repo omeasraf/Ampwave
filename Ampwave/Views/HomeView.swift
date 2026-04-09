@@ -275,7 +275,7 @@ struct SongCard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      AlbumArtworkView(artworkPath: song.artworkPath, size: 140, icon: nil)
+      AlbumArtworkView(artworkPath: song.artworkPath, size: 140)
 
       VStack(alignment: .leading, spacing: 2) {
         Text(song.title)
@@ -398,13 +398,13 @@ struct RecommendationCard: View {
       Group {
         switch recommendation.item {
         case .song(let song):
-          AlbumArtworkView(artworkPath: song.artworkPath, size: 160, icon: nil)
+          AlbumArtworkView(artworkPath: song.artworkPath, size: 160)
         case .album(let album):
-          AlbumArtworkView(artworkPath: album.artworkPath, size: 160, icon: nil)
+          AlbumArtworkView(artworkPath: album.artworkPath, size: 160)
         case .artist(let artist):
           ArtistImageView(artworkPath: artist.artworkPath, size: 160)
         case .playlist(let playlist):
-          AlbumArtworkView(artworkPath: playlist.artworkPath, size: 160, icon: nil)
+          AlbumArtworkView(artworkPath: playlist.artworkPath, size: 160)
         }
       }
 

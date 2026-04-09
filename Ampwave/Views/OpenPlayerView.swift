@@ -127,7 +127,7 @@ struct OpenPlayerView: View {
   }
 
   private var progressSection: some View {
-    let duration = max(playback.duration, 0.001)
+    let duration = playback.duration
     let progress = duration > 0 ? min(max(playback.currentTime / duration, 0), 1) : 0.0
 
     return VStack(spacing: 8) {
