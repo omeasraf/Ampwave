@@ -40,7 +40,18 @@ struct HomeView: View {
         // Welcome header
         welcomeHeader
 
-        if library.songs.isEmpty && !isLoading {
+        if isLoading || library.indexingStatus != .complete {
+          VStack(spacing: 20) {
+            Spacer()
+              .frame(height: 100)
+            ProgressView()
+              .scaleEffect(1.5)
+            Text("Loading your library...")
+              .foregroundStyle(.secondary)
+            Spacer()
+          }
+          .frame(maxWidth: .infinity)
+        } else if library.songs.isEmpty {
           emptyState
         } else {
           // Recently Played section
@@ -209,7 +220,15 @@ struct HomeView: View {
       playlistManager.setModelContext(modelContext)
       recommendationEngine.setModelContext(modelContext)
 
-      // Load library first
+      // If library is already indexing, wait for it
+      if !forceRefresh && library.indexingStatus != .complete {
+        print("[DEBUG] HomeView.loadData: Library is indexing, waiting...")
+        while library.indexingStatus != .complete {
+          try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+        }
+      }
+
+      // Load library if needed
       if library.songs.isEmpty || forceRefresh {
         await library.loadSongs()
       }
@@ -416,9 +435,11 @@ struct RecommendationCard: View {
         Text(recommendation.reason.displayText)
           .font(.system(size: 12))
           .foregroundStyle(.secondary)
-          .lineLimit(1)
+          .lineLimit(2)
+          .multilineTextAlignment(.leading)
+          .fixedSize(horizontal: false, vertical: true)
       }
-      .frame(width: 160, alignment: .leading)
+      .frame(width: 160, height: 60, alignment: .topLeading)
     }
   }
 }

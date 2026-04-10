@@ -16,8 +16,14 @@ struct OpenPlayerView: View {
   @State private var selectedTab: PlayerTab = .lyrics
   @State private var showingQueue = false
   @State private var isLyricsExpanded = false
+  @State private var showingAddToPlaylist = false
 
   private var playback: PlaybackController { PlaybackController.shared }
+    private var playlistManager: PlaylistManager { PlaylistManager.shared }
+    
+    private var availablePlaylists: [Playlist] {
+        playlistManager.playlists.filter { $0.playlistType != .likedSongs }
+    }
 
   enum PlayerTab: String, CaseIterable {
     case lyrics = "Lyrics"
@@ -65,32 +71,47 @@ struct OpenPlayerView: View {
 
         ToolbarItem(placement: .navigationBarTrailing) {
           Menu {
-            Button {
-              // Share
-            } label: {
-              Label("Share", systemImage: "square.and.arrow.up")
-            }
+//            Button {
+//              // Share
+//            } label: {
+//              Label("Share", systemImage: "square.and.arrow.up")
+//            }
 
             Button {
-              // Add to playlist
+                showingAddToPlaylist = true
             } label: {
               Label("Add to Playlist", systemImage: "text.badge.plus")
             }
 
             Divider()
 
-            Button {
-              Task {
-                await playback.refreshLyrics()
-              }
-            } label: {
-              Label("Refresh Lyrics", systemImage: "arrow.clockwise")
-            }
+//            Button {
+//              Task {
+//                await playback.refreshLyrics()
+//              }
+//            } label: {
+//              Label("Refresh Lyrics", systemImage: "arrow.clockwise")
+//            }
           } label: {
             Image(systemName: "ellipsis")
               .font(.system(size: 18, weight: .semibold))
           }
         }
+      }.confirmationDialog("Add Song to Playlist", isPresented: $showingAddToPlaylist) {
+          ForEach(availablePlaylists) { playlist in
+              Button(playlist.name) {
+                  if let song = playback.currentItem {
+                      playlistManager.addSong(song, to: playlist)
+                  }
+                  
+              }
+          }
+      } message: {
+          if availablePlaylists.isEmpty {
+              Text("Create a playlist first from the Library tab.")
+          } else {
+              Text("Choose a playlist for this song.")
+          }
       }
     }
     .fullScreenCover(isPresented: $isLyricsExpanded) {

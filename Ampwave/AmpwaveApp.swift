@@ -26,6 +26,7 @@ struct AmpwaveApp: App {
       SyncedLyric.self,
       AppSettings.self,
       UserPreferences.self,
+      PlaybackState.self,
     ])
 
     let modelConfiguration = ModelConfiguration(

@@ -16,6 +16,7 @@ enum RecommendationReason {
   case playlistBased
   case trending
   case becauseYouListenedTo(String)
+  case heavyRotation
 }
 
 extension RecommendationReason {
@@ -41,6 +42,8 @@ extension RecommendationReason {
       return "Trending in your library"
     case .becauseYouListenedTo(let item):
       return "Because you listened to \(item)"
+    case .heavyRotation:
+      return "On heavy rotation"
     }
   }
 }

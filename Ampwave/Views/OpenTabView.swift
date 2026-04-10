@@ -21,6 +21,7 @@ struct OpenTabView: View {
   private var lyricsService: LyricsService { LyricsService.shared }
   private var metadataService: MetadataService { MetadataService.shared }
   private var recommendationEngine: RecommendationEngine { RecommendationEngine.shared }
+  private var playbackController: PlaybackController { PlaybackController.shared }
 
   enum AppTab: String, CaseIterable {
     case home = "Home"
@@ -97,39 +98,43 @@ struct OpenTabView: View {
       print("[DEBUG] OpenTabView.onAppear - Starting on thread: \(Thread.current.name)")
 
       // Minimal deferred setup - avoid blocking UI
-      Task.detached(priority: .background) { [self] in
+      Task.detached(priority: .userInitiated) { [self] in
         print("[DEBUG] Background task started on thread: \(Thread.current.name)")
 
-        // Set model contexts on MainActor since they affect @Observable properties
+        // 1. Initial Context Setup
         await MainActor.run {
           print("[DEBUG] Setting model contexts on MainActor...")
           if self.library.modelContext == nil {
-            print("[DEBUG] Setting library context")
             self.library.setModelContext(self.modelContext)
           }
           if self.playlistManager.modelContext == nil {
-            print("[DEBUG] Setting playlistManager context")
             self.playlistManager.setModelContext(self.modelContext)
           }
           if self.historyTracker.modelContext == nil {
-            print("[DEBUG] Setting historyTracker context")
             self.historyTracker.setModelContext(self.modelContext)
           }
           if self.lyricsService.modelContext == nil {
-            print("[DEBUG] Setting lyricsService context")
             self.lyricsService.setModelContext(self.modelContext)
           }
           if self.metadataService.modelContext == nil {
-            print("[DEBUG] Setting metadataService context")
             self.metadataService.setModelContext(self.modelContext)
           }
           if self.recommendationEngine.modelContext == nil {
-            print("[DEBUG] Setting recommendationEngine context")
             self.recommendationEngine.setModelContext(self.modelContext)
           }
         }
 
-        // Perform indexing on background
+        // 2. Load songs first (needed for restoration)
+        print("[DEBUG] Performing initial song load...")
+        await library.loadSongs()
+
+        // 3. Restore playback state on MainActor
+        await MainActor.run {
+          print("[DEBUG] Setting playbackController context and restoring state...")
+          self.playbackController.setModelContext(self.modelContext)
+        }
+
+        // 4. Perform indexing
         print("[DEBUG] Starting indexOnStartup")
         await library.indexOnStartup()
 

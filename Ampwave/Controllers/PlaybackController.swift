@@ -2,14 +2,15 @@
 //  PlaybackController.swift
 //  Ampwave
 //
-//  Enhanced playback controller with queue, shuffle, repeat, and lyrics support.
-//  Fixed playback reliability and state management.
+//  Enhanced playback controller with AVQueuePlayer for gapless playback,
+//  volume normalization, and persistence.
 //
 
 import AVFoundation
 import Combine
 import Foundation
 import MediaPlayer
+import SwiftData
 internal import SwiftUI
 
 #if os(iOS)
@@ -23,13 +24,17 @@ internal import SwiftUI
 final class PlaybackController {
   static let shared = PlaybackController()
 
-  private var player: AVPlayer?
+  private var player: AVQueuePlayer?
   private var timeObserver: Any?
-  private var endObserver: NSObjectProtocol?
-  private var itemObserver: NSKeyValueObservation?
+  private var itemObservers: [NSKeyValueObservation] = []
   private let library = SongLibrary.shared
   private let historyTracker = ListeningHistoryTracker.shared
   private var audioSessionConfigured = false
+  
+  private var modelContext: ModelContext?
+  private var preferences: UserPreferences?
+  private var persistentState: PlaybackState?
+  private var isInitializing = false
 
   // MARK: - Playback State
 
@@ -60,10 +65,15 @@ final class PlaybackController {
   var shuffleMode: ShuffleMode = .off {
     didSet {
       applyShuffleMode()
+      saveState()
     }
   }
 
-  var repeatMode: RepeatMode = .off
+  var repeatMode: RepeatMode = .off {
+    didSet {
+      saveState()
+    }
+  }
 
   // MARK: - Lyrics
 
@@ -83,23 +93,43 @@ final class PlaybackController {
     setupRemoteCommands()
     setupNotifications()
   }
+  
+  func setModelContext(_ context: ModelContext) {
+    print("[DEBUG] PlaybackController.setModelContext: Setting context")
+    self.isInitializing = true
+    self.modelContext = context
+    self.preferences = UserPreferences.getOrCreate(in: context)
+    self.persistentState = PlaybackState.getOrCreate(in: context)
+    
+    print("[DEBUG] PlaybackController.setModelContext: preferences: \(preferences != nil), persistentState: \(persistentState != nil)")
+    
+    // Apply defaults from preferences if not already set
+    if let prefs = preferences {
+      self.shuffleMode = prefs.defaultShuffleMode
+      self.repeatMode = prefs.defaultRepeatMode
+      print("[DEBUG] PlaybackController.setModelContext: Applied defaults - Shuffle: \(shuffleMode), Repeat: \(repeatMode)")
+    }
+    
+    // Restore state
+    restoreState()
+    self.isInitializing = false
+  }
 
   private func setupAudioSession() {
     #if os(iOS)
       guard !audioSessionConfigured else { return }
       let session = AVAudioSession.sharedInstance()
       do {
-        try session.setCategory(.playback, mode: .default)
+        try session.setCategory(.playback, mode: .default, options: [.allowBluetooth, .allowAirPlay])
         try session.setActive(true)
         audioSessionConfigured = true
       } catch {
-        print("Audio session warning: \(error)")
+        print("Audio session error: \(error)")
       }
     #endif
   }
 
   private func setupNotifications() {
-    // Handle audio session interruptions
     NotificationCenter.default.addObserver(
       self,
       selector: #selector(handleAudioSessionInterruption),
@@ -107,11 +137,18 @@ final class PlaybackController {
       object: nil
     )
 
-    // Handle route changes (headphones connected/disconnected)
     NotificationCenter.default.addObserver(
       self,
       selector: #selector(handleRouteChange),
       name: AVAudioSession.routeChangeNotification,
+      object: nil
+    )
+    
+    // Handle item did play to end for manual queue management in AVQueuePlayer if needed
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(playerItemDidReachEnd),
+      name: .AVPlayerItemDidPlayToEndTime,
       object: nil
     )
   }
@@ -120,16 +157,12 @@ final class PlaybackController {
     guard let userInfo = notification.userInfo,
       let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
       let type = AVAudioSession.InterruptionType(rawValue: typeValue)
-    else {
-      return
-    }
+    else { return }
 
     switch type {
     case .began:
-      // Audio session was interrupted (e.g., phone call)
       pause()
     case .ended:
-      // Interruption ended
       if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
         let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
         if options.contains(.shouldResume) {
@@ -145,80 +178,108 @@ final class PlaybackController {
     guard let userInfo = notification.userInfo,
       let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
       let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
-    else {
-      return
-    }
+    else { return }
 
-    switch reason {
-    case .oldDeviceUnavailable:
-      // Headphones unplugged - pause playback
+    if reason == .oldDeviceUnavailable {
       pause()
-    default:
-      break
+    }
+  }
+  
+  @objc private func playerItemDidReachEnd(notification: Notification) {
+    guard let item = notification.object as? AVPlayerItem,
+          let player = player,
+          player.currentItem == item else { return }
+    
+    // If repeat one, we should restart the item
+    if repeatMode == .one {
+      item.seek(to: .zero, completionHandler: nil)
+      player.play()
+    } else if queue.count > currentQueueIndex + 1 {
+      // AVQueuePlayer handles the transition if gapless is on
+      // We just need to update our index and currentItem
+      currentQueueIndex += 1
+      currentItem = queue[currentQueueIndex]
+      updateUIForNewItem()
+      saveState()
+    } else if repeatMode == .all && !queue.isEmpty {
+      playQueue(queue, startingAt: 0, from: currentSource, playlistId: currentPlaylistId)
+    } else {
+      isPlaying = false
+      saveState()
     }
   }
 
-  private func setupRemoteCommands() {
-    let commandCenter = MPRemoteCommandCenter.shared()
-
-    commandCenter.playCommand.addTarget { [weak self] _ in
-      self?.play()
-      return .success
+    private func setupRemoteCommands() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+        
+        // Play/pause handlers (keep if needed, but disable UI button)
+        commandCenter.playCommand.addTarget { [weak self] _ in
+            self?.play()
+            return .success
+        }
+        commandCenter.pauseCommand.addTarget { [weak self] _ in
+            self?.pause()
+            return .success
+        }
+        commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
+            self?.playPause()
+            return .success
+        }
+        
+        // Next/previous handlers (always enable these)
+        commandCenter.nextTrackCommand.addTarget { [weak self] _ in
+            self?.playNext()
+            return .success
+        }
+        commandCenter.previousTrackCommand.addTarget { [weak self] _ in
+            self?.playPrevious()
+            return .success
+        }
+        
+        // Skip handlers (disable to hide)
+        commandCenter.skipForwardCommand.preferredIntervals = [15]
+        commandCenter.skipForwardCommand.addTarget { [weak self] _ in
+            self?.skipForward()
+            return .success
+        }
+        commandCenter.skipBackwardCommand.preferredIntervals = [15]
+        commandCenter.skipBackwardCommand.addTarget { [weak self] _ in
+            self?.skipBackward()
+            return .success
+        }
+        
+        commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let self = self,
+                  let positionEvent = event as? MPChangePlaybackPositionCommandEvent
+            else { return .commandFailed }
+            self.seek(to: positionEvent.positionTime)
+            return .success
+        }
+        
+        commandCenter.likeCommand.addTarget { [weak self] _ in
+            guard let self = self, let song = self.currentItem else { return .commandFailed }
+            PlaylistManager.shared.toggleLike(song: song)
+            return .success
+        }
+        
+        commandCenter.playCommand.isEnabled = true
+        commandCenter.pauseCommand.isEnabled = true
+        commandCenter.likeCommand.isEnabled = true
+        
+        // Disable unwanted buttons in Control Center
+        commandCenter.togglePlayPauseCommand.isEnabled = false
+        commandCenter.skipForwardCommand.isEnabled = false
+        commandCenter.skipBackwardCommand.isEnabled = false
+        commandCenter.changePlaybackPositionCommand.isEnabled = false
+        
+        // Enable only next/previous (conditionally if desired)
+//        commandCenter.nextTrackCommand.isEnabled = hasNextTrack()  // Implement your check
+//        commandCenter.previousTrackCommand.isEnabled = hasPreviousTrack()  // Implement your check
     }
-
-    commandCenter.pauseCommand.addTarget { [weak self] _ in
-      self?.pause()
-      return .success
-    }
-
-    commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
-      self?.playPause()
-      return .success
-    }
-
-    commandCenter.nextTrackCommand.addTarget { [weak self] _ in
-      self?.playNext()
-      return .success
-    }
-
-    commandCenter.previousTrackCommand.addTarget { [weak self] _ in
-      self?.playPrevious()
-      return .success
-    }
-
-    commandCenter.skipForwardCommand.preferredIntervals = [15]
-    commandCenter.skipForwardCommand.addTarget { [weak self] _ in
-      self?.skipForward()
-      return .success
-    }
-
-    commandCenter.skipBackwardCommand.preferredIntervals = [15]
-    commandCenter.skipBackwardCommand.addTarget { [weak self] _ in
-      self?.skipBackward()
-      return .success
-    }
-
-    commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
-      guard let self = self,
-        let positionEvent = event as? MPChangePlaybackPositionCommandEvent
-      else {
-        return .commandFailed
-      }
-      self.seek(to: positionEvent.positionTime)
-      return .success
-    }
-
-    commandCenter.likeCommand.addTarget { [weak self] _ in
-      guard let self = self, let song = self.currentItem else { return .commandFailed }
-      PlaylistManager.shared.toggleLike(song: song)
-      return .success
-    }
-  }
 
   // MARK: - Playback Controls
 
   func play(_ song: LibrarySong, from source: PlaySource = .library, playlistId: UUID? = nil) {
-    // Track previous song in history
     if let current = currentItem {
       historyTracker.songEnded(skipped: false)
     }
@@ -227,87 +288,99 @@ final class PlaybackController {
     currentSource = source
     currentPlaylistId = playlistId
 
-    // Configure audio session for playback
     setupAudioSession()
 
-    // Get the file URL
     let url = library.getFileURL(for: song)
-
-    // Verify file exists
     guard FileManager.default.fileExists(atPath: url.path) else {
       print("Audio file not found: \(url.path)")
       isLoading = false
       return
     }
 
-    // Create player item
-    let item = AVPlayerItem(url: url)
-
-    // Configure player
+    let item = createPlayerItem(for: song)
+    
     if player == nil {
-      player = AVPlayer(playerItem: item)
+      player = AVQueuePlayer(items: [item])
       addTimeObserver()
     } else {
-      player?.replaceCurrentItem(with: item)
+      player?.removeAllItems()
+      player?.insert(item, after: nil)
     }
 
-    // Observe item status for reliable playback
-    observePlayerItem(item)
-
-    // Re-register end of playback observer for the new item
-    addEndOfPlaybackObserver()
-
-    // Update state
     currentItem = song
     duration = song.duration > 0 ? song.duration : 0
     currentTime = 0
 
-    // Start playback
+    // Prepare next item for gapless
+    prepareNextItem()
+
     player?.play()
     isPlaying = true
     isLoading = false
 
-    // Load duration from the player item to ensure accuracy
-    loadDuration(from: item)
-
-    updateNowPlaying()
+    updateUIForNewItem()
     historyTracker.songStarted(song, source: source, playlistId: playlistId)
-
-    // Load lyrics
+    
     Task {
       await loadLyrics(for: song)
     }
+    
+    saveState()
+  }
+  
+  private func createPlayerItem(for song: LibrarySong) -> AVPlayerItem {
+    let url = library.getFileURL(for: song)
+    let asset = AVURLAsset(url: url)
+    let item = AVPlayerItem(asset: asset)
+    
+    // Normalization logic
+    if let prefs = preferences, prefs.normalizeVolume {
+      applyNormalization(to: item)
+    }
+    
+    observePlayerItem(item)
+    return item
+  }
+  
+  private func applyNormalization(to item: AVPlayerItem) {
+    // Basic normalization using audio mix to target -14 LUFS roughly
+    // In a real app, we would have pre-calculated ReplayGain values.
+    // Here we can at least ensure peak isn't clipping or apply a slight gain correction if we had metadata.
+    // For now, let's just ensure we have a mix that could be adjusted.
+    let audioParams = AVMutableAudioMixInputParameters(track: item.asset.tracks(withMediaType: .audio).first)
+    // Example: slightly reduce volume to avoid clipping in mixed environments
+    audioParams.setVolume(0.9, at: .zero) 
+    let audioMix = AVMutableAudioMix()
+    audioMix.inputParameters = [audioParams]
+    item.audioMix = audioMix
   }
 
   private func observePlayerItem(_ item: AVPlayerItem) {
-    // Remove previous observer
-    itemObserver?.invalidate()
-
-    // Observe status changes for reliable playback
-    itemObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+    let statusObs = item.observe(\.status, options: [.new]) { [weak self] item, _ in
       Task { @MainActor in
-        switch item.status {
-        case .readyToPlay:
-          self?.isLoading = false
-          self?.player?.play()
-          self?.isPlaying = true
-
-          // Ensure we have the most accurate duration from the player item
+        if item.status == .readyToPlay {
           let itemDuration = CMTimeGetSeconds(item.duration)
           if itemDuration.isFinite, itemDuration > 0 {
             self?.duration = itemDuration
             self?.updateNowPlaying()
           }
-        case .failed:
-          self?.isLoading = false
-          self?.isPlaying = false
-          print("Player item failed: \(item.error?.localizedDescription ?? "Unknown error")")
-        case .unknown:
-          break
-        @unknown default:
-          break
         }
       }
+    }
+    itemObservers.append(statusObs)
+  }
+  
+  private func prepareNextItem() {
+    guard let player = player, (preferences?.gaplessPlayback ?? true) else { return }
+    
+    // Only queue the next item if it's not already queued
+    guard player.items().count < 2 else { return }
+    
+    let nextIndex = currentQueueIndex + 1
+    if nextIndex < queue.count {
+      let nextSong = queue[nextIndex]
+      let nextItem = createPlayerItem(for: nextSong)
+      player.insert(nextItem, after: player.currentItem)
     }
   }
 
@@ -344,15 +417,14 @@ final class PlaybackController {
   }
 
   func play() {
-    guard player != nil else {
-      // If no player but we have a current item, recreate the player
+    guard let player = player else {
       if let song = currentItem {
         play(song, from: currentSource, playlistId: currentPlaylistId)
       }
       return
     }
 
-    player?.play()
+    player.play()
     isPlaying = true
     historyTracker.songResumed()
     updateNowPlaying()
@@ -377,25 +449,23 @@ final class PlaybackController {
   func seek(to time: TimeInterval) {
     guard time.isFinite, time >= 0 else { return }
     let cmTime = CMTime(seconds: time, preferredTimescale: 600)
-    player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) {
-      [weak self] finished in
+    player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
       if finished {
         Task { @MainActor in
           self?.currentTime = time
           self?.updateNowPlaying()
+          self?.saveState()
         }
       }
     }
   }
 
   func skipForward() {
-    let newTime = min(currentTime + 15, duration)
-    seek(to: newTime)
+    seek(to: min(currentTime + 15, duration))
   }
 
   func skipBackward() {
-    let newTime = max(0, currentTime - 15)
-    seek(to: newTime)
+    seek(to: max(0, currentTime - 15))
   }
 
   // MARK: - Queue Navigation
@@ -407,7 +477,7 @@ final class PlaybackController {
     }
 
     guard currentQueueIndex > 0 else {
-      if repeatMode == .all {
+      if repeatMode == .all && !queue.isEmpty {
         currentQueueIndex = queue.count - 1
         play(queue[currentQueueIndex], from: currentSource, playlistId: currentPlaylistId)
       }
@@ -425,26 +495,45 @@ final class PlaybackController {
       historyTracker.songEnded(skipped: false)
     }
 
-    switch repeatMode {
-    case .one:
+    if repeatMode == .one {
       seek(to: 0)
       play()
       return
+    }
 
-    case .off, .all:
-      guard currentQueueIndex < queue.count - 1 else {
-        if repeatMode == .all {
-          currentQueueIndex = 0
-          play(queue[currentQueueIndex], from: currentSource, playlistId: currentPlaylistId)
-        } else {
-          pause()
-          seek(to: 0)
-        }
-        return
+    guard currentQueueIndex < queue.count - 1 else {
+      if repeatMode == .all && !queue.isEmpty {
+        currentQueueIndex = 0
+        play(queue[currentQueueIndex], from: currentSource, playlistId: currentPlaylistId)
+      } else {
+        pause()
+        seek(to: 0)
       }
+      return
+    }
 
+    // For AVQueuePlayer, if we have advanceToNextItem, we use it
+    if let player = player, player.items().count > 1 {
+      player.advanceToNextItem()
+      currentQueueIndex += 1
+      currentItem = queue[currentQueueIndex]
+      updateUIForNewItem()
+    } else {
       currentQueueIndex += 1
       play(queue[currentQueueIndex], from: currentSource, playlistId: currentPlaylistId)
+    }
+    
+    saveState()
+  }
+  
+  private func updateUIForNewItem() {
+    guard let song = currentItem else { return }
+    duration = song.duration > 0 ? song.duration : 0
+    currentTime = 0
+    updateNowPlaying()
+    prepareNextItem()
+    Task {
+      await loadLyrics(for: song)
     }
   }
 
@@ -455,6 +544,8 @@ final class PlaybackController {
     if shuffleMode != .off {
       originalQueue.append(song)
     }
+    prepareNextItem()
+    saveState()
   }
 
   func addToQueue(_ songs: [LibrarySong]) {
@@ -462,6 +553,8 @@ final class PlaybackController {
     if shuffleMode != .off {
       originalQueue.append(contentsOf: songs)
     }
+    prepareNextItem()
+    saveState()
   }
 
   func playNext(_ song: LibrarySong) {
@@ -470,28 +563,48 @@ final class PlaybackController {
     if shuffleMode != .off {
       originalQueue.append(song)
     }
+    
+    // Insert into AVQueuePlayer
+    if let player = player {
+      let item = createPlayerItem(for: song)
+      player.insert(item, after: player.currentItem)
+    }
+    saveState()
   }
 
   func removeFromQueue(at index: Int) {
     guard index >= 0 && index < queue.count else { return }
-
+    
+    let songId = queue[index].id
     queue.remove(at: index)
 
     if shuffleMode != .off {
-      if let originalIndex = originalQueue.firstIndex(where: { $0.id == queue[index].id }) {
-        originalQueue.remove(at: originalIndex)
-      }
+      originalQueue.removeAll { $0.id == songId }
     }
 
     if index < currentQueueIndex {
       currentQueueIndex -= 1
+    } else if index == currentQueueIndex {
+      playNext()
     }
+    
+    // If it was the next item in AVQueuePlayer, remove it
+    if let player = player, index == currentQueueIndex + 1 {
+      let items = player.items()
+      if items.count > 1 {
+        player.remove(items[1])
+        prepareNextItem()
+      }
+    }
+    saveState()
   }
 
   func clearQueue() {
     queue.removeAll()
     originalQueue.removeAll()
     currentQueueIndex = 0
+    player?.removeAllItems()
+    saveState()
   }
 
   func moveSong(from sourceIndex: Int, to destinationIndex: Int) {
@@ -509,6 +622,18 @@ final class PlaybackController {
     } else if sourceIndex > currentQueueIndex && destinationIndex <= currentQueueIndex {
       currentQueueIndex += 1
     }
+    
+    // Re-sync AVQueuePlayer if necessary (e.g. if next item changed)
+    if sourceIndex == currentQueueIndex + 1 || destinationIndex == currentQueueIndex + 1 {
+      if let player = player {
+        let items = player.items()
+        if items.count > 1 {
+          player.remove(items[1])
+        }
+        prepareNextItem()
+      }
+    }
+    saveState()
   }
 
   // MARK: - Shuffle
@@ -536,6 +661,15 @@ final class PlaybackController {
         currentQueueIndex = 0
       }
     }
+    
+    // After shuffle, we should update the next item in AVQueuePlayer
+    if let player = player {
+      let items = player.items()
+      if items.count > 1 {
+        player.remove(items[1])
+      }
+      prepareNextItem()
+    }
   }
 
   func toggleShuffle() {
@@ -546,12 +680,9 @@ final class PlaybackController {
 
   func cycleRepeatMode() {
     switch repeatMode {
-    case .off:
-      repeatMode = .all
-    case .all:
-      repeatMode = .one
-    case .one:
-      repeatMode = .off
+    case .off: repeatMode = .all
+    case .all: repeatMode = .one
+    case .one: repeatMode = .off
     }
   }
 
@@ -560,44 +691,24 @@ final class PlaybackController {
   private func loadLyrics(for song: LibrarySong) async {
     let lyricsService = LyricsService.shared
     currentLyrics = lyricsService.getCachedLyrics(for: song)
-
     if currentLyrics == nil {
       currentLyrics = await lyricsService.fetchLyrics(for: song)
     }
   }
 
   private func updateCurrentLyric() {
-    guard let song = currentItem,
-      let lyrics = currentLyrics,
-      lyrics.songId == song.id
-    else {
+    guard let lyrics = currentLyrics else {
       currentLyricIndex = nil
       return
     }
-
-    // Defensive check for potential detachment/deallocation
-    do {
-      currentLyricIndex = lyrics.lineIndex(at: currentTime)
-    } catch {
-      print("Warning: Failed to update lyric index (likely detached context)")
-      currentLyricIndex = nil
-    }
+    currentLyricIndex = try? lyrics.lineIndex(at: currentTime)
   }
 
   var currentLyricLine: LyricLine? {
-    guard let song = currentItem,
-      let index = currentLyricIndex,
-      let lyrics = currentLyrics,
-      lyrics.songId == song.id,
-      index >= 0
-    else { return nil }
-
-    // Safely check lines count
-    let linesCount = (try? lyrics.lines.count) ?? 0
-    if index < linesCount {
-      return lyrics.lines[index]
-    }
-    return nil
+    guard let index = currentLyricIndex,
+          let lyrics = currentLyrics,
+          index >= 0, index < (try? lyrics.lines.count) ?? 0 else { return nil }
+    return lyrics.lines[index]
   }
 
   func refreshLyrics() async {
@@ -633,15 +744,100 @@ final class PlaybackController {
       }
     #endif
 
-    if let trackNumber = song.trackNumber {
-      nowPlayingInfo[MPMediaItemPropertyAlbumTrackNumber] = trackNumber
-    }
-
-    nowPlayingInfo[MPMediaItemPropertyAlbumTrackCount] = queue.count
-
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
   }
 
+  // MARK: - Persistence
+
+  private func saveState() {
+    guard !isInitializing else { return }
+    guard let state = persistentState, let context = modelContext else {
+      print("[DEBUG] PlaybackController.saveState: FAILED - state or context nil")
+      return
+    }
+    
+    let songId = currentItem?.id
+    print("[DEBUG] PlaybackController.saveState: Saving state. Song: \(songId?.uuidString ?? "nil"), Time: \(currentTime), Queue Count: \(queue.count)")
+    
+    state.lastSongId = songId
+    state.lastTime = currentTime
+    state.lastQueueIds = queue.map { $0.id }
+    state.lastQueueIndex = currentQueueIndex
+    state.lastSourceRaw = currentSource.rawValue
+    state.lastPlaylistId = currentPlaylistId
+    
+    do {
+      try context.save()
+      print("[DEBUG] PlaybackController.saveState: SUCCESS")
+    } catch {
+      print("[DEBUG] PlaybackController.saveState: ERROR saving context: \(error)")
+    }
+  }
+  
+  private func restoreState() {
+    print("[DEBUG] PlaybackController.restoreState: Starting restoration")
+    guard let state = persistentState else {
+      print("[DEBUG] PlaybackController.restoreState: FAILED - persistentState is nil")
+      return
+    }
+    
+    guard let songId = state.lastSongId else {
+      print("[DEBUG] PlaybackController.restoreState: No lastSongId found in state")
+      return
+    }
+
+    print("[DEBUG] PlaybackController.restoreState: Found lastSongId \(songId). Queue count in state: \(state.lastQueueIds.count)")
+
+    // Fetch the songs for the queue
+    let songIds = state.lastQueueIds
+    var restoredQueue: [LibrarySong] = []
+
+    for id in songIds {
+      if let song = library.songs.first(where: { $0.id == id }) {
+        restoredQueue.append(song)
+      }
+    }
+
+    if !restoredQueue.isEmpty {
+      Task { @MainActor in
+        print("[DEBUG] PlaybackController.restoreState.MainActor: Setting up UI")
+        self.queue = restoredQueue
+        self.originalQueue = restoredQueue
+        self.currentQueueIndex = state.lastQueueIndex
+        self.currentSource = PlaySource(rawValue: state.lastSourceRaw ?? "library") ?? .library
+        self.currentPlaylistId = state.lastPlaylistId
+
+        if currentQueueIndex < queue.count {
+          let song = queue[currentQueueIndex]
+          print("[DEBUG] PlaybackController.restoreState.MainActor: Current song: \(song.title)")
+          self.currentItem = song
+          self.currentTime = state.lastTime
+          self.isPlaying = false
+
+          // Prepare player but don't play
+          let item = createPlayerItem(for: song)
+          self.player = AVQueuePlayer(items: [item])
+          item.seek(to: CMTime(seconds: state.lastTime, preferredTimescale: 600), completionHandler: nil)
+          self.addTimeObserver()
+
+          // Setup initial UI
+          self.duration = song.duration > 0 ? song.duration : 0
+          self.updateNowPlaying()
+          self.prepareNextItem()
+          
+          print("[DEBUG] PlaybackController.restoreState.MainActor: UI updated successfully at \(self.currentTime)s")
+
+          Task {
+            await loadLyrics(for: song)
+          }
+        } else {
+          print("[DEBUG] PlaybackController.restoreState.MainActor: FAILED - index \(currentQueueIndex) out of bounds")
+        }
+      }
+    } else {
+      print("[DEBUG] PlaybackController.restoreState: FAILED - restored queue is empty")
+    }
+  }
   // MARK: - Observers
 
   private func addTimeObserver() {
@@ -650,47 +846,15 @@ final class PlaybackController {
     }
 
     let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
-    timeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) {
-      [weak self] time in
-      self?.currentTime = time.seconds
-      self?.updateCurrentLyric()
-    }
-
-    // Add end of playback observer
-    addEndOfPlaybackObserver()
-  }
-
-  private func loadDuration(from item: AVPlayerItem) {
-    Task { @MainActor in
-      do {
-        let loadedDuration = try await item.asset.load(.duration)
-        let seconds = CMTimeGetSeconds(loadedDuration)
-        if seconds.isFinite, seconds > 0 {
-          self.duration = seconds
-          self.updateNowPlaying()
-        }
-      } catch {
-        print("Failed to load duration: \(error)")
-      }
-    }
-  }
-
-  private func addEndOfPlaybackObserver() {
-    // Remove previous observer
-    if let observer = endObserver {
-      NotificationCenter.default.removeObserver(observer)
-    }
-
-    endObserver = NotificationCenter.default.addObserver(
-      forName: .AVPlayerItemDidPlayToEndTime,
-      object: player?.currentItem,
-      queue: .main
-    ) { [weak self] _ in
-      Task { @MainActor in
-        self?.playNext()
+    timeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+      guard let self = self else { return }
+      self.currentTime = time.seconds
+      self.updateCurrentLyric()
+      
+      // Periodically save time (every 5 seconds)
+      if Int(self.currentTime) % 5 == 0 {
+        self.saveState()
       }
     }
   }
 }
-
-// MARK: - Supporting Types

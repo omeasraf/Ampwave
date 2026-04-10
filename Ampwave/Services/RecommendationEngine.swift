@@ -85,8 +85,8 @@ final class RecommendationEngine {
     // Get recently played songs (mix of familiar and new)
     let recentlyPlayed = historyTracker.getRecentlyPlayed(limit: 10)
 
-    // Get most played songs
-    let mostPlayed = historyTracker.getMostPlayed(limit: 10)
+    // Get most played songs (top 20)
+    let mostPlayed = historyTracker.getMostPlayed(limit: 20)
 
     // 1. Find songs similar to recently played
     if !recentlyPlayed.isEmpty {
@@ -96,14 +96,25 @@ final class RecommendationEngine {
           Recommendation(
             item: .song($0),
             reason: .similarToRecent,
-            confidence: 0.8
+            confidence: 0.85
           )
         })
     }
 
-    // 2. Find songs from same artists as most played
+    // 2. Heavy rotation: Songs played many times
     if !mostPlayed.isEmpty {
-      let topArtists = mostPlayed.prefix(5).map { $0.song.artist }
+      let heavyRotation = mostPlayed.prefix(10).map { $0.song }
+      recommendations.append(
+        contentsOf: heavyRotation.map {
+          Recommendation(
+            item: .song($0),
+            reason: .heavyRotation,
+            confidence: 0.9
+          )
+        })
+        
+      // Also find more from these artists
+      let topArtists = Set(mostPlayed.prefix(5).map { $0.song.artist })
       let fromFavoriteArtists = library.songs.filter { song in
         topArtists.contains(song.artist) && !recentlyPlayed.contains(where: { $0.id == song.id })
       }.prefix(5)
@@ -112,7 +123,7 @@ final class RecommendationEngine {
           Recommendation(
             item: .song($0),
             reason: .fromFavoriteArtist,
-            confidence: 0.75
+            confidence: 0.8
           )
         })
     }

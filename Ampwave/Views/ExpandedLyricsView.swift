@@ -127,17 +127,17 @@ struct ExpandedLyricsView: View {
           }
         }
 
-        ToolbarItem(placement: .navigationBarTrailing) {
-          Button {
-            Task {
-              await playback.refreshLyrics()
-            }
-          } label: {
-            Image(systemName: "arrow.clockwise")
-              .font(.system(size: 18))
-              .foregroundStyle(.white)
-          }
-        }
+//        ToolbarItem(placement: .navigationBarTrailing) {
+//          Button {
+//            Task {
+//              await playback.refreshLyrics()
+//            }
+//          } label: {
+//            Image(systemName: "arrow.clockwise")
+//              .font(.system(size: 18))
+//              .foregroundStyle(.white)
+//          }
+//        }
       }
       .preferredColorScheme(.dark)
       .onAppear {
