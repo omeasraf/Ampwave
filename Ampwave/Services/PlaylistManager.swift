@@ -61,11 +61,13 @@ final class PlaylistManager {
           name: "Liked Songs",
           description: "All your favorite songs in one place",
           playlistType: .likedSongs,
-          icon: PlaylistIcon(icon: "heart.fill", color: .accent)
+          icon: PlaylistIcon(icon: "heart.fill", color: .pink),
+          artworkType: .icon
         )
-      } else if likedSongsPlaylist?.icon == nil {
-        // Backfill icon for existing databases created before icon persistence was fixed.
-        likedSongsPlaylist?.icon = PlaylistIcon(icon: "heart.fill", color: .accent)
+      } else {
+        // Ensure "Liked Songs" uses the correct icon and color
+        likedSongsPlaylist?.icon = PlaylistIcon(icon: "heart.fill", color: .pink)
+        likedSongsPlaylist?.artworkType = .icon
         save()
       }
     }
@@ -79,7 +81,8 @@ final class PlaylistManager {
     description: String? = nil,
     playlistType: PlaylistType = .custom,
     songs: [LibrarySong] = [],
-    icon: PlaylistIcon? = nil
+    icon: PlaylistIcon? = nil,
+    artworkType: PlaylistArtworkType = .grid
   ) -> Playlist? {
     guard let modelContext = modelContext else { return nil }
 
@@ -87,7 +90,8 @@ final class PlaylistManager {
       name: name,
       description: description,
       playlistType: playlistType,
-      icon: icon
+      icon: icon,
+      artworkType: artworkType
     )
 
     // Add initial songs
@@ -132,6 +136,10 @@ final class PlaylistManager {
     guard playlist.playlistType == .custom || playlist.playlistType == .smart else {
       return
     }
+
+    // Access property to ensure it's loaded into the context before deletion
+    _ = playlist.artworkType
+    _ = playlist.id
 
     modelContext.delete(playlist)
 
@@ -413,9 +421,20 @@ final class PlaylistManager {
 
   private func sortPlaylists() {
     playlists.sort {
+      // Liked Songs always at the top
+      if $0.playlistType == .likedSongs && $1.playlistType != .likedSongs {
+        return true
+      }
+      if $1.playlistType == .likedSongs && $0.playlistType != .likedSongs {
+        return false
+      }
+
+      // Then pinned playlists
       if $0.isPinned != $1.isPinned {
         return $0.isPinned && !$1.isPinned
       }
+
+      // Finally by last modified date
       return $0.lastModifiedDate > $1.lastModifiedDate
     }
   }

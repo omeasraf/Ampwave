@@ -265,6 +265,7 @@ struct ArtistsListView: View {
 
 struct PlaylistsListView: View {
   let searchText: String
+  @State private var showingCreateSheet = false
 
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
 
@@ -280,20 +281,22 @@ struct PlaylistsListView: View {
   var body: some View {
     List {
       Button {
-        // Show create playlist sheet
+        showingCreateSheet = true
       } label: {
         Label("New Playlist", systemImage: "plus.circle.fill")
           .font(.system(size: 16, weight: .semibold))
       }
       .listRowBackground(Color.clear)
+      .sheet(isPresented: $showingCreateSheet) {
+        CreatePlaylistSheet()
+      }
 
       ForEach(filteredPlaylists) { playlist in
         NavigationLink(destination: PlaylistView(playlist: playlist)) {
           HStack(spacing: 12) {
             PlaylistArtworkView(
-              artworkPath: playlist.artworkPath,
-              size: 60,
-              icon: playlist.icon
+              playlist: playlist,
+              size: 60
             )
 
             VStack(alignment: .leading, spacing: 2) {
@@ -348,6 +351,63 @@ struct PlaylistsListView: View {
         )
       }
     }
+  }
+}
+
+// MARK: - Create Playlist Sheet
+
+struct CreatePlaylistSheet: View {
+  @Environment(\.dismiss) private var dismiss
+  @State private var name = ""
+  @State private var description = ""
+  @State private var artworkType: PlaylistArtworkType = .grid
+
+  private var playlistManager: PlaylistManager { PlaylistManager.shared }
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section {
+          TextField("Playlist Name", text: $name)
+          TextField("Description (Optional)", text: $description)
+        }
+
+        Section {
+          Picker("Artwork Style", selection: $artworkType) {
+            Text("2x2 Grid").tag(PlaylistArtworkType.grid)
+            Text("Single Image").tag(PlaylistArtworkType.single)
+          }
+          .pickerStyle(.menu)
+
+          Text("Additional customization options will be available in a future update.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        } header: {
+          Text("Artwork")
+        }
+      }
+      .navigationTitle("New Playlist")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") {
+            dismiss()
+          }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Create") {
+            playlistManager.createPlaylist(
+              name: name,
+              description: description.isEmpty ? nil : description,
+              artworkType: artworkType
+            )
+            dismiss()
+          }
+          .disabled(name.isEmpty)
+        }
+      }
+    }
+    .presentationDetents([.medium, .large])
   }
 }
 

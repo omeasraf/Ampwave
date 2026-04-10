@@ -22,8 +22,15 @@ final class Playlist: Identifiable, Hashable {
   var createdDate: Date
   var lastModifiedDate: Date
   var artworkPath: String?
+  private var rawArtworkType: String = PlaylistArtworkType.grid.rawValue
+
+  var artworkType: PlaylistArtworkType {
+    get { PlaylistArtworkType(rawValue: rawArtworkType) ?? .grid }
+    set { rawArtworkType = newValue.rawValue }
+  }
 
   var icon: PlaylistIcon?
+
 
   // MARK: - Playlist Type
   var playlistType: PlaylistType
@@ -43,7 +50,8 @@ final class Playlist: Identifiable, Hashable {
     description: String? = nil,
     playlistType: PlaylistType = .custom,
     artworkPath: String? = nil,
-    icon: PlaylistIcon? = nil
+    icon: PlaylistIcon? = nil,
+    artworkType: PlaylistArtworkType = .grid
   ) {
     self.id = UUID()
     self.name = name
@@ -51,6 +59,7 @@ final class Playlist: Identifiable, Hashable {
     self.playlistType = playlistType
     self.artworkPath = artworkPath
     self.icon = icon
+    self.rawArtworkType = artworkType.rawValue
     self.createdDate = Date()
     self.lastModifiedDate = Date()
     self.isPinned = false
@@ -98,20 +107,48 @@ final class Playlist: Identifiable, Hashable {
     songs.contains(where: { $0.id == song.id })
   }
 
-  /// Generates a collage artwork from song artworks
-  func generateArtwork(from library: SongLibrary) -> String? {
-    // Get up to 4 unique artwork paths from songs
-    let artworkPaths = songs.compactMap { $0.artworkPath }.uniqued().prefix(4)
-    guard !artworkPaths.isEmpty else { return nil }
-
-    // If only one artwork, use it directly
-    if artworkPaths.count == 1 {
-      return artworkPaths.first
+  /// Returns the artwork paths to use for the playlist cover
+  func getArtworkPaths() -> [String] {
+    // If it's a custom artwork, return that
+    if artworkType == .custom, let path = artworkPath {
+      return [path]
     }
 
-    // TODO: Generate collage image from multiple artworks
-    // For now, return the first artwork
-    return artworkPaths.first
+    // Get unique artwork paths from songs
+    let allPaths = songs.compactMap { $0.artworkPath }
+    let uniquePaths = allPaths.uniqued()
+
+    if artworkType == .single || uniquePaths.isEmpty {
+      return Array(uniquePaths.prefix(1))
+    }
+
+    // If we have at least 4 unique artworks, use the first 4 unique ones
+    if uniquePaths.count >= 4 {
+      return Array(uniquePaths.prefix(4))
+    }
+
+    // If we have between 1 and 3 unique artworks, and we want a grid:
+    // We can either return just the unique ones and let the view handle it,
+    // or return a single one if it's not "enough" for a good grid.
+    // Most apps only show the grid if there are 4+ unique albums.
+    // But to "respect the 2x2 grid" selection, let's return up to 4 paths even if we repeat.
+
+    if artworkType == .grid && !allPaths.isEmpty {
+      // If we have 4+ songs, just take the first 4 even if they aren't unique
+      if allPaths.count >= 4 {
+        return Array(allPaths.prefix(4))
+      }
+      // If we have fewer than 4 songs, return all of them
+      return allPaths
+    }
+
+    return Array(uniquePaths.prefix(1))
+  }
+
+  /// Generates a collage artwork from song artworks
+  func generateArtwork(from library: SongLibrary) -> String? {
+    // For now, we use getArtworkPaths() in the view for on-the-fly rendering
+    return getArtworkPaths().first
   }
 
   static func == (lhs: Playlist, rhs: Playlist) -> Bool {
@@ -121,6 +158,14 @@ final class Playlist: Identifiable, Hashable {
   func hash(into hasher: inout Hasher) {
     hasher.combine(id)
   }
+}
+
+// MARK: - Playlist Artwork Type
+enum PlaylistArtworkType: String, Codable {
+  case grid
+  case single
+  case custom
+  case icon
 }
 
 // MARK: - Playlist Icon

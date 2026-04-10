@@ -356,7 +356,7 @@ struct SearchResultsView: View {
       ForEach(playlists) { playlist in
         NavigationLink(destination: PlaylistView(playlist: playlist)) {
           HStack(spacing: 12) {
-            PlaylistArtworkView(artworkPath: playlist.artworkPath, size: 50, icon: playlist.icon)
+            PlaylistArtworkView(playlist: playlist, size: 50)
 
             VStack(alignment: .leading, spacing: 2) {
               Text(playlist.name)

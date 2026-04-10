@@ -122,9 +122,8 @@ struct PlaylistView: View {
   private var playlistHeader: some View {
     VStack(spacing: 20) {
       PlaylistArtworkView(
-        artworkPath: playlist.artworkPath,
-        size: 200,
-        icon: playlist.icon
+        playlist: playlist,
+        size: 200
       )
 
       VStack(spacing: 8) {
@@ -243,13 +242,13 @@ struct EditPlaylistSheet: View {
             .lineLimit(3...6)
         }
 
-        Section {
-          Button {
-            // Change cover image
-          } label: {
-            Label("Change Cover", systemImage: "photo")
-          }
-        }
+//        Section {
+//          Button {
+//            // Change cover image
+//          } label: {
+//            Label("Change Cover", systemImage: "photo")
+//          }
+//        }
       }
       .navigationTitle("Edit Playlist")
       .navigationBarTitleDisplayMode(.inline)
