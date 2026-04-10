@@ -157,12 +157,6 @@ struct HomeView: View {
       }
 
       Spacer()
-
-      NavigationLink(destination: SettingsView()) {
-        Image(systemName: "gearshape")
-          .font(.system(size: 22, weight: .semibold))
-          .foregroundStyle(.primary)
-      }
     }
     .padding(.horizontal, 20)
   }

@@ -256,6 +256,8 @@ final class PlaybackController {
             return .success
         }
         
+        
+        
         commandCenter.likeCommand.addTarget { [weak self] _ in
             guard let self = self, let song = self.currentItem else { return .commandFailed }
             PlaylistManager.shared.toggleLike(song: song)
@@ -417,6 +419,7 @@ final class PlaybackController {
   }
 
   func play() {
+    setupAudioSession()
     guard let player = player else {
       if let song = currentItem {
         play(song, from: currentSource, playlistId: currentPlaylistId)

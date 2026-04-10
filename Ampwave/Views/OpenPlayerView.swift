@@ -17,6 +17,7 @@ struct OpenPlayerView: View {
   @State private var showingQueue = false
   @State private var isLyricsExpanded = false
   @State private var showingAddToPlaylist = false
+  @State private var isEditingShown = false
 
   private var playback: PlaybackController { PlaybackController.shared }
     private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -56,7 +57,7 @@ struct OpenPlayerView: View {
         .padding(.top, 20)
         .padding(.bottom, 40)
       }
-      .background(.ultraThinMaterial)
+//      .background(.ultraThinMaterial)
       .navigationTitle("Now Playing")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -77,6 +78,12 @@ struct OpenPlayerView: View {
 //              Label("Share", systemImage: "square.and.arrow.up")
 //            }
 
+                          Button {
+                              isEditingShown = true
+                          } label: {
+                            Label("Edit Song", systemImage: "pencil")
+                          }
+              
             Button {
                 showingAddToPlaylist = true
             } label: {
@@ -116,6 +123,12 @@ struct OpenPlayerView: View {
     }
     .fullScreenCover(isPresented: $isLyricsExpanded) {
       ExpandedLyricsView(isExpanded: $isLyricsExpanded)
+    }
+    .sheet(isPresented: $isEditingShown) {
+        if let song = playback.currentItem {
+            SongEditSheet(song: song, isPresented: $isEditingShown)
+        }
+        
     }
   }
 
