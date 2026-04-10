@@ -37,6 +37,17 @@ final class LibrarySong: Identifiable, Hashable {
   var artworkPath: String?
   var albumReference: Album?
 
+  // MARK: - Technical metadata
+  var sampleRate: Double?
+  var bitDepth: Int?
+  var bitRate: Int?  // in kbps
+  var channels: Int?
+  var format: String?
+  var source: String?
+  var output: String?
+  var mode: String?
+  var processingChain: String?
+
   init(
     title: String,
     artist: String,
@@ -53,7 +64,16 @@ final class LibrarySong: Identifiable, Hashable {
     discNumber: Int? = nil,
     year: Int? = nil,
     composer: String? = nil,
-    artworkPath: String? = nil
+    artworkPath: String? = nil,
+    sampleRate: Double? = nil,
+    bitDepth: Int? = nil,
+    bitRate: Int? = nil,
+    channels: Int? = nil,
+    format: String? = nil,
+    source: String? = nil,
+    output: String? = nil,
+    mode: String? = nil,
+    processingChain: String? = nil
   ) {
     self.id = UUID()
     self.title = title
@@ -74,6 +94,15 @@ final class LibrarySong: Identifiable, Hashable {
     self.year = year
     self.composer = composer
     self.artworkPath = artworkPath
+    self.sampleRate = sampleRate
+    self.bitDepth = bitDepth
+    self.bitRate = bitRate
+    self.channels = channels
+    self.format = format
+    self.source = source
+    self.output = output
+    self.mode = mode
+    self.processingChain = processingChain
   }
 
   static func == (lhs: LibrarySong, rhs: LibrarySong) -> Bool {

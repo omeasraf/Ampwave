@@ -223,6 +223,10 @@ final class SongLibrary {
 
     print("[DEBUG] Saving context")
     saveContext()
+
+    print("[DEBUG] Reindexing missing technical metadata")
+    await reindexMissingTechnicalMetadata()
+
     print("[DEBUG] Loading songs")
     await loadSongs()
   }
@@ -458,7 +462,12 @@ final class SongLibrary {
       discNumber: metadata.discNumber,
       year: metadata.year,
       composer: metadata.composer,
-      artworkPath: artworkPath
+      artworkPath: artworkPath,
+      sampleRate: metadata.sampleRate,
+      bitDepth: metadata.bitDepth,
+      bitRate: metadata.bitRate,
+      channels: metadata.channels,
+      format: metadata.format
     )
 
     print("[DEBUG] SongLibrary.importFile: Inserting song into modelContext")
@@ -549,7 +558,12 @@ final class SongLibrary {
       discNumber: metadata.discNumber,
       year: metadata.year,
       composer: metadata.composer,
-      artworkPath: artworkPath
+      artworkPath: artworkPath,
+      sampleRate: metadata.sampleRate,
+      bitDepth: metadata.bitDepth,
+      bitRate: metadata.bitRate,
+      channels: metadata.channels,
+      format: metadata.format
     )
 
     modelContext.insert(song)
@@ -582,6 +596,56 @@ final class SongLibrary {
     return song
   }
 
+  // MARK: - Reindexing
+
+  func reindexMissingTechnicalMetadata() async {
+    print(
+      "[DEBUG] SongLibrary.reindexMissingTechnicalMetadata: Checking for songs with missing metadata"
+    )
+    guard let modelContext = modelContext else { return }
+
+    // Fetch songs where format or sampleRate is nil
+    let descriptor = FetchDescriptor<LibrarySong>(
+      predicate: #Predicate<LibrarySong> { $0.format == nil || $0.sampleRate == nil }
+    )
+
+    do {
+      let missingSongs = try modelContext.fetch(descriptor)
+      if missingSongs.isEmpty {
+        print("[DEBUG] SongLibrary.reindexMissingTechnicalMetadata: No songs missing metadata")
+        return
+      }
+
+      print(
+        "[DEBUG] SongLibrary.reindexMissingTechnicalMetadata: Found \(missingSongs.count) songs missing metadata"
+      )
+      indexingStatus = .indexing("Updating metadata…")
+
+      for (index, song) in missingSongs.enumerated() {
+        let url = getFileURL(for: song)
+        if fileManager.fileExists(atPath: url.path) {
+          let metadata = await AudioMetadataExtractor.extract(from: url)
+          song.sampleRate = metadata.sampleRate
+          song.bitDepth = metadata.bitDepth
+          song.bitRate = metadata.bitRate
+          song.channels = metadata.channels
+          song.format = metadata.format
+        }
+
+        if index % 10 == 0 {
+          saveContext()
+          indexingStatus = .indexing("Updating metadata (\(index + 1)/\(missingSongs.count))…")
+        }
+      }
+
+      saveContext()
+      await loadSongs()
+      indexingStatus = .complete
+    } catch {
+      print("[DEBUG] SongLibrary.reindexMissingTechnicalMetadata: Error: \(error)")
+    }
+  }
+
   // MARK: - Metadata Fetching from API
 
   private func fetchMetadataForSong(_ song: LibrarySong) async {
@@ -606,6 +670,59 @@ final class SongLibrary {
     } else {
       print("[DEBUG] SongLibrary.fetchMetadataForSong: No metadata found for \(song.title)")
     }
+  }
+
+  func fetchMetadataForNewSongs() async {
+    print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Starting batch fetch")
+    guard let modelContext = modelContext else { return }
+
+    let metadataService = MetadataService.shared
+    metadataService.setModelContext(modelContext)
+
+    // Example: fetch for songs that have no artwork
+    let descriptor = FetchDescriptor<LibrarySong>(
+      predicate: #Predicate<LibrarySong> { $0.artworkPath == nil }
+    )
+
+    do {
+      let songsToFetch = try modelContext.fetch(descriptor).prefix(10)
+      if songsToFetch.isEmpty { return }
+
+      indexingStatus = .indexing("Fetching metadata…")
+
+      for (index, song) in songsToFetch.enumerated() {
+        indexingStatus = .indexing("Fetching metadata (\(index + 1)/\(songsToFetch.count))…")
+        await metadataService.refreshMetadata(for: song)
+      }
+
+      indexingStatus = .complete
+    } catch {
+      print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Error: \(error)")
+    }
+  }
+
+  func refreshAllMetadata() async {
+    print("[DEBUG] SongLibrary.refreshAllMetadata: Starting full library refresh")
+    guard let modelContext = modelContext else { return }
+
+    let metadataService = MetadataService.shared
+    metadataService.setModelContext(modelContext)
+
+    indexingStatus = .indexing("Refreshing library…")
+
+    let songsCount = songs.count
+    for (index, song) in songs.enumerated() {
+      indexingStatus = .indexing("Refreshing songs (\(index + 1)/\(songsCount))…")
+      await metadataService.refreshMetadata(for: song)
+    }
+
+    let albumCount = albums.count
+    for (index, album) in albums.enumerated() {
+      indexingStatus = .indexing("Refreshing albums (\(index + 1)/\(albumCount))…")
+      await metadataService.refreshMetadata(for: album)
+    }
+
+    indexingStatus = .complete
   }
 
   @MainActor

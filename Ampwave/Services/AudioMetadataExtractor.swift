@@ -23,6 +23,13 @@ struct ExtractedAudioMetadata: Sendable {
   var year: Int?
   var composer: String?
   var artwork: Data?
+
+  // Technical
+  var sampleRate: Double?
+  var bitDepth: Int?
+  var bitRate: Int?
+  var channels: Int?
+  var format: String?
 }
 
 /// Extracts metadata using AVFoundation (supports major formats and full metadata).
@@ -38,11 +45,13 @@ enum AudioMetadataExtractor: Sendable {
     async let durationTask = loadDuration(from: asset)
     async let metadataTask = try? asset.load(.commonMetadata)
     async let formatsTask = try? asset.load(.availableMetadataFormats)
+    async let technicalTask = loadTechnicalMetadata(from: asset)
 
     let duration = await durationTask
     print("[DEBUG] AudioMetadataExtractor.extract: Duration loaded: \(duration)")
     var allMetadata = (await metadataTask) ?? []
     let formats = (await formatsTask) ?? []
+    let technical = await technicalTask
     print("[DEBUG] AudioMetadataExtractor.extract: Found \(formats.count) metadata formats")
 
     for format in formats {
@@ -164,8 +173,60 @@ enum AudioMetadataExtractor: Sendable {
       discNumber: discNumber,
       year: year,
       composer: composer,
-      artwork: artwork
+      artwork: artwork,
+      sampleRate: technical.sampleRate,
+      bitDepth: technical.bitDepth,
+      bitRate: technical.bitRate,
+      channels: technical.channels,
+      format: technical.format ?? url.pathExtension.uppercased()
     )
+  }
+
+  private static func loadTechnicalMetadata(from asset: AVURLAsset) async -> (
+    sampleRate: Double?, bitDepth: Int?, bitRate: Int?, channels: Int?, format: String?
+  ) {
+    var sampleRate: Double?
+    var bitDepth: Int?
+    var bitRate: Int?
+    var channels: Int?
+    var format: String?
+
+    do {
+      let tracks = try await asset.load(.tracks)
+      if let audioTrack = tracks.first(where: { $0.mediaType == .audio }) {
+        let formatDescriptions = try await audioTrack.load(.formatDescriptions)
+        if let desc = formatDescriptions.first {
+          let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc)?.pointee
+          if let asbd = asbd {
+            sampleRate = asbd.mSampleRate
+            channels = Int(asbd.mChannelsPerFrame)
+            bitDepth = Int(asbd.mBitsPerChannel)
+
+            // Map format
+            let formatID = asbd.mFormatID
+            switch formatID {
+            case kAudioFormatLinearPCM: format = "PCM"
+            case kAudioFormatMPEG4AAC: format = "AAC"
+            case kAudioFormatMPEGLayer3: format = "MP3"
+            case kAudioFormatAppleLossless: format = "ALAC"
+            case kAudioFormatFLAC: format = "FLAC"
+            case kAudioFormatOpus: format = "Opus"
+            default: format = nil
+            }
+          }
+        }
+
+        // Bitrate
+        let estimatedBitRate = try? await audioTrack.load(.estimatedDataRate)
+        if let rate = estimatedBitRate, rate > 0 {
+          bitRate = Int(rate / 1000)  // Convert to kbps
+        }
+      }
+    } catch {
+      print("[DEBUG] AudioMetadataExtractor: Error loading technical metadata: \(error)")
+    }
+
+    return (sampleRate, bitDepth, bitRate, channels, format)
   }
 
   /// Parses "5", "5/12" -> 5

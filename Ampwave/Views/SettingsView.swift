@@ -540,25 +540,11 @@ struct SettingsView: View {
   }
 
   private func fetchMetadataForNewSongs() async {
-    let metadataService = MetadataService.shared
-    metadataService.setModelContext(modelContext)
-
-    for song in library.songs.prefix(10) {
-      await metadataService.refreshMetadata(for: song)
-    }
+    await library.fetchMetadataForNewSongs()
   }
 
   private func refreshAllMetadata() async {
-    let metadataService = MetadataService.shared
-    metadataService.setModelContext(modelContext)
-
-    for song in library.songs {
-      await metadataService.refreshMetadata(for: song)
-    }
-
-    for album in library.albums {
-      await metadataService.refreshMetadata(for: album)
-    }
+    await library.refreshAllMetadata()
   }
 
   private func clearCache() {

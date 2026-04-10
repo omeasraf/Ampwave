@@ -99,30 +99,79 @@ struct OpenPlayerView: View {
   }
 
   private var trackInfoSection: some View {
-    HStack {
-      VStack(alignment: .leading, spacing: 6) {
-        Text(playback.currentItem?.title ?? "Not Playing")
-          .font(.system(size: 22, weight: .bold))
-          .lineLimit(1)
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        VStack(alignment: .leading, spacing: 6) {
+          Text(playback.currentItem?.title ?? "Not Playing")
+            .font(.system(size: 22, weight: .bold))
+            .lineLimit(1)
 
-        Text(playback.currentItem?.artist ?? "")
-          .font(.system(size: 18))
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
+          Text(playback.currentItem?.artist ?? "")
+            .font(.system(size: 18))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+
+        Spacer()
+
+        if let song = playback.currentItem {
+          Button {
+            PlaylistManager.shared.toggleLike(song: song)
+          } label: {
+            Image(systemName: PlaylistManager.shared.isLiked(song: song) ? "heart.fill" : "heart")
+              .font(.system(size: 24))
+              .foregroundStyle(PlaylistManager.shared.isLiked(song: song) ? .pink : .primary)
+          }
+          .contentTransition(.symbolEffect(.replace))
+        }
       }
-
-      Spacer()
 
       if let song = playback.currentItem {
-        Button {
-          PlaylistManager.shared.toggleLike(song: song)
-        } label: {
-          Image(systemName: PlaylistManager.shared.isLiked(song: song) ? "heart.fill" : "heart")
-            .font(.system(size: 24))
-            .foregroundStyle(PlaylistManager.shared.isLiked(song: song) ? .pink : .primary)
-        }
-        .contentTransition(.symbolEffect(.replace))
+        technicalBadge(for: song)
       }
+    }
+  }
+
+  @State private var showingTechnicalInfo = false
+
+  private func technicalBadge(for song: LibrarySong) -> some View {
+    Button {
+      showingTechnicalInfo = true
+    } label: {
+      HStack(spacing: 4) {
+        if let format = song.format {
+          Text(format)
+            .font(.system(size: 10, weight: .bold))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(.secondary.opacity(0.2))
+            .cornerRadius(4)
+        }
+
+        if let sampleRate = song.sampleRate {
+          Text(formatSampleRate(sampleRate))
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+        }
+
+        if let bitDepth = song.bitDepth, bitDepth > 0 {
+          Text("\(bitDepth)bit")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+        }
+      }
+    }
+    .buttonStyle(.plain)
+    .sheet(isPresented: $showingTechnicalInfo) {
+      TechnicalInfoSheet(song: song)
+    }
+  }
+
+  private func formatSampleRate(_ rate: Double) -> String {
+    if rate >= 1000 {
+      return String(format: "%.1fkHz", rate / 1000)
+    } else {
+      return String(format: "%.0fHz", rate)
     }
   }
 
@@ -273,5 +322,77 @@ struct OpenPlayerView: View {
       guard let image = NSImage(data: data) else { return .clear }
       return image.dominantColor()?.opacity(0.3)
     #endif
+  }
+}
+
+struct TechnicalInfoSheet: View {
+  let song: LibrarySong
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Section("File Information") {
+          InfoRow(label: "Format", value: song.format ?? "Unknown")
+          if let sampleRate = song.sampleRate {
+            InfoRow(label: "Sample Rate", value: formatSampleRate(sampleRate))
+          }
+          if let bitDepth = song.bitDepth, bitDepth > 0 {
+            InfoRow(label: "Bit Depth", value: "\(bitDepth) bit")
+          }
+          if let bitRate = song.bitRate {
+            InfoRow(label: "Bit Rate", value: "\(bitRate) kbps")
+          }
+          if let channels = song.channels {
+            InfoRow(label: "Channels", value: channels == 2 ? "Stereo" : (channels == 1 ? "Mono" : "\(channels)"))
+          }
+          InfoRow(label: "File Size", value: ByteCountFormatter.string(fromByteCount: Int64(song.size), countStyle: .file))
+        }
+
+        Section("Playback Details") {
+          InfoRow(label: "Source", value: song.source ?? "Local Storage")
+          InfoRow(label: "Output", value: song.output ?? "System Default")
+          InfoRow(label: "Mode", value: song.mode ?? "Direct")
+          InfoRow(label: "Processing", value: song.processingChain ?? "None")
+        }
+
+        Section("Location") {
+          Text(song.fileName)
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
+      }
+      .navigationTitle("Song Info")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .navigationBarTrailing) {
+          Button("Done") { dismiss() }
+        }
+      }
+    }
+    .presentationDetents([.medium, .large])
+  }
+
+  private func formatSampleRate(_ rate: Double) -> String {
+    if rate >= 1000 {
+      return String(format: "%.1f kHz", rate / 1000)
+    } else {
+      return String(format: "%.0f Hz", rate)
+    }
+  }
+}
+
+struct InfoRow: View {
+  let label: String
+  let value: String
+
+  var body: some View {
+    HStack {
+      Text(label)
+        .foregroundStyle(.secondary)
+      Spacer()
+      Text(value)
+        .fontWeight(.medium)
+    }
   }
 }
