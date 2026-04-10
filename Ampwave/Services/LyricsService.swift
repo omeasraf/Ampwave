@@ -58,24 +58,32 @@ final class LyricsService {
   }
 
   func fetchOnlineLyrics(for song: LibrarySong) async -> SyncedLyric? {
-    if let lyrics = await fetchFromLRCLIB(song: song) {
-      let cached = cacheLyrics(lyrics)
-      // Update song.lyrics with the plain text or LRC if possible
+    let lrclibResult = await fetchFromLRCLIB(song: song)
+    
+    if let synced = lrclibResult.synced {
+      let cached = cacheLyrics(synced)
       song.lyrics = LRCParser.toLRC(cached.lines)
       return cached
     }
+    
+    if let plain = lrclibResult.plain {
+      song.lyrics = plain
+      // Clear any old cached synced lyrics since we now have plain text
+      clearCachedLyrics(for: song)
+      return nil
+    }
 
     // Fallback to lyrics.ovh if LRCLIB has nothing
-    if let lyrics = await fetchFromLyricsOVH(song: song) {
-      let cached = cacheLyrics(lyrics)
-      song.lyrics = cached.lines.map(\.text).joined(separator: "\n")
-      return cached
+    if let plain = await fetchFromLyricsOVH(song: song) {
+      song.lyrics = plain
+      clearCachedLyrics(for: song)
+      return nil
     }
 
     return nil
   }
 
-  private func fetchFromLRCLIB(song: LibrarySong) async -> SyncedLyric? {
+  private func fetchFromLRCLIB(song: LibrarySong) async -> (synced: SyncedLyric?, plain: String?) {
     // Build query parameters
     var components = URLComponents(string: "\(lrclibBaseURL)/get")!
 
@@ -91,14 +99,13 @@ final class LyricsService {
 
     components.queryItems = queryItems
 
-    guard let url = components.url else { return nil }
+    guard let url = components.url else { return (nil, nil) }
 
     do {
       let (data, response) = try await URLSession.shared.data(from: url)
 
-      // Check for 404 (no lyrics found)
       if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 404 {
-        return nil
+        return (nil, nil)
       }
 
       let lrclibResponse = try JSONDecoder().decode(LRCLIBResponse.self, from: data)
@@ -107,36 +114,29 @@ final class LyricsService {
       if let syncedLyrics = lrclibResponse.syncedLyrics, !syncedLyrics.isEmpty {
         let lines = LRCParser.parse(syncedLyrics)
         if !lines.isEmpty {
-          return SyncedLyric(
+          let synced = SyncedLyric(
             songId: song.id,
             lines: lines,
             source: .lrclib,
             language: lrclibResponse.language
           )
+          return (synced, nil)
         }
       }
 
-      // Fall back to plain lyrics
+      // Return plain lyrics as is
       if let plainLyrics = lrclibResponse.plainLyrics, !plainLyrics.isEmpty {
-        let lines = plainLyrics.split(separator: "\n").enumerated().map { index, line in
-          LyricLine(timestamp: TimeInterval(index * 5), text: String(line))
-        }
-        return SyncedLyric(
-          songId: song.id,
-          lines: lines,
-          source: .lrclib,
-          language: lrclibResponse.language
-        )
+        return (nil, plainLyrics)
       }
 
-      return nil
+      return (nil, nil)
     } catch {
       print("Failed to fetch lyrics: \(error)")
-      return nil
+      return (nil, nil)
     }
   }
 
-  private func fetchFromLyricsOVH(song: LibrarySong) async -> SyncedLyric? {
+  private func fetchFromLyricsOVH(song: LibrarySong) async -> String? {
     // Build URL: https://api.lyrics.ovh/v1/ARTIST/SONG
     let artist = song.artist.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
     let title = song.title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
@@ -148,7 +148,6 @@ final class LyricsService {
     do {
       let (data, response) = try await URLSession.shared.data(from: url)
 
-      // Check for 404 (no lyrics found)
       if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 404 {
         return nil
       }
@@ -159,17 +158,7 @@ final class LyricsService {
         return nil
       }
 
-      // Convert plain text lyrics to LyricLine array
-      let lines = lyricsText.split(separator: "\n").enumerated().map { index, line in
-        LyricLine(timestamp: TimeInterval(index * 5), text: String(line))
-      }
-
-      return SyncedLyric(
-        songId: song.id,
-        lines: lines,
-        source: .lrclib,
-        language: nil
-      )
+      return lyricsText
     } catch {
       print("Failed to fetch lyrics from lyrics.ovh: \(error)")
       return nil

@@ -187,26 +187,58 @@ final class PlaybackController {
   
   @objc private func playerItemDidReachEnd(notification: Notification) {
     guard let item = notification.object as? AVPlayerItem,
-          let player = player,
-          player.currentItem == item else { return }
+          let player = player else { return }
+    
+    // Ensure we are talking about the currently playing item that actually finished
+    // AVQueuePlayer may have already moved currentItem forward, but 'item' is what just finished
     
     // If repeat one, we should restart the item
     if repeatMode == .one {
       item.seek(to: .zero, completionHandler: nil)
       player.play()
     } else if queue.count > currentQueueIndex + 1 {
-      // AVQueuePlayer handles the transition if gapless is on
-      // We just need to update our index and currentItem
-      currentQueueIndex += 1
-      currentItem = queue[currentQueueIndex]
-      updateUIForNewItem()
-      saveState()
+      // Automatic advance is handled by KVO (observePlayerItemChange)
+      if !(preferences?.gaplessPlayback ?? true) {
+        playNext()
+      }
     } else if repeatMode == .all && !queue.isEmpty {
-      playQueue(queue, startingAt: 0, from: currentSource, playlistId: currentPlaylistId)
+      // Repeat the whole queue by starting from 0
+      currentQueueIndex = 0
+      play(queue[0], from: currentSource, playlistId: currentPlaylistId)
     } else {
       isPlaying = false
       saveState()
     }
+  }
+
+  private func observePlayerItemChange() {
+    guard let player = player else { return }
+    let obs = player.observe(\.currentItem, options: [.new]) { [weak self] player, _ in
+      Task { @MainActor in
+        guard let self = self, let newItem = player.currentItem else { return }
+        
+        // Get the URL of the item currently playing in the AVPlayer
+        guard let asset = newItem.asset as? AVURLAsset else { return }
+        let playingURL = asset.url
+        
+        // Find if this new item matches the next song in our queue
+        // We look ahead to see if AVQueuePlayer advanced itself
+        if self.currentQueueIndex + 1 < self.queue.count {
+          let nextIndex = self.currentQueueIndex + 1
+          let nextSong = self.queue[nextIndex]
+          let nextSongURL = self.library.getFileURL(for: nextSong)
+          
+          if playingURL == nextSongURL {
+            print("[DEBUG] AVQueuePlayer advanced automatically to \(nextSong.title)")
+            self.currentQueueIndex = nextIndex
+            self.currentItem = nextSong
+            self.updateUIForNewItem()
+            self.saveState()
+          }
+        }
+      }
+    }
+    itemObservers.append(obs)
   }
 
     private func setupRemoteCommands() {
@@ -304,6 +336,7 @@ final class PlaybackController {
     if player == nil {
       player = AVQueuePlayer(items: [item])
       addTimeObserver()
+      observePlayerItemChange()
     } else {
       player?.removeAllItems()
       player?.insert(item, after: nil)
@@ -384,6 +417,12 @@ final class PlaybackController {
       let nextItem = createPlayerItem(for: nextSong)
       player.insert(nextItem, after: player.currentItem)
     }
+  }
+
+  func jumpToQueueIndex(_ index: Int) {
+    guard index >= 0 && index < queue.count else { return }
+    currentQueueIndex = index
+    play(queue[currentQueueIndex], from: currentSource, playlistId: currentPlaylistId)
   }
 
   func playQueue(
@@ -515,17 +554,22 @@ final class PlaybackController {
       return
     }
 
-    // For AVQueuePlayer, if we have advanceToNextItem, we use it
+    // Always update index first for manual skip
+    currentQueueIndex += 1
+    let nextSong = queue[currentQueueIndex]
+    
+    // For AVQueuePlayer, if we have advanceToNextItem and the next item matches, use it
     if let player = player, player.items().count > 1 {
-      player.advanceToNextItem()
-      currentQueueIndex += 1
-      currentItem = queue[currentQueueIndex]
-      updateUIForNewItem()
-    } else {
-      currentQueueIndex += 1
-      play(queue[currentQueueIndex], from: currentSource, playlistId: currentPlaylistId)
+        let nextPlayerItem = player.items()[1]
+        if let asset = nextPlayerItem.asset as? AVURLAsset, asset.url == library.getFileURL(for: nextSong) {
+            player.advanceToNextItem()
+            // currentItem and UI will be updated by KVO (observePlayerItemChange)
+            return
+        }
     }
     
+    // Fallback: manually play the next song
+    play(nextSong, from: currentSource, playlistId: currentPlaylistId)
     saveState()
   }
   
@@ -822,6 +866,7 @@ final class PlaybackController {
           self.player = AVQueuePlayer(items: [item])
           item.seek(to: CMTime(seconds: state.lastTime, preferredTimescale: 600), completionHandler: nil)
           self.addTimeObserver()
+          self.observePlayerItemChange()
 
           // Setup initial UI
           self.duration = song.duration > 0 ? song.duration : 0

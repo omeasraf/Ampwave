@@ -122,39 +122,3 @@ struct LargeFixedArtworkView: View {
       .id(PlaybackController.shared.currentItem?.id ?? UUID())
   }
 }
-
-// MARK: - Shared Sheets
-
-struct QueueSheetView: View {
-  @Environment(\.dismiss) private var dismiss
-  private var playback: PlaybackController { PlaybackController.shared }
-
-  var body: some View {
-    NavigationStack {
-      List {
-        Section("Now Playing") {
-          if let current = playback.currentItem {
-            SongRow(song: current, isCurrent: true)
-          }
-        }
-
-        if !playback.upNext.isEmpty {
-          Section("Up Next") {
-            ForEach(playback.upNext) { song in
-              SongRow(song: song, isCurrent: false)
-            }
-          }
-        }
-      }
-      .navigationTitle("Queue")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .navigationBarLeading) {
-          Button("Done") {
-            dismiss()
-          }
-        }
-      }
-    }
-  }
-}
