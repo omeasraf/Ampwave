@@ -14,6 +14,7 @@ enum LibrarySortOrder: String, Codable, CaseIterable {
     case dateAddedAscending = "Oldest Added"
     case yearDescending = "Year (Newest)"
     case yearAscending = "Year (Oldest)"
+    case random = "Random"
     
     var icon: String {
         switch self {
@@ -21,6 +22,8 @@ enum LibrarySortOrder: String, Codable, CaseIterable {
             return "arrow.up"
         case .titleDescending, .artistDescending, .yearDescending, .dateAddedDescending:
             return "arrow.down"
+        case .random:
+            return "shuffle"
         }
     }
 }

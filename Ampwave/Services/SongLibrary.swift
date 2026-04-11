@@ -1031,6 +1031,51 @@ final class SongLibrary {
     try? fileManager.createDirectory(at: songsDirectory, withIntermediateDirectories: true)
   }
 
+  func deleteSong(_ song: LibrarySong) {
+    guard let modelContext = modelContext else { return }
+    
+    // 1. Delete file
+    let url = getFileURL(for: song)
+    if fileManager.fileExists(atPath: url.path) {
+      try? fileManager.removeItem(at: url)
+    }
+    
+    // 2. Remove from database
+    modelContext.delete(song)
+    saveContext()
+    
+    // 3. Update local state
+    if let index = songs.firstIndex(where: { $0.id == song.id }) {
+      songs.remove(at: index)
+    }
+  }
+
+  func deleteAlbum(_ album: Album) {
+    guard let modelContext = modelContext else { return }
+    
+    // 1. Delete all song files in the album
+    for song in album.songs {
+      let url = getFileURL(for: song)
+      if fileManager.fileExists(atPath: url.path) {
+        try? fileManager.removeItem(at: url)
+      }
+    }
+    
+    // 2. Remove album from database (songs will cascade delete in DB)
+    modelContext.delete(album)
+    saveContext()
+    
+    // 3. Update local state
+    if let index = albums.firstIndex(where: { $0.id == album.id }) {
+      albums.remove(at: index)
+    }
+    
+    // Reload songs to reflect deletions
+    Task {
+      await loadSongs()
+    }
+  }
+
   // MARK: - Persistence
 
   private func saveContext() {

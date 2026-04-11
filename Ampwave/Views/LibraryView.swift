@@ -119,17 +119,17 @@ struct LibraryView: View {
     case .songs:
       return [
         .titleAscending, .titleDescending, .artistAscending, .artistDescending,
-        .dateAddedDescending, .dateAddedAscending, .yearDescending, .yearAscending,
+        .dateAddedDescending, .dateAddedAscending, .yearDescending, .yearAscending, .random
       ]
     case .albums:
       return [
         .titleAscending, .titleDescending, .artistAscending, .artistDescending,
-        .dateAddedDescending, .yearDescending, .yearAscending,
+        .dateAddedDescending, .yearDescending, .yearAscending, .random
       ]
     case .artists:
-      return [.titleAscending, .titleDescending, .dateAddedDescending]
+      return [.titleAscending, .titleDescending, .dateAddedDescending, .random]
     case .playlists:
-      return [.titleAscending, .titleDescending, .dateAddedDescending, .dateAddedAscending]
+      return [.titleAscending, .titleDescending, .dateAddedDescending, .dateAddedAscending, .random]
     }
   }
 }
@@ -183,6 +183,8 @@ struct SongsListView: View {
       return songs.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
     case .yearAscending:
       return songs.sorted { ($0.year ?? 0) < ($1.year ?? 0) }
+    case .random:
+      return songs.sorted { $0.id.uuidString < $1.id.uuidString }
     }
   }
 
@@ -300,6 +302,8 @@ struct AlbumsGridView: View {
       return albums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
     case .yearAscending:
       return albums.sorted { ($0.year ?? 0) < ($1.year ?? 0) }
+    case .random:
+      return albums.sorted { $0.id.uuidString < $1.id.uuidString }
     }
   }
 
@@ -375,6 +379,8 @@ struct ArtistsListView: View {
       return artists.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedDescending }
     case .dateAddedDescending:
       return artists.sorted { $0.lastAddedDate > $1.lastAddedDate }
+    case .random:
+      return artists.sorted { $0.id.uuidString < $1.id.uuidString }
     default:
       return artists.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -482,6 +488,8 @@ struct PlaylistsListView: View {
         return p1.createdDate > p2.createdDate
       case .dateAddedAscending:
         return p1.createdDate < p2.createdDate
+      case .random:
+        return p1.id.uuidString < p2.id.uuidString
       default:
         return p1.name.localizedCaseInsensitiveCompare(p2.name) == .orderedAscending
       }

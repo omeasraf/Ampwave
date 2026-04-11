@@ -12,9 +12,11 @@ struct AlbumContextMenuModifier: ViewModifier {
   let onEdit: (() -> Void)?
 
   @State private var showingAddToPlaylist = false
+  @State private var isDeletingShown = false
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  private var library: SongLibrary { SongLibrary.shared }
 
   private var isAlbumFavorited: Bool {
     !album.songs.isEmpty && album.songs.allSatisfy { playlistManager.isLiked(song: $0) }
@@ -55,6 +57,12 @@ struct AlbumContextMenuModifier: ViewModifier {
             Label("Edit", systemImage: "pencil")
           }
         }
+
+        Button(role: .destructive) {
+          isDeletingShown = true
+        } label: {
+          Label("Delete Album", systemImage: "trash")
+        }
       }
       .confirmationDialog("Add Album to Playlist", isPresented: $showingAddToPlaylist) {
         ForEach(availablePlaylists) { playlist in
@@ -68,6 +76,18 @@ struct AlbumContextMenuModifier: ViewModifier {
         } else {
           Text("Choose a playlist for this album.")
         }
+      }
+      .confirmationDialog(
+        "Delete \"\(album.name)\"?",
+        isPresented: $isDeletingShown,
+        titleVisibility: .visible
+      ) {
+        Button("Delete Album", role: .destructive) {
+          library.deleteAlbum(album)
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("This will permanently delete the album and all its songs from your library and device.")
       }
   }
 
@@ -99,6 +119,7 @@ struct SongContextMenuModifier: ViewModifier {
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  private var library: SongLibrary { SongLibrary.shared }
 
   private var availablePlaylists: [Playlist] {
     playlistManager.playlists.filter { $0.playlistType != .likedSongs }
@@ -163,6 +184,22 @@ struct SongContextMenuModifier: ViewModifier {
         } else {
           Text("Choose a playlist for this song.")
         }
+      }
+      .confirmationDialog(
+        "Delete \"\(song.title)\"?",
+        isPresented: $isDeletingShown,
+        titleVisibility: .visible
+      ) {
+        Button("Delete Song", role: .destructive) {
+          if let onDelete {
+            onDelete()
+          } else {
+            library.deleteSong(song)
+          }
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("This will permanently delete this song from your library and device.")
       }
   }
 }
