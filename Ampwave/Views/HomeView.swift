@@ -172,12 +172,15 @@ struct HomeView: View {
             }
         }
         .onChange(of: scenePhase) {
-            if scenePhase == .active {
-                refreshHomeSections()
-            }
+          if scenePhase == .active {
+            refreshHomeSections()
+          }
         }
-        .alert("Error", isPresented: $showError) {
-            Button("OK") {}
+        .onChange(of: playback.currentItem) {
+          print("[DEBUG] HomeView.onChange(playback.currentItem) - Refreshing history")
+          refreshHomeSections()
+        }
+        .alert("Error", isPresented: $showError) {            Button("OK") {}
         } message: {
             Text(errorMessage)
         }

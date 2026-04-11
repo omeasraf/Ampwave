@@ -250,6 +250,10 @@ final class PlaybackController {
             self.currentQueueIndex = nextIndex
             self.currentItem = nextSong
             self.updateUIForNewItem()
+            
+            // Notify history tracker of the new song
+            self.historyTracker.songStarted(nextSong, source: self.currentSource, playlistId: self.currentPlaylistId)
+            
             self.saveState()
           }
         }
@@ -330,7 +334,10 @@ final class PlaybackController {
 
   func play(_ song: LibrarySong, from source: PlaySource = .library, playlistId: UUID? = nil) {
     if let current = currentItem {
-      historyTracker.songEnded(skipped: false)
+      // Record end of current song before starting new one
+      // Count as skip if listened for less than 10 seconds
+      let isSkip = currentTime < 10
+      historyTracker.songEnded(skipped: isSkip)
     }
 
     isLoading = true
