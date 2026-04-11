@@ -51,12 +51,17 @@ final class LyricsService {
     guard let modelContext = modelContext else { return nil }
     let preferences = UserPreferences.getOrCreate(in: modelContext)
     
+    // Check if we already have synced lyrics in the model
     let hasSyncedLyrics = !LRCParser.parse(song.lyrics ?? "").isEmpty
     
+    // If auto-fetch is off, or we already have synced lyrics, don't fetch
     if !preferences.autoFetchLyrics || hasSyncedLyrics {
       return nil
     }
 
+    // Rate limit checks for songs we already checked but found nothing for
+    // (We could add a 'lastLyricsCheckDate' to LibrarySong in a future update)
+    
     return await fetchOnlineLyrics(for: song)
   }
 

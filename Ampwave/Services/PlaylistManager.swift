@@ -428,8 +428,17 @@ final class PlaylistManager {
   // MARK: - Helper Methods
 
   private func save() {
-    guard let modelContext = modelContext else { return }
-    try? modelContext.save()
+    print("[DEBUG] PlaylistManager.save: Saving modelContext")
+    guard let modelContext = modelContext else {
+      print("[DEBUG] PlaylistManager.save: Error - No modelContext")
+      return
+    }
+    do {
+      try modelContext.save()
+      print("[DEBUG] PlaylistManager.save: Successfully saved")
+    } catch {
+      print("[DEBUG] PlaylistManager.save: Error saving: \(error)")
+    }
   }
 
   private func sortPlaylists() {

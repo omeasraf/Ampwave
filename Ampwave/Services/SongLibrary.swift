@@ -41,9 +41,9 @@ final class SongLibrary {
   ]
 
   private init() {
-    let baseDir = PathManager.documentsDirectory
-    let songsDir = baseDir.appendingPathComponent("Songs", isDirectory: true)
-    let artworkDir = baseDir.appendingPathComponent("Artwork", isDirectory: true)
+    let baseDir = PathManager.documentsDirectory.standardizedFileURL
+    let songsDir = baseDir.appendingPathComponent("Songs", isDirectory: true).standardizedFileURL
+    let artworkDir = baseDir.appendingPathComponent("Artwork", isDirectory: true).standardizedFileURL
 
     self.songsDirectory = songsDir
     self.artworkCacheDirectory = artworkDir
@@ -176,10 +176,19 @@ final class SongLibrary {
 
   // MARK: - Indexing
 
+  private var isIndexing = false
+
   func indexOnStartup() async {
+    guard !isIndexing else {
+      print("[DEBUG] indexOnStartup - already indexing, skipping")
+      return
+    }
+    isIndexing = true
+    
     print("[DEBUG] indexOnStartup started on thread: \(Thread.current.name)")
     guard let modelContext = modelContext else {
       print("[DEBUG] indexOnStartup - no modelContext")
+      isIndexing = false
       return
     }
 
@@ -187,6 +196,7 @@ final class SongLibrary {
     defer {
       print("[DEBUG] indexOnStartup completed")
       indexingStatus = .complete
+      isIndexing = false
     }
 
     print("[DEBUG] Getting AppSettings")
@@ -196,10 +206,16 @@ final class SongLibrary {
 
     print("[DEBUG] Fetching existing songs from database")
     let descriptor = FetchDescriptor<LibrarySong>()
-    let existingSongs: [LibrarySong]
+    var existingSongs: [LibrarySong]
     do {
       existingSongs = try modelContext.fetch(descriptor)
-      print("[DEBUG] Found \(existingSongs.count) existing songs")
+      print("[DEBUG] Found \(existingSongs.count) existing songs in database")
+      
+      // Safety: if DB is empty but memory has songs, avoid mass deletion
+      if existingSongs.isEmpty && !self.songs.isEmpty {
+        print("[DEBUG] DB returned empty but cache is not. Aborting index.")
+        return
+      }
     } catch {
       print("[DEBUG] Failed to fetch songs, calling loadSongs: \(error)")
       await loadSongs()
@@ -211,35 +227,41 @@ final class SongLibrary {
     let audioURLs = findAudioFiles(in: songsDirectory)
     print("[DEBUG] Found \(audioURLs.count) audio files on disk")
 
-    let audioURLSet = Set(audioURLs)
+    // Use standardized path strings for more reliable matching
+    let audioPathSet = Set(audioURLs.map { $0.standardizedFileURL.path })
     var fileNameToURLs: [String: [URL]] = [:]
     for url in audioURLs {
       fileNameToURLs[url.lastPathComponent, default: []].append(url)
     }
 
     print("[DEBUG] Checking for moved or deleted files")
-    var accountedForURLs = Set<URL>()
+    var accountedForPaths = Set<String>()
+    var deletedCount = 0
+    var movedCount = 0
     
     for song in existingSongs {
-      let expectedURL = getFileURL(for: song)
-      if audioURLSet.contains(expectedURL) {
-        accountedForURLs.insert(expectedURL)
+      let expectedURL = getFileURL(for: song).standardizedFileURL
+      let expectedPath = expectedURL.path
+      
+      if audioPathSet.contains(expectedPath) {
+        accountedForPaths.insert(expectedPath)
         continue
       }
 
       // File is NOT at expected location. Check if it moved.
-      print("[DEBUG] Song \(song.title) not at expected URL: \(expectedURL.path)")
+      print("[DEBUG] Song \(song.title) not at expected path: \(expectedPath)")
       var foundMoved = false
       if let possibleURLs = fileNameToURLs[song.fileName] {
         for possibleURL in possibleURLs {
           if await self.fileHash(at: possibleURL) == song.fileHash {
-            print("[DEBUG] Found moved song at: \(possibleURL.path), moving back to: \(expectedURL.path)")
+            print("[DEBUG] Found moved song at: \(possibleURL.path), moving back to: \(expectedPath)")
             // Move it back to the expected location
             try? fileManager.createDirectory(at: expectedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             do {
               try fileManager.moveItem(at: possibleURL, to: expectedURL)
-              accountedForURLs.insert(expectedURL)
+              accountedForPaths.insert(expectedPath)
               foundMoved = true
+              movedCount += 1
             } catch {
               print("[DEBUG] Failed to move file: \(error)")
             }
@@ -249,19 +271,27 @@ final class SongLibrary {
       }
 
       if !foundMoved {
-        print("[DEBUG] Deleting song from database (not found on disk): \(song.fileName)")
+        print("[DEBUG] Deleting song from database (not found on disk): \(song.fileName) [\(song.title)]")
         modelContext.delete(song)
+        deletedCount += 1
       }
+    }
+    
+    if deletedCount > 0 || movedCount > 0 {
+      print("[DEBUG] indexOnStartup results: \(movedCount) moved, \(deletedCount) deleted")
     }
 
     print("[DEBUG] Importing new files")
     // Get existing hashes once for efficient lookup
+    modelContext.processPendingChanges()
     let finalExistingSongs = (try? modelContext.fetch(FetchDescriptor<LibrarySong>())) ?? []
     let finalExistingHashes = Set(finalExistingSongs.map(\.fileHash))
 
-    // Use the accountedForURLs set to avoid hashing files we already matched
+    // Use the accountedForPaths set to avoid processing files we already matched
+    var importCount = 0
     for url in audioURLs {
-      if accountedForURLs.contains(url) { continue }
+      let standardizedPath = url.standardizedFileURL.path
+      if accountedForPaths.contains(standardizedPath) { continue }
 
       // Check by hash for truly unknown files
       guard let hash = await self.fileHash(at: url) else { continue }
@@ -273,6 +303,11 @@ final class SongLibrary {
 
       print("[DEBUG] Importing new file found on disk: \(url.lastPathComponent)")
       _ = await importFileInPlace(at: url, modelContext: modelContext)
+      importCount += 1
+    }
+    
+    if importCount > 0 {
+      print("[DEBUG] indexOnStartup imported \(importCount) new songs")
     }
 
     print("[DEBUG] Saving context")
@@ -726,9 +761,15 @@ final class SongLibrary {
     let preferences = UserPreferences.getOrCreate(in: modelContext)
 
     // 1. Online Metadata & Artwork
-    if preferences.autoFetchMetadata {
+    // Only fetch if metadata is missing/incomplete AND we haven't already tried.
+    let needsMetadata = song.artworkPath == nil || song.album == nil || song.album == "Unknown Album"
+    if preferences.autoFetchMetadata && needsMetadata && !song.metadataCheckAttempted {
       pendingMetadataFetches += 1
-      defer { pendingMetadataFetches -= 1 }
+      defer { 
+        song.metadataCheckAttempted = true
+        pendingMetadataFetches -= 1 
+        saveContext()
+      }
 
       let metadataService = MetadataService.shared
       if metadataService.modelContext == nil {
@@ -746,10 +787,15 @@ final class SongLibrary {
     }
 
     // 2. Synced Lyrics
-    // Fetch if no lyrics OR if lyrics are plain text (LRCParser returns empty)
+    // Fetch if no synced lyrics AND we haven't already tried.
     let hasSyncedLyrics = !LRCParser.parse(song.lyrics ?? "").isEmpty
-    if preferences.autoFetchLyrics && !hasSyncedLyrics {
+    if preferences.autoFetchLyrics && !hasSyncedLyrics && !song.lyricsCheckAttempted {
       print("[DEBUG] SongLibrary.fetchMetadataForSong: Missing synced lyrics, calling LyricsService")
+      
+      // Mark as attempted even before the call to prevent parallel re-triggers
+      song.lyricsCheckAttempted = true
+      saveContext()
+      
       let lyricsService = LyricsService.shared
       if lyricsService.modelContext == nil {
         lyricsService.setModelContext(modelContext)
@@ -762,26 +808,18 @@ final class SongLibrary {
     print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Starting batch fetch")
     guard let modelContext = modelContext else { return }
 
-    let metadataService = MetadataService.shared
-    metadataService.setModelContext(modelContext)
-
-    // Example: fetch for songs that have no artwork
+    // Fetch for songs that have no artwork and haven't been attempted yet
     let descriptor = FetchDescriptor<LibrarySong>(
-      predicate: #Predicate<LibrarySong> { $0.artworkPath == nil }
+      predicate: #Predicate<LibrarySong> { $0.artworkPath == nil && !$0.metadataCheckAttempted }
     )
 
     do {
       let songsToFetch = try modelContext.fetch(descriptor).prefix(10)
       if songsToFetch.isEmpty { return }
 
-      indexingStatus = .indexing("Fetching metadata…")
-
-      for (index, song) in songsToFetch.enumerated() {
-        indexingStatus = .indexing("Fetching metadata (\(index + 1)/\(songsToFetch.count))…")
-        await metadataService.refreshMetadata(for: song)
+      for song in songsToFetch {
+        await fetchMetadataForSong(song)
       }
-
-      indexingStatus = .complete
     } catch {
       print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Error: \(error)")
     }
@@ -790,6 +828,13 @@ final class SongLibrary {
   func refreshAllMetadata() async {
     print("[DEBUG] SongLibrary.refreshAllMetadata: Starting full library refresh")
     guard let modelContext = modelContext else { return }
+
+    // Reset attempt flags so we can try again
+    for song in songs {
+      song.metadataCheckAttempted = false
+      song.lyricsCheckAttempted = false
+    }
+    saveContext()
 
     let metadataService = MetadataService.shared
     metadataService.setModelContext(modelContext)
@@ -1170,3 +1215,4 @@ final class SongLibrary {
     )
   }
 }
+

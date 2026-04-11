@@ -38,6 +38,9 @@ final class LibrarySong: Identifiable, Hashable {
   var isRemoteArtwork: Bool = false
   var albumReference: Album?
 
+  @Relationship(inverse: \Playlist.songs)
+  var playlists: [Playlist]? = []
+
   // MARK: - Technical metadata
   var sampleRate: Double?
   var bitDepth: Int?
@@ -48,6 +51,10 @@ final class LibrarySong: Identifiable, Hashable {
   var output: String?
   var mode: String?
   var processingChain: String?
+
+  // MARK: - Fetching status
+  var metadataCheckAttempted: Bool = false
+  var lyricsCheckAttempted: Bool = false
 
   init(
     title: String,
@@ -106,6 +113,8 @@ final class LibrarySong: Identifiable, Hashable {
     self.output = output
     self.mode = mode
     self.processingChain = processingChain
+    self.metadataCheckAttempted = false
+    self.lyricsCheckAttempted = false
   }
 
   static func == (lhs: LibrarySong, rhs: LibrarySong) -> Bool {

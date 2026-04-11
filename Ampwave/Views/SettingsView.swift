@@ -50,8 +50,8 @@ struct SettingsView: View {
       playbackSettingsSection
       librarySettingsSection
       onlineFeaturesSection
-      dataSourcesSection
       dataManagementSection
+      dataSourcesSection
       aboutSection
     }
     .navigationTitle("Settings")

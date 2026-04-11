@@ -408,6 +408,7 @@ final class MetadataService {
       }
     }
 
+    song.metadataCheckAttempted = true
     try? modelContext.save()
   }
 

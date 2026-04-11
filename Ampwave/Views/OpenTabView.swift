@@ -28,6 +28,7 @@ struct OpenTabView: View {
     case library = "Library"
     case settings = "Settings"
     case search = "Search"
+    case playlists = "Playlists"
 
     var icon: String {
       switch self {
@@ -35,6 +36,7 @@ struct OpenTabView: View {
       case .library: return "square.stack.fill"
       case .settings: return "gearshape.fill"
       case .search: return "magnifyingglass"
+      case .playlists: return "list.bullet.rectangle.portrait.fill"
       }
     }
   }
@@ -63,6 +65,17 @@ struct OpenTabView: View {
           LibraryView()
         }
       }
+        
+        // Playlists
+        Tab(
+            AppTab.playlists.rawValue,
+            systemImage: AppTab.playlists.icon,
+            value: AppTab.playlists
+        ) {
+            NavigationStack {
+                PlaylistsListView()
+            }
+        }
 
       // Settings
       Tab(
@@ -76,11 +89,11 @@ struct OpenTabView: View {
       }
 
       // Search tab (special role)
-      Tab(value: AppTab.search, role: .search) {
-        NavigationStack {
-          SearchView()
-        }
-      }
+//      Tab(value: AppTab.search, role: .search) {
+//        NavigationStack {
+//          SearchView()
+//        }
+//      }
     }
 
     .tabViewBottomAccessory {
