@@ -65,21 +65,6 @@ struct HomeView: View {
         } else if library.songs.isEmpty {
           emptyState
         } else {
-          // Status indicator for metadata fetching
-          if case .fetchingMetadata(let count) = library.indexingStatus {
-            HStack {
-              ProgressView()
-                .controlSize(.small)
-                .padding(.trailing, 4)
-              Text("Fetching metadata for \(count) songs…")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-              Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, -10)
-          }
-
           // Recently Played section
           if !recentlyPlayedSongs.isEmpty {
             HorizontalSongSection(
