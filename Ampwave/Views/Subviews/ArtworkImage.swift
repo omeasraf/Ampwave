@@ -2,7 +2,7 @@
 //  ArtworkImage.swift
 //  Ampwave
 //
-//  Reusable artwork image component with async loading.
+//  Reusable artwork image component with async loading and caching.
 //
 
 internal import SwiftUI
@@ -11,11 +11,8 @@ struct ArtworkImage: View {
   let artworkPath: String?
   let size: CGFloat
   let cornerRadius: CGFloat
-  #if os(iOS)
-    @State private var image: UIImage?
-  #else
-    @State private var image: NSImage?
-  #endif
+  
+  @State private var image: PlatformImage?
 
   init(artworkPath: String?, size: CGFloat, cornerRadius: CGFloat = 8) {
     self.artworkPath = artworkPath
@@ -26,60 +23,61 @@ struct ArtworkImage: View {
   var body: some View {
     Group {
       if let image = image {
-        imageView(image)
+        #if os(iOS)
+        Image(uiImage: image)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+        #else
+        Image(nsImage: image)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+        #endif
       } else {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .fill(.gray.opacity(0.2))
+          .fill(.gray.opacity(0.15))
           .overlay(
             Image(systemName: "music.note")
-              .font(.system(size: size * 0.3))
+              .font(.system(size: size * 0.35))
               .foregroundStyle(.secondary)
           )
       }
     }
     .frame(width: size, height: size)
     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    .task {
+    .task(id: artworkPath) {
       await loadImage()
     }
   }
 
-  @ViewBuilder
-  private func imageView(_ image: Any) -> some View {
-    #if os(iOS)
-      if let uiImage = image as? UIImage {
-        Image(uiImage: uiImage)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
-      }
-    #else
-      if let nsImage = image as? NSImage {
-        Image(nsImage: nsImage)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
-      }
-    #endif
-  }
-
   private func loadImage() async {
-    guard let url = PathManager.resolve(artworkPath) else { return }
+    guard let path = artworkPath, !path.isEmpty else { return }
+    
+    // Check memory cache first
+    if let cached = await ImageCache.shared.image(for: path) {
+      self.image = cached
+      return
+    }
 
-    do {
-      let data = try Data(contentsOf: url)
-      #if os(iOS)
-        if let loadedImage = UIImage(data: data) {
-          await MainActor.run {
-            self.image = loadedImage
-          }
-        }
-      #else
-        if let loadedImage = NSImage(data: data) {
-          await MainActor.run {
-            self.image = loadedImage
-          }
-        }
-      #endif
-    } catch {}
+    // Resolve path and load from disk in background
+    let task = Task.detached(priority: .userInitiated) { () -> PlatformImage? in
+      guard let url = PathManager.resolve(path) else { return nil }
+      
+      do {
+        let data = try Data(contentsOf: url)
+        #if os(iOS)
+        return UIImage(data: data)
+        #else
+        return NSImage(data: data)
+        #endif
+      } catch {
+        return nil
+      }
+    }
+    
+    if let loadedImage = await task.value {
+      await ImageCache.shared.insert(loadedImage, for: path)
+      self.image = loadedImage
+    }
   }
 }
 
@@ -88,19 +86,24 @@ struct ArtworkImage: View {
 struct ArtistImageView: View {
   let artworkPath: String?
   let size: CGFloat
-  #if os(iOS)
-    @State private var image: UIImage?
-  #else
-    @State private var image: NSImage?
-  #endif
+  
+  @State private var image: PlatformImage?
 
   var body: some View {
     Group {
       if let image = image {
-        imageView(image)
+        #if os(iOS)
+        Image(uiImage: image)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+        #else
+        Image(nsImage: image)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+        #endif
       } else {
         Circle()
-          .fill(.gray.opacity(0.2))
+          .fill(.gray.opacity(0.15))
           .overlay(
             Image(systemName: "person.fill")
               .font(.system(size: size * 0.4))
@@ -110,46 +113,37 @@ struct ArtistImageView: View {
     }
     .frame(width: size, height: size)
     .clipShape(Circle())
-    .task {
+    .task(id: artworkPath) {
       await loadImage()
     }
   }
 
-  @ViewBuilder
-  private func imageView(_ image: Any) -> some View {
-    #if os(iOS)
-      if let uiImage = image as? UIImage {
-        Image(uiImage: uiImage)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
-      }
-    #else
-      if let nsImage = image as? NSImage {
-        Image(nsImage: nsImage)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
-      }
-    #endif
-  }
-
   private func loadImage() async {
-    guard let url = PathManager.resolve(artworkPath) else { return }
+    guard let path = artworkPath, !path.isEmpty else { return }
+    
+    if let cached = await ImageCache.shared.image(for: path) {
+      self.image = cached
+      return
+    }
 
-    do {
-      let data = try Data(contentsOf: url)
-      #if os(iOS)
-        if let loadedImage = UIImage(data: data) {
-          await MainActor.run {
-            self.image = loadedImage
-          }
-        }
-      #else
-        if let loadedImage = NSImage(data: data) {
-          await MainActor.run {
-            self.image = loadedImage
-          }
-        }
-      #endif
-    } catch {}
+    let task = Task.detached(priority: .userInitiated) { () -> PlatformImage? in
+      guard let url = PathManager.resolve(path) else { return nil }
+      
+      do {
+        let data = try Data(contentsOf: url)
+        #if os(iOS)
+        return UIImage(data: data)
+        #else
+        return NSImage(data: data)
+        #endif
+      } catch {
+        return nil
+      }
+    }
+    
+    if let loadedImage = await task.value {
+      await ImageCache.shared.insert(loadedImage, for: path)
+      self.image = loadedImage
+    }
   }
 }

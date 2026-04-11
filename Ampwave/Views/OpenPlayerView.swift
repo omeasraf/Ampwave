@@ -18,6 +18,7 @@ struct OpenPlayerView: View {
   @State private var isLyricsExpanded = false
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
+  @State private var artworkColor: Color = .clear
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -44,10 +45,10 @@ struct OpenPlayerView: View {
           trackInfoSection
 
           // Progress
-          progressSection
+          PlayerProgressView()
 
           // Playback controls
-          playbackControls
+          PlayerPlaybackControlsView()
 
           // Extra controls
           extraControls
@@ -136,7 +137,9 @@ struct OpenPlayerView: View {
       if let song = playback.currentItem {
         SongEditSheet(song: song, isPresented: $isEditingShown)
       }
-
+    }
+    .task(id: playback.currentItem?.id) {
+      await updateArtworkColor()
     }
   }
 
@@ -224,67 +227,6 @@ struct OpenPlayerView: View {
     }
   }
 
-  private var progressSection: some View {
-    let duration = playback.duration
-    let progress =
-      duration > 0 ? min(max(playback.currentTime / duration, 0), 1) : 0.0
-
-    return VStack(spacing: 8) {
-      Slider(
-        value: Binding(
-          get: { progress },
-          set: { newValue in
-            playback.seek(to: newValue * duration)
-          }
-        ),
-        in: 0...1
-      )
-      .tint(.primary)
-
-      HStack {
-        Text(formatTime(playback.currentTime))
-          .font(.system(size: 12, design: .monospaced))
-          .foregroundStyle(.secondary)
-
-        Spacer()
-
-        Text(formatTime(duration))
-          .font(.system(size: 12, design: .monospaced))
-          .foregroundStyle(.secondary)
-      }
-    }
-  }
-
-  private var playbackControls: some View {
-    HStack(spacing: 44) {
-      Button {
-        playback.playPrevious()
-      } label: {
-        Image(systemName: "backward.fill")
-          .font(.system(size: 28))
-      }
-
-      Button {
-        playback.playPause()
-      } label: {
-        Image(
-          systemName: playback.isPlaying
-            ? "pause.circle.fill" : "play.circle.fill"
-        )
-        .font(.system(size: 72))
-      }
-      .contentTransition(.symbolEffect(.replace))
-
-      Button {
-        playback.playNext()
-      } label: {
-        Image(systemName: "forward.fill")
-          .font(.system(size: 28))
-      }
-    }
-    .foregroundStyle(.primary)
-  }
-
   private var extraControls: some View {
     HStack(spacing: 48) {
       Button {
@@ -331,60 +273,117 @@ struct OpenPlayerView: View {
 
   private var tabSection: some View {
     VStack(spacing: 16) {
-      let artworkColor: Color =
-        dominantColor(from: playback.currentItem?.artworkPath) ?? .clear
       CompactLyricsView(
         artworkColor: artworkColor,
         onExpand: {
           isLyricsExpanded = true
         }
       )
-      //      Picker("View", selection: $selectedTab) {
-      //        ForEach(PlayerTab.allCases, id: \.self) { tab in
-      //          Text(tab.rawValue).tag(tab)
-      //        }
-      //      }
-      //      .pickerStyle(.segmented)
-      //
-      //      var artworkColor: Color = dominantColor(from: playback.currentItem?.artworkPath) ?? .clear
-      //
-      //      switch selectedTab {
-      //      case .lyrics:
-      //        CompactLyricsView(
-      //          artworkColor: artworkColor,
-      //          onExpand: {
-      //            isLyricsExpanded = true
-      //          })
-      //      case .queue:
-      //        QueueListView(
-      //          artworkColor: artworkColor,
-      //          songs: playback.upNext,
-      //          currentIndex: nil
-      //        )
-      //      }
     }
   }
 
+  private func updateArtworkColor() async {
+    guard let path = playback.currentItem?.artworkPath,
+          let url = PathManager.resolve(path) else {
+      artworkColor = .clear
+      return
+    }
+    
+    let color = await Task.detached(priority: .userInitiated) { () -> Color in
+      #if os(iOS)
+      if let image = UIImage(contentsOfFile: url.path) {
+        return image.dominantColor()?.opacity(0.3) ?? .clear
+      }
+      #else
+      if let image = NSImage(contentsOfFile: url.path) {
+        return image.dominantColor()?.opacity(0.3) ?? .clear
+      }
+      #endif
+      return .clear
+    }.value
+    
+    await MainActor.run {
+      withAnimation(.easeInOut) {
+        artworkColor = color
+      }
+    }
+  }
+}
+
+// MARK: - Optimization Components (Same UI, better performance)
+
+private struct PlayerProgressView: View {
+  private var playback: PlaybackController { PlaybackController.shared }
+  
+  var body: some View {
+    let duration = playback.duration
+    let progress = duration > 0 ? min(max(playback.currentTime / duration, 0), 1) : 0.0
+
+    VStack(spacing: 8) {
+      Slider(
+        value: Binding(
+          get: { progress },
+          set: { newValue in
+            playback.seek(to: newValue * duration)
+          }
+        ),
+        in: 0...1
+      )
+      .tint(.primary)
+
+      HStack {
+        Text(formatTime(playback.currentTime))
+          .font(.system(size: 12, design: .monospaced))
+          .foregroundStyle(.secondary)
+
+        Spacer()
+
+        Text(formatTime(duration))
+          .font(.system(size: 12, design: .monospaced))
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+  
   private func formatTime(_ seconds: TimeInterval) -> String {
     let s = Int(seconds)
     let m = s / 60
     let sec = s % 60
     return String(format: "%d:%02d", m, sec)
   }
+}
 
-  func dominantColor(from path: String?) -> Color? {
-    if path == nil { return .clear }
-    guard let url = PathManager.resolve(path),
-      let data = try? Data(contentsOf: url)
-    else { return .clear }
+private struct PlayerPlaybackControlsView: View {
+  private var playback: PlaybackController { PlaybackController.shared }
+  
+  var body: some View {
+    HStack(spacing: 44) {
+      Button {
+        playback.playPrevious()
+      } label: {
+        Image(systemName: "backward.fill")
+          .font(.system(size: 28))
+      }
 
-    #if os(iOS)
-      guard let image = UIImage(data: data) else { return .clear }
-      return image.dominantColor()?.opacity(0.3)
-    #else
-      guard let image = NSImage(data: data) else { return .clear }
-      return image.dominantColor()?.opacity(0.3)
-    #endif
+      Button {
+        playback.playPause()
+      } label: {
+        Image(
+          systemName: playback.isPlaying
+            ? "pause.circle.fill" : "play.circle.fill"
+        )
+        .font(.system(size: 72))
+      }
+      .contentTransition(.symbolEffect(.replace))
+
+      Button {
+        playback.playNext()
+      } label: {
+        Image(systemName: "forward.fill")
+          .font(.system(size: 28))
+      }
+    }
+    .foregroundStyle(.primary)
   }
 }
 

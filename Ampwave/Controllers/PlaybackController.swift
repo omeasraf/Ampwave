@@ -854,10 +854,6 @@ final class PlaybackController {
     }
 
     let songId = currentItem?.id
-    print(
-      "[DEBUG] PlaybackController.saveState: Saving state. Song: \(songId?.uuidString ?? "nil"), Time: \(currentTime), Queue Count: \(queue.count)"
-    )
-
     state.lastSongId = songId
     state.lastTime = currentTime
     state.lastQueueIds = queue.map { $0.id }
@@ -867,7 +863,6 @@ final class PlaybackController {
 
     do {
       try context.save()
-      print("[DEBUG] PlaybackController.saveState: SUCCESS")
     } catch {
       print("[DEBUG] PlaybackController.saveState: ERROR saving context: \(error)")
     }

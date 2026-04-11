@@ -45,12 +45,7 @@ struct HomeView: View {
     }
 
     var body: some View {
-        print(
-            "[DEBUG] HomeView.body rendering, songs count: \(library.songs.count)"
-        )
-        let startRender = Date()
-
-        return ScrollView {
+        ScrollView {
             VStack(spacing: 28) {
                 // Welcome header
                 welcomeHeader
