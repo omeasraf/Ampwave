@@ -10,11 +10,16 @@ internal import SwiftUI
 
 struct LibraryView: View {
   @Environment(\.modelContext) private var modelContext
+  @Query private var settings: [AppSettings]
   @State private var selectedTab: LibraryTab = .songs
   @State private var searchText = ""
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  
+  private var appSettings: AppSettings {
+    settings.first ?? AppSettings.getOrCreate(in: modelContext)
+  }
 
   enum LibraryTab: String, CaseIterable {
     case songs = "Songs"
@@ -61,10 +66,70 @@ struct LibraryView: View {
         }
       }
       .navigationTitle("Library")
+      .toolbarTitleDisplayMode(.inline)
+      .toolbar {
+          sortMenu
+      }
       .searchable(text: $searchText, prompt: "Search in Library")
     }
     .onAppear {
       playlistManager.setModelContext(modelContext)
+    }
+  }
+
+  private var sortMenu: some View {
+    Menu {
+      Picker("Sort Order", selection: currentSortBinding) {
+        ForEach(availableSortOrders, id: \.self) { order in
+          Label(order.rawValue, systemImage: order.icon).tag(order)
+        }
+      }
+    } label: {
+      Image(systemName: "arrow.up.arrow.down.circle")
+    }
+  }
+
+  private var currentSortBinding: Binding<LibrarySortOrder> {
+    switch selectedTab {
+    case .songs:
+      return Binding(
+        get: { appSettings.songSortOrder },
+        set: { appSettings.songSortOrder = $0 }
+      )
+    case .albums:
+      return Binding(
+        get: { appSettings.albumSortOrder },
+        set: { appSettings.albumSortOrder = $0 }
+      )
+    case .artists:
+      return Binding(
+        get: { appSettings.artistSortOrder },
+        set: { appSettings.artistSortOrder = $0 }
+      )
+    case .playlists:
+      return Binding(
+        get: { appSettings.playlistSortOrder },
+        set: { appSettings.playlistSortOrder = $0 }
+      )
+    }
+  }
+
+  private var availableSortOrders: [LibrarySortOrder] {
+    switch selectedTab {
+    case .songs:
+      return [
+        .titleAscending, .titleDescending, .artistAscending, .artistDescending,
+        .dateAddedDescending, .dateAddedAscending, .yearDescending, .yearAscending,
+      ]
+    case .albums:
+      return [
+        .titleAscending, .titleDescending, .artistAscending, .artistDescending,
+        .dateAddedDescending, .yearDescending, .yearAscending,
+      ]
+    case .artists:
+      return [.titleAscending, .titleDescending, .dateAddedDescending]
+    case .playlists:
+      return [.titleAscending, .titleDescending, .dateAddedDescending, .dateAddedAscending]
     }
   }
 }
@@ -73,20 +138,51 @@ struct LibraryView: View {
 
 struct SongsListView: View {
   let searchText: String
+  @Environment(\.modelContext) private var modelContext
+  @Query private var settings: [AppSettings]
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  
+  private var appSettings: AppSettings {
+    settings.first ?? AppSettings.getOrCreate(in: modelContext)
+  }
 
   var filteredSongs: [LibrarySong] {
+    let songs: [LibrarySong]
     if searchText.isEmpty {
-      return library.songs
+      songs = library.songs
+    } else {
+      songs = library.songs.filter {
+        $0.title.localizedCaseInsensitiveContains(searchText)
+          || $0.artist.localizedCaseInsensitiveContains(searchText)
+          || ($0.album?.localizedCaseInsensitiveContains(searchText)
+            ?? false)
+      }
     }
-    return library.songs.filter {
-      $0.title.localizedCaseInsensitiveContains(searchText)
-        || $0.artist.localizedCaseInsensitiveContains(searchText)
-        || ($0.album?.localizedCaseInsensitiveContains(searchText)
-          ?? false)
+    
+    return sortSongs(songs)
+  }
+  
+  private func sortSongs(_ songs: [LibrarySong]) -> [LibrarySong] {
+    switch appSettings.songSortOrder {
+    case .titleAscending:
+      return songs.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    case .titleDescending:
+      return songs.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+    case .artistAscending:
+      return songs.sorted { $0.artist.localizedCaseInsensitiveCompare($1.artist) == .orderedAscending }
+    case .artistDescending:
+      return songs.sorted { $0.artist.localizedCaseInsensitiveCompare($1.artist) == .orderedDescending }
+    case .dateAddedDescending:
+      return songs.sorted { $0.importedDate > $1.importedDate }
+    case .dateAddedAscending:
+      return songs.sorted { $0.importedDate < $1.importedDate }
+    case .yearDescending:
+      return songs.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+    case .yearAscending:
+      return songs.sorted { ($0.year ?? 0) < ($1.year ?? 0) }
     }
   }
 
@@ -162,17 +258,48 @@ struct SongsListView: View {
 
 struct AlbumsGridView: View {
   let searchText: String
+  @Environment(\.modelContext) private var modelContext
+  @Query private var settings: [AppSettings]
 
   private var library: SongLibrary { SongLibrary.shared }
+  
+  private var appSettings: AppSettings {
+    settings.first ?? AppSettings.getOrCreate(in: modelContext)
+  }
 
   var filteredAlbums: [Album] {
+    let albums: [Album]
     if searchText.isEmpty {
-      return library.albums
+      albums = library.albums
+    } else {
+      albums = library.albums.filter {
+        $0.name.localizedCaseInsensitiveContains(searchText)
+          || ($0.artist?.localizedCaseInsensitiveContains(searchText)
+            ?? false)
+      }
     }
-    return library.albums.filter {
-      $0.name.localizedCaseInsensitiveContains(searchText)
-        || ($0.artist?.localizedCaseInsensitiveContains(searchText)
-          ?? false)
+    
+    return sortAlbums(albums)
+  }
+  
+  private func sortAlbums(_ albums: [Album]) -> [Album] {
+    switch appSettings.albumSortOrder {
+    case .titleAscending:
+      return albums.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    case .titleDescending:
+      return albums.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedDescending }
+    case .artistAscending:
+      return albums.sorted { ($0.artist ?? "").localizedCaseInsensitiveCompare($1.artist ?? "") == .orderedAscending }
+    case .artistDescending:
+      return albums.sorted { ($0.artist ?? "").localizedCaseInsensitiveCompare($1.artist ?? "") == .orderedDescending }
+    case .dateAddedDescending:
+      return albums.sorted { $0.createdDate > $1.createdDate }
+    case .dateAddedAscending:
+      return albums.sorted { $0.createdDate < $1.createdDate }
+    case .yearDescending:
+      return albums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+    case .yearAscending:
+      return albums.sorted { ($0.year ?? 0) < ($1.year ?? 0) }
     }
   }
 
@@ -217,16 +344,39 @@ struct AlbumsGridView: View {
 
 struct ArtistsListView: View {
   let searchText: String
+  @Environment(\.modelContext) private var modelContext
+  @Query private var settings: [AppSettings]
   @State private var artists: [Artist] = []
 
   private var library: SongLibrary { SongLibrary.shared }
+  
+  private var appSettings: AppSettings {
+    settings.first ?? AppSettings.getOrCreate(in: modelContext)
+  }
 
   var filteredArtists: [Artist] {
+    let artistsToFilter: [Artist]
     if searchText.isEmpty {
-      return artists
+      artistsToFilter = artists
+    } else {
+      artistsToFilter = artists.filter {
+        $0.name.localizedCaseInsensitiveContains(searchText)
+      }
     }
-    return artists.filter {
-      $0.name.localizedCaseInsensitiveContains(searchText)
+    
+    return sortArtists(artistsToFilter)
+  }
+  
+  private func sortArtists(_ artists: [Artist]) -> [Artist] {
+    switch appSettings.artistSortOrder {
+    case .titleAscending:
+      return artists.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    case .titleDescending:
+      return artists.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedDescending }
+    case .dateAddedDescending:
+      return artists.sorted { $0.lastAddedDate > $1.lastAddedDate }
+    default:
+      return artists.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
   }
 
@@ -284,18 +434,60 @@ struct ArtistsListView: View {
 
 struct PlaylistsListView: View {
   let searchText: String
+  @Environment(\.modelContext) private var modelContext
+  @Query private var settings: [AppSettings]
   @State private var showingCreateSheet = false
   @State private var showUnpinAlert = false
 
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  
+  private var appSettings: AppSettings {
+    settings.first ?? AppSettings.getOrCreate(in: modelContext)
+  }
 
   var filteredPlaylists: [Playlist] {
+    let playlists: [Playlist]
     if searchText.isEmpty {
-      return playlistManager.playlists
+      playlists = playlistManager.playlists
+    } else {
+      playlists = playlistManager.playlists.filter {
+        $0.name.localizedCaseInsensitiveContains(searchText)
+      }
     }
-    return playlistManager.playlists.filter {
-      $0.name.localizedCaseInsensitiveContains(searchText)
+    
+    return sortPlaylists(playlists)
+  }
+  
+  private func sortPlaylists(_ playlists: [Playlist]) -> [Playlist] {
+    // We want to keep Liked Songs and Pinned playlists at top, then apply sort
+    var sorted = playlists
+    
+    sorted.sort { p1, p2 in
+      // 1. Liked Songs always at the top
+      if p1.playlistType == .likedSongs && p2.playlistType != .likedSongs { return true }
+      if p2.playlistType == .likedSongs && p1.playlistType != .likedSongs { return false }
+
+      // 2. Pinned playlists next
+      if p1.isPinned != p2.isPinned {
+        return p1.isPinned && !p2.isPinned
+      }
+      
+      // 3. Apply user's selected sort order for the rest
+      switch appSettings.playlistSortOrder {
+      case .titleAscending:
+        return p1.name.localizedCaseInsensitiveCompare(p2.name) == .orderedAscending
+      case .titleDescending:
+        return p1.name.localizedCaseInsensitiveCompare(p2.name) == .orderedDescending
+      case .dateAddedDescending:
+        return p1.createdDate > p2.createdDate
+      case .dateAddedAscending:
+        return p1.createdDate < p2.createdDate
+      default:
+        return p1.name.localizedCaseInsensitiveCompare(p2.name) == .orderedAscending
+      }
     }
+    
+    return sorted
   }
 
   var body: some View {

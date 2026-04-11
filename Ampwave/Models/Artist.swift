@@ -28,6 +28,7 @@ final class Artist: Identifiable, Hashable {
   var songCount: Int
   var albumCount: Int
   var totalPlayCount: Int
+  var lastAddedDate: Date = Date.distantPast
 
   // MARK: - Timestamps
   var createdDate: Date

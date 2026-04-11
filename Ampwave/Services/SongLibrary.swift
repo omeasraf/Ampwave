@@ -73,6 +73,10 @@ final class SongLibrary {
           if existing.artworkPath == nil {
             existing.artworkPath = song.artworkPath
           }
+          // Update lastAddedDate
+          if song.importedDate > existing.lastAddedDate {
+            existing.lastAddedDate = song.importedDate
+          }
           // Update genres
           if let genre = song.genre, !genre.isEmpty {
             if existing.genres == nil {
@@ -85,6 +89,7 @@ final class SongLibrary {
           let artist = Artist(name: trimmedName)
           artist.songCount = 1
           artist.artworkPath = song.artworkPath
+          artist.lastAddedDate = song.importedDate
           if let genre = song.genre {
             artist.genres = [genre]
           }
