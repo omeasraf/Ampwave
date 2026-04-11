@@ -269,15 +269,15 @@ struct CompactLyricsView: View {
                                             ? .primary : .secondary
                                     )
                                     .multilineTextAlignment(.center)
-                                    .lineLimit(nil)  // ADDED
+                                    .lineLimit(nil)
                                     .fixedSize(
                                         horizontal: false,
                                         vertical: true
-                                    )  // CHANGED
+                                    )
                                     .padding(.horizontal, 16)
                                     .frame(
-                                        minWidth: 0,  // ADDED
-                                        maxWidth: .infinity,  // CHANGED
+                                        minWidth: 0,
+                                        maxWidth: .infinity,
                                         alignment: .center
                                     )
                                     .scaleEffect(
