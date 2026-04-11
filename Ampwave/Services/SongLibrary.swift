@@ -206,28 +206,72 @@ final class SongLibrary {
       return
     }
 
-    print("[DEBUG] Checking for deleted files")
-    // Remove DB entries for files that no longer exist
-    let existingFileNames = Set(existingSongs.map(\.fileName))
-    for song in existingSongs {
-      let url = getFileURL(for: song)
-      if !fileManager.fileExists(atPath: url.path) {
-        print("[DEBUG] Deleting song: \(song.fileName)")
-        modelContext.delete(song)
-      }
-    }
-
     print("[DEBUG] Finding audio files on disk")
     // Find audio files on disk
     let audioURLs = findAudioFiles(in: songsDirectory)
     print("[DEBUG] Found \(audioURLs.count) audio files on disk")
 
-    print("[DEBUG] Importing new files")
-    // Import new files
+    let audioURLSet = Set(audioURLs)
+    var fileNameToURLs: [String: [URL]] = [:]
     for url in audioURLs {
-      let fileName = url.lastPathComponent
-      if existingFileNames.contains(fileName) { continue }
+      fileNameToURLs[url.lastPathComponent, default: []].append(url)
+    }
 
+    print("[DEBUG] Checking for moved or deleted files")
+    var accountedForURLs = Set<URL>()
+    
+    for song in existingSongs {
+      let expectedURL = getFileURL(for: song)
+      if audioURLSet.contains(expectedURL) {
+        accountedForURLs.insert(expectedURL)
+        continue
+      }
+
+      // File is NOT at expected location. Check if it moved.
+      print("[DEBUG] Song \(song.title) not at expected URL: \(expectedURL.path)")
+      var foundMoved = false
+      if let possibleURLs = fileNameToURLs[song.fileName] {
+        for possibleURL in possibleURLs {
+          if await self.fileHash(at: possibleURL) == song.fileHash {
+            print("[DEBUG] Found moved song at: \(possibleURL.path), moving back to: \(expectedURL.path)")
+            // Move it back to the expected location
+            try? fileManager.createDirectory(at: expectedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do {
+              try fileManager.moveItem(at: possibleURL, to: expectedURL)
+              accountedForURLs.insert(expectedURL)
+              foundMoved = true
+            } catch {
+              print("[DEBUG] Failed to move file: \(error)")
+            }
+            break
+          }
+        }
+      }
+
+      if !foundMoved {
+        print("[DEBUG] Deleting song from database (not found on disk): \(song.fileName)")
+        modelContext.delete(song)
+      }
+    }
+
+    print("[DEBUG] Importing new files")
+    // Get existing hashes once for efficient lookup
+    let finalExistingSongs = (try? modelContext.fetch(FetchDescriptor<LibrarySong>())) ?? []
+    let finalExistingHashes = Set(finalExistingSongs.map(\.fileHash))
+
+    // Use the accountedForURLs set to avoid hashing files we already matched
+    for url in audioURLs {
+      if accountedForURLs.contains(url) { continue }
+
+      // Check by hash for truly unknown files
+      guard let hash = await self.fileHash(at: url) else { continue }
+      
+      // Double check if this hash somehow exists in DB
+      if finalExistingHashes.contains(hash) {
+        continue
+      }
+
+      print("[DEBUG] Importing new file found on disk: \(url.lastPathComponent)")
       _ = await importFileInPlace(at: url, modelContext: modelContext)
     }
 
@@ -658,17 +702,14 @@ final class SongLibrary {
 
   private func updateIndexingStatusForMetadata() {
     if pendingMetadataFetches > 0 {
-      // Only set if not already indexing something else (like file import)
-      // or if we are already in a fetching metadata state
+      // Only set to fetchingMetadata if not already indexing something else (like file import)
       switch indexingStatus {
-      case .idle, .complete:
-        indexingStatus = .indexing("Fetching metadata (\(pendingMetadataFetches) remaining)…")
-      case .indexing(let msg) where msg.contains("Fetching metadata"):
-        indexingStatus = .indexing("Fetching metadata (\(pendingMetadataFetches) remaining)…")
+      case .idle, .complete, .fetchingMetadata:
+        indexingStatus = .fetchingMetadata(pendingMetadataFetches)
       default:
         break
       }
-    } else if case .indexing(let msg) = indexingStatus, msg.contains("Fetching metadata") {
+    } else if case .fetchingMetadata = indexingStatus {
       indexingStatus = .complete
     }
   }

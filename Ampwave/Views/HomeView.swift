@@ -40,7 +40,18 @@ struct HomeView: View {
         // Welcome header
         welcomeHeader
 
-        if isLoading || library.indexingStatus != .complete {
+        if case .indexing(let message) = library.indexingStatus {
+          VStack(spacing: 20) {
+            Spacer()
+              .frame(height: 100)
+            ProgressView()
+              .scaleEffect(1.5)
+            Text(message)
+              .foregroundStyle(.secondary)
+            Spacer()
+          }
+          .frame(maxWidth: .infinity)
+        } else if isLoading && library.songs.isEmpty {
           VStack(spacing: 20) {
             Spacer()
               .frame(height: 100)
@@ -54,6 +65,21 @@ struct HomeView: View {
         } else if library.songs.isEmpty {
           emptyState
         } else {
+          // Status indicator for metadata fetching
+          if case .fetchingMetadata(let count) = library.indexingStatus {
+            HStack {
+              ProgressView()
+                .controlSize(.small)
+                .padding(.trailing, 4)
+              Text("Fetching metadata for \(count) songs…")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+              Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, -10)
+          }
+
           // Recently Played section
           if !recentlyPlayedSongs.isEmpty {
             HorizontalSongSection(

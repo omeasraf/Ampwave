@@ -10,5 +10,6 @@ import Foundation
 enum IndexingStatus: Equatable {
   case idle
   case indexing(String)
+  case fetchingMetadata(Int)
   case complete
 }
