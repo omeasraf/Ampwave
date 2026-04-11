@@ -50,6 +50,7 @@ struct SettingsView: View {
       playbackSettingsSection
       librarySettingsSection
       onlineFeaturesSection
+      dataSourcesSection
       dataManagementSection
       aboutSection
     }
@@ -368,6 +369,54 @@ struct SettingsView: View {
       Text(
         "When online, the app can fetch metadata, lyrics, and artwork from online sources. All data is cached for offline use."
       )
+    }
+  }
+
+  private var dataSourcesSection: some View {
+    Section {
+      Link(destination: URL(string: "https://musicbrainz.org")!) {
+        HStack {
+          Label("MusicBrainz", systemImage: "music.note.list")
+          Spacer()
+          Text("Metadata")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      Link(destination: URL(string: "https://coverartarchive.org")!) {
+        HStack {
+          Label("Cover Art Archive", systemImage: "photo.stack")
+          Spacer()
+          Text("Artwork")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      Link(destination: URL(string: "https://lrclib.net")!) {
+        HStack {
+          Label("LRCLIB", systemImage: "quote.bubble")
+          Spacer()
+          Text("Synced Lyrics")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      Link(destination: URL(string: "https://lyrics.ovh")!) {
+        HStack {
+          Label("Lyrics.ovh", systemImage: "text.alignleft")
+          Spacer()
+          Text("Plain Lyrics")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+    } header: {
+      Text("Data Sources")
+    } footer: {
+      Text("Ampwave uses these open-source community databases for high-quality metadata, artwork, and lyrics.")
     }
   }
 

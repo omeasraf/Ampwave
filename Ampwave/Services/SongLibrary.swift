@@ -285,10 +285,11 @@ final class SongLibrary {
     await loadSongs()
   }
 
-  private func findAudioFiles(in directory: URL) -> [URL] {
+  private func findAudioFiles(in directory: URL, currentDepth: Int = 0) -> [URL] {
     var audioFiles: [URL] = []
+    let maxDepth = 3 // Limit depth to avoid scanning outside the music folders if somehow linked
 
-    guard
+    guard currentDepth <= maxDepth,
       let contents = try? fileManager.contentsOfDirectory(
         at: directory,
         includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
@@ -302,7 +303,7 @@ final class SongLibrary {
       let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
 
       if isDir {
-        audioFiles.append(contentsOf: findAudioFiles(in: url))
+        audioFiles.append(contentsOf: findAudioFiles(in: url, currentDepth: currentDepth + 1))
       } else {
         let ext = url.pathExtension.lowercased()
         if Self.audioExtensions.contains(ext) {
@@ -549,8 +550,7 @@ final class SongLibrary {
       album.songs.append(song)
     }
 
-    // Background fetch for detailed metadata from API
-    print("[DEBUG] SongLibrary.importFile: Starting background metadata fetch from API")
+    // Background fetch online metadata and assets
     Task {
       await fetchMetadataForSong(song)
     }
@@ -642,7 +642,7 @@ final class SongLibrary {
       album.songs.append(song)
     }
 
-    // Background fetch
+    // Background fetch online metadata and assets
     Task {
       await fetchMetadataForSong(song)
     }
@@ -723,23 +723,38 @@ final class SongLibrary {
       return
     }
 
-    pendingMetadataFetches += 1
-    defer { pendingMetadataFetches -= 1 }
+    let preferences = UserPreferences.getOrCreate(in: modelContext)
 
-    let metadataService = MetadataService.shared
-    if metadataService.modelContext == nil {
-      print("[DEBUG] SongLibrary.fetchMetadataForSong: Setting modelContext in MetadataService")
-      metadataService.setModelContext(modelContext)
+    // 1. Online Metadata & Artwork
+    if preferences.autoFetchMetadata {
+      pendingMetadataFetches += 1
+      defer { pendingMetadataFetches -= 1 }
+
+      let metadataService = MetadataService.shared
+      if metadataService.modelContext == nil {
+        metadataService.setModelContext(modelContext)
+      }
+
+      print("[DEBUG] SongLibrary.fetchMetadataForSong: Calling MetadataService.fetchMetadata")
+      if let metadata = await metadataService.fetchMetadata(for: song) {
+        // Apply fetched metadata (on MainActor)
+        print("[DEBUG] SongLibrary.fetchMetadataForSong: Metadata fetched, applying to song")
+        await applyFetchedMetadata(metadata, to: song, preferences: preferences)
+      } else {
+        print("[DEBUG] SongLibrary.fetchMetadataForSong: No metadata found for \(song.title)")
+      }
     }
 
-    // Fetch metadata from MusicBrainz (background)
-    print("[DEBUG] SongLibrary.fetchMetadataForSong: Calling MetadataService.fetchMetadata")
-    if let metadata = await metadataService.fetchMetadata(for: song) {
-      // Apply fetched metadata (on MainActor)
-      print("[DEBUG] SongLibrary.fetchMetadataForSong: Metadata fetched, applying to song")
-      await applyFetchedMetadata(metadata, to: song)
-    } else {
-      print("[DEBUG] SongLibrary.fetchMetadataForSong: No metadata found for \(song.title)")
+    // 2. Synced Lyrics
+    // Fetch if no lyrics OR if lyrics are plain text (LRCParser returns empty)
+    let hasSyncedLyrics = !LRCParser.parse(song.lyrics ?? "").isEmpty
+    if preferences.autoFetchLyrics && !hasSyncedLyrics {
+      print("[DEBUG] SongLibrary.fetchMetadataForSong: Missing synced lyrics, calling LyricsService")
+      let lyricsService = LyricsService.shared
+      if lyricsService.modelContext == nil {
+        lyricsService.setModelContext(modelContext)
+      }
+      _ = await lyricsService.fetchLyrics(for: song)
     }
   }
 
@@ -797,7 +812,9 @@ final class SongLibrary {
   }
 
   @MainActor
-  private func applyFetchedMetadata(_ metadata: FetchedMetadata, to song: LibrarySong) async {
+  private func applyFetchedMetadata(
+    _ metadata: FetchedMetadata, to song: LibrarySong, preferences: UserPreferences
+  ) async {
     print("[DEBUG] SongLibrary.applyFetchedMetadata: Applying metadata to \(song.title)")
     guard let modelContext = modelContext else {
       print("[DEBUG] SongLibrary.applyFetchedMetadata: Error - No modelContext")
@@ -850,29 +867,37 @@ final class SongLibrary {
       needsSave = true
     }
 
-    // Download and cache artwork if available and song doesn't have artwork
-    if song.artworkPath == nil, let artworkURL = metadata.artworkURL {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Downloading artwork from \(artworkURL)")
-      if let artworkPath = await MetadataService.shared.downloadArtwork(from: artworkURL) {
-        print("[DEBUG] SongLibrary.applyFetchedMetadata: Artwork downloaded to \(artworkPath)")
-        song.artworkPath = artworkPath
-        song.isRemoteArtwork = true
-        needsSave = true
+    // Download and cache artwork if available
+    if let artworkURL = metadata.artworkURL {
+      // If we prefer online, or if we don't have artwork yet, fetch it.
+      // We skip if we already have remote artwork to satisfy "once" requirement.
+      let shouldFetchArtwork =
+        (preferences.preferOnlineArtwork && !song.isRemoteArtwork) || song.artworkPath == nil
 
-        // Update album artwork too
-        if let album = song.albumReference, album.artworkPath == nil {
-          print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating album artwork")
-          album.artworkPath = artworkPath
+      if shouldFetchArtwork {
+        print(
+          "[DEBUG] SongLibrary.applyFetchedMetadata: Fetching online artwork (preferOnline: \(preferences.preferOnlineArtwork))"
+        )
+        if let artworkPath = await MetadataService.shared.downloadArtwork(from: artworkURL) {
+          print("[DEBUG] SongLibrary.applyFetchedMetadata: Artwork downloaded to \(artworkPath)")
+          song.artworkPath = artworkPath
+          song.isRemoteArtwork = true
+          needsSave = true
+
+          // Update album artwork too
+          if let album = song.albumReference {
+            print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating album artwork")
+            album.artworkPath = artworkPath
+          }
+        } else {
+          print("[DEBUG] SongLibrary.applyFetchedMetadata: Failed to download artwork")
         }
-      } else {
-        print("[DEBUG] SongLibrary.applyFetchedMetadata: Failed to download artwork")
       }
     }
 
     if needsSave {
       print("[DEBUG] SongLibrary.applyFetchedMetadata: Saving changes")
       try? modelContext.save()
-      // No need to reload entire library, @Observable will handle UI update
     }
     print("[DEBUG] SongLibrary.applyFetchedMetadata: Finished for \(song.title)")
   }

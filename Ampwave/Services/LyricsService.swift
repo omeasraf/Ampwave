@@ -47,10 +47,13 @@ final class LyricsService {
       }
     }
 
-    // Skip online if autoFetchLyrics is false or if song already has embedded lyrics
+    // Skip online if autoFetchLyrics is false or if song already has synced lyrics
     guard let modelContext = modelContext else { return nil }
-    let settings = AppSettings.getOrCreate(in: modelContext)
-    if !settings.autoFetchLyrics && (song.lyrics != nil && !song.lyrics!.isEmpty) {
+    let preferences = UserPreferences.getOrCreate(in: modelContext)
+    
+    let hasSyncedLyrics = !LRCParser.parse(song.lyrics ?? "").isEmpty
+    
+    if !preferences.autoFetchLyrics || hasSyncedLyrics {
       return nil
     }
 
