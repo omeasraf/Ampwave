@@ -82,7 +82,8 @@ final class PlaylistManager {
     playlistType: PlaylistType = .custom,
     songs: [LibrarySong] = [],
     icon: PlaylistIcon? = nil,
-    artworkType: PlaylistArtworkType = .grid
+    artworkType: PlaylistArtworkType = .grid,
+    artworkPath: String? = nil
   ) -> Playlist? {
     guard let modelContext = modelContext else { return nil }
 
@@ -90,6 +91,7 @@ final class PlaylistManager {
       name: name,
       description: description,
       playlistType: playlistType,
+      artworkPath: artworkPath,
       icon: icon,
       artworkType: artworkType
     )
@@ -125,6 +127,17 @@ final class PlaylistManager {
 
     save()
     sortPlaylists()
+  }
+
+  func updatePlaylistArtwork(
+    _ playlist: Playlist, artworkType: PlaylistArtworkType, artworkPath: String? = nil
+  ) {
+    playlist.artworkType = artworkType
+    if artworkType == .custom {
+      playlist.artworkPath = artworkPath
+    }
+    playlist.touch()
+    save()
   }
 
   // MARK: - Delete Playlist

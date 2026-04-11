@@ -18,7 +18,11 @@ internal import SwiftUI
   extension Color {
     init(average color: UIColor) {
       let ciColor = CIColor(color: color)
-      self = Color(red: ciColor.red, green: ciColor.green, blue: ciColor.blue)
+      self = Color(
+        red: ciColor.red,
+        green: ciColor.green,
+        blue: ciColor.blue
+      )
     }
   }
 
@@ -26,30 +30,40 @@ internal import SwiftUI
     func dominantColor() -> Color? {
       guard let cgImage = self.cgImage else { return nil }
 
-      // Resize image to 1x1 to sample average color
-      let size = CGSize(width: 1, height: 1)
-      let rect = CGRect(origin: .zero, size: size)
+      let inputImage = CIImage(cgImage: cgImage)
+      let extent = inputImage.extent
 
-      UIGraphicsBeginImageContextWithOptions(size, true, 0)
-      defer { UIGraphicsEndImageContext() }
+      // Use Core Image area average with quantization
+      let filter = CIFilter(
+        name: "CIAreaAverage",
+        parameters: [
+          kCIInputImageKey: inputImage,
+          kCIInputExtentKey: CIVector(cgRect: extent),
+        ]
+      )
 
-      guard let context = UIGraphicsGetCurrentContext() else { return nil }
+      guard let outputImage = filter?.outputImage else { return nil }
 
-      // Draw the image scaled down to 1x1
-      self.draw(in: rect)
+      var bitmap = [UInt8](repeating: 0, count: 4)
+      let context = CIContext(options: [.workingColorSpace: NSNull()])
 
-      guard let imageData = UIGraphicsGetImageFromCurrentImageContext()?.cgImage else { return nil }
+      context.render(
+        outputImage,
+        toBitmap: &bitmap,
+        rowBytes: 4,
+        bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+        format: .RGBA8,
+        colorSpace: nil
+      )
 
-      // Get pixel data
-      guard let pixelBuffer = CFDataGetBytePtr(imageData.dataProvider!.data) else { return nil }
-
-      let r = CGFloat(pixelBuffer[0]) / 255.0
-      let g = CGFloat(pixelBuffer[1]) / 255.0
-      let b = CGFloat(pixelBuffer[2]) / 255.0
-
-      return Color(red: r, green: g, blue: b)
+      return Color(
+        red: Double(bitmap[0]) / 255.0,
+        green: Double(bitmap[1]) / 255.0,
+        blue: Double(bitmap[2]) / 255.0
+      )
     }
   }
+
 #else
   extension NSImage {
     func dominantColor() -> Color? {
@@ -62,11 +76,13 @@ internal import SwiftUI
       let size = NSSize(width: 1, height: 1)
       guard
         let resizedImage = NSImage(
-          size: size, flipped: false,
+          size: size,
+          flipped: false,
           drawingHandler: { rect in
             self.draw(in: rect)
             return true
-          })
+          }
+        )
       else { return nil }
 
       guard let resizedTiff = resizedImage.tiffRepresentation,
@@ -77,7 +93,9 @@ internal import SwiftUI
       var g: CGFloat = 0
       var b: CGFloat = 0
       var a: CGFloat = 0
-      guard let color = resizedBitmap.colorAt(x: 0, y: 0) else { return nil }
+      guard let color = resizedBitmap.colorAt(x: 0, y: 0) else {
+        return nil
+      }
       color.getRed(&r, green: &g, blue: &b, alpha: &a)
 
       return Color(red: r, green: g, blue: b)

@@ -59,13 +59,13 @@ final class LyricsService {
 
   func fetchOnlineLyrics(for song: LibrarySong) async -> SyncedLyric? {
     let lrclibResult = await fetchFromLRCLIB(song: song)
-    
+
     if let synced = lrclibResult.synced {
       let cached = cacheLyrics(synced)
       song.lyrics = LRCParser.toLRC(cached.lines)
       return cached
     }
-    
+
     if let plain = lrclibResult.plain {
       song.lyrics = plain
       // Clear any old cached synced lyrics since we now have plain text

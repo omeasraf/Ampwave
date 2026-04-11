@@ -33,9 +33,15 @@ struct PlaylistArtworkView: View {
         } else {
           placeholderView
         }
-      case .single, .custom:
+      case .single:
         if let firstPath = playlist.getArtworkPaths().first {
           SingleArtworkView(artworkPath: firstPath, size: size)
+        } else {
+          placeholderView
+        }
+      case .custom:
+        if let artworkPath = playlist.artworkPath {
+          SingleArtworkView(artworkPath: artworkPath, size: size)
         } else {
           placeholderView
         }

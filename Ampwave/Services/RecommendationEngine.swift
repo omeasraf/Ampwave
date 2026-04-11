@@ -112,7 +112,7 @@ final class RecommendationEngine {
             confidence: 0.9
           )
         })
-        
+
       // Also find more from these artists
       let topArtists = Set(mostPlayed.prefix(5).map { $0.song.artist })
       let fromFavoriteArtists = library.songs.filter { song in

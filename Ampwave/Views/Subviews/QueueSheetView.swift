@@ -33,7 +33,7 @@ struct QueueSheetView: View {
             .onMove(perform: moveSongs)
           }
         }
-        
+
         if !playback.previouslyPlayed.isEmpty {
           Section("History") {
             ForEach(playback.previouslyPlayed.reversed()) { song in
@@ -63,7 +63,7 @@ struct QueueSheetView: View {
     // Calculate the actual index in the full queue
     // playback.upNext is queue[(currentQueueIndex + 1)...]
     let actualIndex = playback.currentQueueIndex + 1 + index
-    
+
     // Jump to this song in the existing queue
     playback.jumpToQueueIndex(actualIndex)
   }
@@ -80,7 +80,7 @@ struct QueueSheetView: View {
     // Convert relative offsets to absolute queue indices
     // We must be careful with how SwiftUI's move works with absolute indices
     let offset = playback.currentQueueIndex + 1
-    
+
     for sourceIndex in source {
       let actualSource = offset + sourceIndex
       let actualDestination = offset + (destination > sourceIndex ? destination - 1 : destination)

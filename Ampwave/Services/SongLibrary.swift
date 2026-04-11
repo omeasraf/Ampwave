@@ -24,6 +24,11 @@ final class SongLibrary {
 
   /// Indexing status for startup and Files app sync.
   private(set) var indexingStatus: IndexingStatus = .idle
+  private(set) var pendingMetadataFetches: Int = 0 {
+    didSet {
+      updateIndexingStatusForMetadata()
+    }
+  }
 
   var modelContext: ModelContext? {
     didSet {
@@ -646,6 +651,23 @@ final class SongLibrary {
     }
   }
 
+  private func updateIndexingStatusForMetadata() {
+    if pendingMetadataFetches > 0 {
+      // Only set if not already indexing something else (like file import)
+      // or if we are already in a fetching metadata state
+      switch indexingStatus {
+      case .idle, .complete:
+        indexingStatus = .indexing("Fetching metadata (\(pendingMetadataFetches) remaining)…")
+      case .indexing(let msg) where msg.contains("Fetching metadata"):
+        indexingStatus = .indexing("Fetching metadata (\(pendingMetadataFetches) remaining)…")
+      default:
+        break
+      }
+    } else if case .indexing(let msg) = indexingStatus, msg.contains("Fetching metadata") {
+      indexingStatus = .complete
+    }
+  }
+
   // MARK: - Metadata Fetching from API
 
   private func fetchMetadataForSong(_ song: LibrarySong) async {
@@ -654,6 +676,9 @@ final class SongLibrary {
       print("[DEBUG] SongLibrary.fetchMetadataForSong: Error - No modelContext")
       return
     }
+
+    pendingMetadataFetches += 1
+    defer { pendingMetadataFetches -= 1 }
 
     let metadataService = MetadataService.shared
     if metadataService.modelContext == nil {
@@ -785,6 +810,7 @@ final class SongLibrary {
       if let artworkPath = await MetadataService.shared.downloadArtwork(from: artworkURL) {
         print("[DEBUG] SongLibrary.applyFetchedMetadata: Artwork downloaded to \(artworkPath)")
         song.artworkPath = artworkPath
+        song.isRemoteArtwork = true
         needsSave = true
 
         // Update album artwork too
@@ -892,7 +918,7 @@ final class SongLibrary {
 
   // MARK: - Artwork Caching
 
-  private func cacheArtwork(_ artworkData: Data) async -> String? {
+  public func cacheArtwork(_ artworkData: Data) async -> String? {
     guard !artworkData.isEmpty else { return nil }
 
     let hash = artworkData.sha256()

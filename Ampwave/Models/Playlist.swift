@@ -31,7 +31,6 @@ final class Playlist: Identifiable, Hashable {
 
   var icon: PlaylistIcon?
 
-
   // MARK: - Playlist Type
   var playlistType: PlaylistType
 

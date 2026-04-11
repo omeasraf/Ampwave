@@ -5,6 +5,7 @@
 //  Sheet for editing song metadata.
 //
 
+import PhotosUI
 import SwiftData
 internal import SwiftUI
 
@@ -20,6 +21,14 @@ struct SongEditSheet: View {
   @State private var trackNumber: String
   @State private var lyrics: String
   @State private var isLoadingLyrics: Bool = false
+
+  // Artwork
+  @State private var artworkImage: Image?
+  @State private var artworkData: Data?
+  @State private var selectedPhotoItem: PhotosPickerItem?
+  @State private var isShowingFilePicker = false
+  @State private var isRemoteArtwork: Bool
+  @State private var artworkPath: String?
 
   // Technical Metadata
   @State private var sampleRate: String
@@ -41,10 +50,18 @@ struct SongEditSheet: View {
     _album = State(initialValue: song.album ?? "")
     _year = State(initialValue: song.year.map(String.init) ?? "")
     _genre = State(initialValue: song.genre ?? "")
-    _trackNumber = State(initialValue: song.trackNumber.map(String.init) ?? "")
+    _trackNumber = State(
+      initialValue: song.trackNumber.map(String.init) ?? ""
+    )
     _lyrics = State(initialValue: song.lyrics ?? "")
 
-    _sampleRate = State(initialValue: song.sampleRate.map { String(format: "%.0f", $0) } ?? "")
+    _isRemoteArtwork = State(initialValue: song.isRemoteArtwork)
+    _artworkPath = State(initialValue: song.artworkPath)
+
+    _sampleRate = State(
+      initialValue: song.sampleRate.map { String(format: "%.0f", $0) }
+        ?? ""
+    )
     _bitDepth = State(initialValue: song.bitDepth.map(String.init) ?? "")
     _bitRate = State(initialValue: song.bitRate.map(String.init) ?? "")
     _format = State(initialValue: song.format ?? "")
@@ -57,6 +74,102 @@ struct SongEditSheet: View {
   var body: some View {
     NavigationStack {
       Form {
+        Section("Artwork") {
+          HStack(spacing: 15) {
+            if let image = artworkImage {
+              image
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 80, height: 80)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else if let path = artworkPath,
+              let url = PathManager.resolve(path)
+            {
+              #if os(iOS)
+                if let uiImage = UIImage(
+                  contentsOfFile: url.path
+                ) {
+                  Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 80, height: 80)
+                    .clipShape(
+                      RoundedRectangle(cornerRadius: 8)
+                    )
+                } else {
+                  placeholderView
+                }
+              #else
+                if let nsImage = NSImage(
+                  contentsOfFile: url.path
+                ) {
+                  Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 80, height: 80)
+                    .clipShape(
+                      RoundedRectangle(cornerRadius: 8)
+                    )
+                } else {
+                  placeholderView
+                }
+              #endif
+            } else {
+              placeholderView
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+              Text(
+                isRemoteArtwork
+                  ? "Remote Artwork" : "Local Artwork"
+              )
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+
+              HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                  PhotosPicker(
+                    selection: $selectedPhotoItem,
+                    matching: .images
+                  ) {
+                    Label("Photos", systemImage: "photo")
+                      .font(.caption)
+                  }
+                  .buttonStyle(.bordered)
+
+                  Button {
+                    isShowingFilePicker = true
+                  } label: {
+                    Label("Files", systemImage: "folder")
+                      .font(.caption)
+                  }
+                  .buttonStyle(.bordered)
+                }
+
+                Spacer()
+
+                if artworkPath != nil || artworkImage != nil {
+                  Button(role: .destructive) {
+                    artworkImage = nil
+                    artworkData = nil
+                    artworkPath = nil
+                    isRemoteArtwork = false
+                  } label: {
+                    Label(
+                      "Reset",
+                      systemImage:
+                        "arrow.counterclockwise"
+                    )
+                    .font(.caption)
+                  }
+                  .buttonStyle(.bordered)
+                }
+              }
+            }
+          }
+          .padding(.vertical, 5)
+        }
+
         Section("Basic Info") {
           TextField("Title", text: $title)
           TextField("Artist", text: $artist)
@@ -106,7 +219,9 @@ struct SongEditSheet: View {
               Button("Fetch Online") {
                 Task {
                   isLoadingLyrics = true
-                  if await LyricsService.shared.fetchOnlineLyrics(for: song) != nil {
+                  if await LyricsService.shared
+                    .fetchOnlineLyrics(for: song) != nil
+                  {
                     lyrics = song.lyrics ?? ""
                   }
                   isLoadingLyrics = false
@@ -123,6 +238,57 @@ struct SongEditSheet: View {
         }
       }
       .navigationTitle("Edit Song")
+      .onChange(of: selectedPhotoItem) { _, newItem in
+        Task {
+          if let data = try? await newItem?.loadTransferable(
+            type: Data.self
+          ) {
+            #if os(iOS)
+              if let uiImage = UIImage(data: data) {
+                artworkData = data
+                artworkImage = Image(uiImage: uiImage)
+                isRemoteArtwork = false
+              }
+            #else
+              if let nsImage = NSImage(data: data) {
+                artworkData = data
+                artworkImage = Image(nsImage: nsImage)
+                isRemoteArtwork = false
+              }
+            #endif
+          }
+        }
+      }
+      .fileImporter(
+        isPresented: $isShowingFilePicker,
+        allowedContentTypes: [.image],
+        allowsMultipleSelection: false
+      ) { result in
+        switch result {
+        case .success(let urls):
+          guard let url = urls.first else { return }
+          if url.startAccessingSecurityScopedResource() {
+            defer { url.stopAccessingSecurityScopedResource() }
+            if let data = try? Data(contentsOf: url) {
+              #if os(iOS)
+                if let uiImage = UIImage(data: data) {
+                  artworkData = data
+                  artworkImage = Image(uiImage: uiImage)
+                  isRemoteArtwork = false
+                }
+              #else
+                if let nsImage = NSImage(data: data) {
+                  artworkData = data
+                  artworkImage = Image(nsImage: nsImage)
+                  isRemoteArtwork = false
+                }
+              #endif
+            }
+          }
+        case .failure:
+          break
+        }
+      }
       #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -131,11 +297,12 @@ struct SongEditSheet: View {
               isPresented = false
             }
           }
-
           ToolbarItem(placement: .navigationBarTrailing) {
             Button("Save") {
-              saveSongMetadata()
-              isPresented = false
+              Task {
+                await saveSongMetadata()
+                isPresented = false
+              }
             }
             .disabled(title.isEmpty || artist.isEmpty)
           }
@@ -150,8 +317,10 @@ struct SongEditSheet: View {
 
           ToolbarItem(placement: .confirmationAction) {
             Button("Save") {
-              saveSongMetadata()
-              isPresented = false
+              Task {
+                await saveSongMetadata()
+                isPresented = false
+              }
             }
             .disabled(title.isEmpty || artist.isEmpty)
           }
@@ -160,7 +329,18 @@ struct SongEditSheet: View {
     }
   }
 
-  private func saveSongMetadata() {
+  @ViewBuilder
+  private var placeholderView: some View {
+    RoundedRectangle(cornerRadius: 8)
+      .fill(Color.secondary.opacity(0.2))
+      .frame(width: 80, height: 80)
+      .overlay {
+        Image(systemName: "music.note")
+          .foregroundStyle(.secondary)
+      }
+  }
+
+  private func saveSongMetadata() async {
     song.title = title
     song.artist = artist
     song.album = album.isEmpty ? nil : album
@@ -173,6 +353,22 @@ struct SongEditSheet: View {
     if let trackInt = Int(trackNumber), trackInt > 0 {
       song.trackNumber = trackInt
     }
+
+    // Save artwork if changed
+    if let data = artworkData {
+      if let newPath = await library.cacheArtwork(data) {
+        song.artworkPath = newPath
+
+        // Update album artwork if primary
+        if let album = song.albumReference,
+          album.artworkPath == nil || album.songs.first?.id == song.id
+        {
+          album.artworkPath = newPath
+        }
+      }
+    }
+
+    song.isRemoteArtwork = isRemoteArtwork
 
     // Save technical metadata
     song.sampleRate = Double(sampleRate)

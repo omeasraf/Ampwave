@@ -35,6 +35,7 @@ final class LibrarySong: Identifiable, Hashable {
   var year: Int?
   var composer: String?
   var artworkPath: String?
+  var isRemoteArtwork: Bool = false
   var albumReference: Album?
 
   // MARK: - Technical metadata
@@ -65,6 +66,7 @@ final class LibrarySong: Identifiable, Hashable {
     year: Int? = nil,
     composer: String? = nil,
     artworkPath: String? = nil,
+    isRemoteArtwork: Bool = false,
     sampleRate: Double? = nil,
     bitDepth: Int? = nil,
     bitRate: Int? = nil,
@@ -94,6 +96,7 @@ final class LibrarySong: Identifiable, Hashable {
     self.year = year
     self.composer = composer
     self.artworkPath = artworkPath
+    self.isRemoteArtwork = isRemoteArtwork
     self.sampleRate = sampleRate
     self.bitDepth = bitDepth
     self.bitRate = bitRate

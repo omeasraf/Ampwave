@@ -218,7 +218,7 @@ struct HomeView: View {
       if !forceRefresh && library.indexingStatus != .complete {
         print("[DEBUG] HomeView.loadData: Library is indexing, waiting...")
         while library.indexingStatus != .complete {
-          try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+          try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5s
         }
       }
 
@@ -324,6 +324,47 @@ struct RecommendationsSection: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
+      //      Text("Made For You")
+      //        .font(.system(size: 22, weight: .bold))
+      //        .padding(.horizontal, 20)
+      //
+      //      ScrollView(.horizontal, showsIndicators: false) {
+      //        LazyHStack(spacing: 16) {
+      //          ForEach(recommendations.prefix(10)) { recommendation in
+      //            RecommendationCard(recommendation: recommendation)
+      //              .onTapGesture {
+      //                switch recommendation.item {
+      //                case .song(let song):
+      //                  if let index = recommendationSongs.firstIndex(where: { $0.id == song.id }) {
+      //                    playback.playQueue(
+      //                      recommendationSongs,
+      //                      startingAt: index,
+      //                      from: .recommendation
+      //                    )
+      //                    onSongPlayed()
+      //                  } else {
+      //                    playback.play(song, from: .recommendation)
+      //                    onSongPlayed()
+      //                  }
+      //                case .album(let album):
+      //                  playback.playAlbum(album)
+      //                case .artist(let artist):
+      //                  // Play artist's songs (including featured artists)
+      //                  let artistSongs = SongLibrary.shared.getSongs(byArtist: artist.name)
+      //                  if !artistSongs.isEmpty {
+      //                    playback.playQueue(artistSongs)
+      //                  }
+      //                case .playlist(let playlist):
+      //                  playback.playPlaylist(playlist)
+      //                }
+      //              }
+      //          }
+      //        }
+      //        .padding(.horizontal, 20)
+      //      }
+
+      // MARK: Made for you
+
       Text("Made For You")
         .font(.system(size: 22, weight: .bold))
         .padding(.horizontal, 20)
@@ -362,6 +403,8 @@ struct RecommendationsSection: View {
         }
         .padding(.horizontal, 20)
       }
+
+      // End Made for you
     }
   }
 }

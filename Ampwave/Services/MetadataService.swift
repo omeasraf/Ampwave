@@ -404,6 +404,7 @@ final class MetadataService {
     if let artworkURL = metadata.artworkURL {
       if let artworkPath = await downloadArtwork(from: artworkURL) {
         song.artworkPath = artworkPath
+        song.isRemoteArtwork = true
       }
     }
 

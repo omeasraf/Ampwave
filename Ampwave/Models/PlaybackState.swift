@@ -11,14 +11,14 @@ import SwiftData
 @Model
 final class PlaybackState: Identifiable {
   @Attribute(.unique) var id: UUID
-  
+
   var lastSongId: UUID?
   var lastTime: TimeInterval
   var lastQueueIds: [UUID]
   var lastQueueIndex: Int
   var lastSourceRaw: String?
   var lastPlaylistId: UUID?
-  
+
   init(
     lastSongId: UUID? = nil,
     lastTime: TimeInterval = 0,
@@ -35,7 +35,7 @@ final class PlaybackState: Identifiable {
     self.lastSourceRaw = lastSourceRaw
     self.lastPlaylistId = lastPlaylistId
   }
-  
+
   static func getOrCreate(in modelContext: ModelContext) -> PlaybackState {
     do {
       var descriptor = FetchDescriptor<PlaybackState>()
@@ -44,7 +44,7 @@ final class PlaybackState: Identifiable {
         return existing
       }
     } catch {}
-    
+
     let newState = PlaybackState()
     modelContext.insert(newState)
     try? modelContext.save()
