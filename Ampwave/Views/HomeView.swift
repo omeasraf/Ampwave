@@ -664,6 +664,9 @@ struct BrowseSection: View {
             Text("Browse")
                 .font(.system(size: 22, weight: .bold))
                 .padding(.horizontal, 20)
+            Text("Coming soon")
+                .font(.system(size: 15, weight: .light))
+                .padding(.horizontal, 20)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
@@ -671,14 +674,16 @@ struct BrowseSection: View {
                         title: "Albums",
                         icon: "square.stack",
                         color: .purple
-                    )
+                    ).disabled(true)
                     BrowseCard(title: "Artists", icon: "person.2", color: .pink)
+                        .disabled(true)
                     BrowseCard(
                         title: "Playlists",
                         icon: "list.bullet",
                         color: .cyan
-                    )
+                    ).disabled(true)
                     BrowseCard(title: "Genres", icon: "tag", color: .indigo)
+                        .disabled(true)
                 }
                 .padding(.horizontal, 20)
             }
