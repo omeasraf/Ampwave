@@ -11,12 +11,6 @@ import Foundation
 import Observation
 import SwiftData
 
-#if os(iOS)
-  import UIKit
-#else
-  import AppKit
-#endif
-
 @Observable
 final class MetadataService {
   static let shared = MetadataService()
@@ -196,11 +190,11 @@ final class MetadataService {
       let (data, _) = try await URLSession.shared.data(from: url)
 
       // Validate that data is valid image
-      #if os(iOS)
-        guard UIImage(data: data) != nil else { return nil }
-      #else
-        guard NSImage(data: data) != nil else { return nil }
-      #endif
+//      #if os(iOS)
+//        guard UIImage(data: data) != nil else { return nil }
+//      #else
+//        guard NSImage(data: data) != nil else { return nil }
+//      #endif
 
       // Cache the artwork
       return await cacheArtwork(data, for: nil)

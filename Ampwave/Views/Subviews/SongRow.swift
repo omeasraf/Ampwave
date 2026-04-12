@@ -33,6 +33,12 @@ struct SongRow: View {
 
       Spacer()
 
+      if song.shouldSyncToWatch {
+        Image(systemName: "applewatch")
+          .font(.system(size: 12))
+          .foregroundStyle(.secondary)
+      }
+
       if isCurrent {
         Image(systemName: "waveform")
           .font(.system(size: 14))
