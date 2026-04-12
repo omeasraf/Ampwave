@@ -58,6 +58,14 @@ struct AlbumContextMenuModifier: ViewModifier {
           }
         }
 
+        Button {
+          for song in album.songs {
+            WatchSyncService.shared.updateSyncStatus(for: song, shouldSync: true)
+          }
+        } label: {
+          Label("Sync Album to Watch", systemImage: "applewatch")
+        }
+
         Button(role: .destructive) {
           isDeletingShown = true
         } label: {
@@ -157,6 +165,15 @@ struct SongContextMenuModifier: ViewModifier {
           showingAddToPlaylist = true
         } label: {
           Label("Add to Playlist", systemImage: "text.badge.plus")
+        }
+
+        Button {
+          WatchSyncService.shared.updateSyncStatus(for: song, shouldSync: !song.shouldSyncToWatch)
+        } label: {
+          Label(
+            song.shouldSyncToWatch ? "Remove from Watch" : "Sync to Watch",
+            systemImage: song.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
+          )
         }
 
         Button {

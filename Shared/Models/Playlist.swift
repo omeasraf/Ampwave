@@ -43,6 +43,7 @@ final class Playlist: Identifiable, Hashable {
   // MARK: - User Preferences
   var isPinned: Bool
   var sortOrder: PlaylistSortOrder
+  var shouldSyncToWatch: Bool = false
 
   init(
     name: String,
@@ -50,7 +51,8 @@ final class Playlist: Identifiable, Hashable {
     playlistType: PlaylistType = .custom,
     artworkPath: String? = nil,
     icon: PlaylistIcon? = nil,
-    artworkType: PlaylistArtworkType = .grid
+    artworkType: PlaylistArtworkType = .grid,
+    shouldSyncToWatch: Bool = false
   ) {
     self.id = UUID()
     self.name = name
@@ -63,6 +65,7 @@ final class Playlist: Identifiable, Hashable {
     self.lastModifiedDate = Date()
     self.isPinned = false
     self.sortOrder = .manual
+    self.shouldSyncToWatch = shouldSyncToWatch
   }
 
   /// Returns the song count for this playlist

@@ -47,6 +47,7 @@ struct SettingsView: View {
         libraryStatsSection
       }
 
+      appleWatchSection
       playbackSettingsSection
       librarySettingsSection
       onlineFeaturesSection
@@ -231,6 +232,20 @@ struct SettingsView: View {
       }
     } header: {
       Text("Library Statistics")
+    }
+  }
+
+  private var appleWatchSection: some View {
+    Section {
+      NavigationLink {
+        WatchSyncSettingsView()
+      } label: {
+        Label("Apple Watch Sync", systemImage: "applewatch")
+      }
+    } header: {
+      Text("Apple Watch")
+    } footer: {
+      Text("Manage songs and playlists synced to your Apple Watch.")
     }
   }
 

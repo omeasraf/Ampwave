@@ -101,6 +101,15 @@ struct PlaylistView: View {
             }
           }
 
+          Button {
+            WatchSyncService.shared.updateSyncStatus(for: playlist, shouldSync: !playlist.shouldSyncToWatch)
+          } label: {
+            Label(
+              playlist.shouldSyncToWatch ? "Remove from Watch" : "Sync to Watch",
+              systemImage: playlist.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
+            )
+          }
+
           if playlist.playlistType == .custom
             || playlist.playlistType == .smart
           {

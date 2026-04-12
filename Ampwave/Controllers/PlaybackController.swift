@@ -842,6 +842,13 @@ final class PlaybackController {
     #endif
 
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+    
+    WatchSyncService.shared.updatePlaybackStatus(
+        song: song,
+        isPlaying: isPlaying,
+        currentTime: currentTime,
+        duration: duration
+    )
   }
 
   // MARK: - Persistence
