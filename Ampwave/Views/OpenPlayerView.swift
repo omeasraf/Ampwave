@@ -238,33 +238,35 @@ struct OpenPlayerView: View {
   }
 
   private var extraControls: some View {
-    HStack(spacing: 48) {
-      Button {
-        playback.toggleShuffle()
-      } label: {
-        Image(systemName: "shuffle")
-          .font(.system(size: 22))
-          .foregroundStyle(
-            playback.shuffleMode != .off ? .pink : .secondary
-          )
-      }
+    VStack(spacing: 24) {
+      HStack(spacing: 48) {
+        Button {
+          playback.toggleShuffle()
+        } label: {
+          Image(systemName: "shuffle")
+            .font(.system(size: 22))
+            .foregroundStyle(
+              playback.shuffleMode != .off ? .pink : .secondary
+            )
+        }
 
-      Button {
-        playback.cycleRepeatMode()
-      } label: {
-        Image(systemName: repeatIcon)
-          .font(.system(size: 22))
-          .foregroundStyle(repeatColor)
-      }
+        Button {
+          playback.cycleRepeatMode()
+        } label: {
+          Image(systemName: repeatIcon)
+            .font(.system(size: 22))
+            .foregroundStyle(repeatColor)
+        }
 
-      Button {
-        showingQueue = true
-      } label: {
-        Image(systemName: "list.bullet")
-          .font(.system(size: 22))
-      }
-      .sheet(isPresented: $showingQueue) {
-        QueueSheetView()
+        Button {
+          showingQueue = true
+        } label: {
+          Image(systemName: "list.bullet")
+            .font(.system(size: 22))
+        }
+        .sheet(isPresented: $showingQueue) {
+          QueueSheetView()
+        }
       }
     }
   }

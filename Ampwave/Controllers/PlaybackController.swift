@@ -7,17 +7,107 @@
 //
 
 import AVFoundation
+import AudioToolbox
 import Combine
 import Foundation
 import MediaPlayer
+import MediaToolbox
 import SwiftData
 internal import SwiftUI
 
-#if os(iOS)
-    import UIKit
-#elseif os(macOS)
-    import AppKit
-#endif
+// MARK: - VocalIsolator
+
+// Sound Isolation subtype 'voic'
+let kAudioUnitSubType_SoundIsolation: OSType = 0x766f6963
+
+final class VocalIsolator {
+    static let shared = VocalIsolator()
+    
+    var vocalLevel: Float = 1.0
+    
+    private init() {}
+    
+    func createAudioMix(for item: AVPlayerItem) -> AVAudioMix? {
+        guard let audioTrack = item.asset.tracks(withMediaType: .audio).first else { return nil }
+        
+        var callbacks = MTAudioProcessingTapCallbacks(
+            version: kMTAudioProcessingTapCallbacksVersion_0,
+            clientInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
+            init: { (tap, clientInfo, tapStorageOut) in
+                tapStorageOut.pointee = clientInfo
+            },
+            finalize: nil,
+            prepare: nil,
+            unprepare: nil,
+            process: { (tap, numberFrames, flags, bufferListInOut, numberFramesOut, flagsOut) in
+                let status = MTAudioProcessingTapGetSourceAudio(tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut)
+                if status != noErr { return }
+                
+                let isolator = Unmanaged<VocalIsolator>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).takeUnretainedValue()
+                let vocalLevel = isolator.vocalLevel
+                
+                // If vocalLevel is 1.0, we don't need to do anything
+                if vocalLevel >= 0.99 {
+                    return
+                }
+                
+                let buffers = UnsafeMutableAudioBufferListPointer(bufferListInOut)
+                let numBuffers = buffers.count
+                
+                if numBuffers >= 2 {
+                    // Non-interleaved (separate buffers for L and R)
+                    guard let leftData = buffers[0].mData?.assumingMemoryBound(to: Float.self),
+                          let rightData = buffers[1].mData?.assumingMemoryBound(to: Float.self) else {
+                        return
+                    }
+                    
+                    let k1 = (vocalLevel + 1.0) / 2.0
+                    let k2 = (vocalLevel - 1.0) / 2.0
+                    
+                    for i in 0..<Int(numberFrames) {
+                        let L = leftData[i]
+                        let R = rightData[i]
+                        leftData[i] = k1 * L + k2 * R
+                        rightData[i] = k2 * L + k1 * R
+                    }
+                } else if numBuffers == 1 {
+                    // Interleaved (L and R in the same buffer: L, R, L, R...)
+                    let buffer = buffers[0]
+                    guard buffer.mNumberChannels >= 2,
+                          let data = buffer.mData?.assumingMemoryBound(to: Float.self) else {
+                        return
+                    }
+                    
+                    let k1 = (vocalLevel + 1.0) / 2.0
+                    let k2 = (vocalLevel - 1.0) / 2.0
+                    
+                    for i in 0..<Int(numberFrames) {
+                        let L = data[i * 2]
+                        let R = data[i * 2 + 1]
+                        data[i * 2] = k1 * L + k2 * R
+                        data[i * 2 + 1] = k2 * L + k1 * R
+                    }
+                }
+            }
+        )
+        
+        var tap: MTAudioProcessingTap?
+        let status = MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap)
+        
+        if status != noErr {
+            print("[ERROR] VocalIsolator: Failed to create tap: \(status)")
+            return nil
+        }
+        
+        let inputParams = AVMutableAudioMixInputParameters(track: audioTrack)
+        inputParams.audioTapProcessor = tap
+        
+        let audioMix = AVMutableAudioMix()
+        audioMix.inputParameters = [inputParams]
+        
+        return audioMix
+    }
+}
 
 @Observable
 @MainActor
@@ -43,6 +133,15 @@ final class PlaybackController {
     private(set) var duration: TimeInterval = 0
     private(set) var isPlaying: Bool = false
     private(set) var isLoading: Bool = false
+    
+    // MARK: - Vocal Isolation
+    
+    var showVocalSlider: Bool = false
+    var vocalLevel: Float = 1.0 {
+        didSet {
+            VocalIsolator.shared.vocalLevel = vocalLevel
+        }
+    }
 
     // MARK: - Queue Management
 
@@ -422,28 +521,13 @@ final class PlaybackController {
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
 
-        // Normalization logic
-        if let prefs = preferences, prefs.normalizeVolume {
-            applyNormalization(to: item)
+        // Vocal Isolation
+        if let audioMix = VocalIsolator.shared.createAudioMix(for: item) {
+            item.audioMix = audioMix
         }
 
         observePlayerItem(item)
         return item
-    }
-
-    private func applyNormalization(to item: AVPlayerItem) {
-        // Basic normalization using audio mix to target -14 LUFS roughly
-        // In a real app, we would have pre-calculated ReplayGain values.
-        // Here we can at least ensure peak isn't clipping or apply a slight gain correction if we had metadata.
-        // For now, let's just ensure we have a mix that could be adjusted.
-        let audioParams = AVMutableAudioMixInputParameters(
-            track: item.asset.tracks(withMediaType: .audio).first
-        )
-        // Example: slightly reduce volume to avoid clipping in mixed environments
-        audioParams.setVolume(0.9, at: .zero)
-        let audioMix = AVMutableAudioMix()
-        audioMix.inputParameters = [audioParams]
-        item.audioMix = audioMix
     }
 
     private func observePlayerItem(_ item: AVPlayerItem) {
