@@ -57,44 +57,70 @@ final class SongLibrary {
 
   /// Gets all unique artists from the library
   func allArtists() async -> [Artist] {
+    guard let modelContext = modelContext else { return [] }
+    
+    do {
+      let descriptor = FetchDescriptor<Artist>(
+        sortBy: [SortDescriptor(\.name, order: .forward)]
+      )
+      let fetchedArtists = try modelContext.fetch(descriptor)
+      
+      if fetchedArtists.isEmpty && !songs.isEmpty {
+        print("[DEBUG] SongLibrary.allArtists: No artists in DB but songs exist. Reindexing artists.")
+        return await reindexArtists()
+      }
+      
+      return fetchedArtists
+    } catch {
+      print("[DEBUG] SongLibrary.allArtists: Error fetching artists: \(error)")
+      return []
+    }
+  }
+
+  /// Reindexes all artists from current songs and albums
+  func reindexArtists() async -> [Artist] {
+    print("[DEBUG] SongLibrary.reindexArtists: Starting full artist reindex")
+    guard let modelContext = modelContext else { return [] }
+    
+    // Reset stats for all existing artists
+    do {
+      let descriptor = FetchDescriptor<Artist>()
+      let existingArtists = try modelContext.fetch(descriptor)
+      for artist in existingArtists {
+        artist.songCount = 0
+        artist.albumCount = 0
+      }
+    } catch {
+      print("[DEBUG] SongLibrary.reindexArtists: Error resetting artists: \(error)")
+    }
+    
     var artistMap: [String: Artist] = [:]
 
     for song in songs {
-      // Use individual artists from the artists array
       let artistNames = song.artists.isEmpty ? [song.artist] : song.artists
 
       for artistName in artistNames {
         let trimmedName = artistName.trimmingCharacters(in: .whitespaces)
         guard !trimmedName.isEmpty else { continue }
 
-        if let existing = artistMap[trimmedName] {
-          existing.songCount += 1
-          // Update artwork if needed
-          if existing.artworkPath == nil {
-            existing.artworkPath = song.artworkPath
-          }
-          // Update lastAddedDate
-          if song.importedDate > existing.lastAddedDate {
-            existing.lastAddedDate = song.importedDate
-          }
-          // Update genres
-          if let genre = song.genre, !genre.isEmpty {
-            if existing.genres == nil {
-              existing.genres = [genre]
-            } else if !(existing.genres?.contains(genre) ?? false) {
-              existing.genres?.append(genre)
-            }
-          }
-        } else {
-          let artist = Artist(name: trimmedName)
-          artist.songCount = 1
+        let artist = getOrCreateArtist(named: trimmedName, in: modelContext)
+        
+        // Update statistics
+        artist.songCount += 1
+        if !artist.isDedicatedArtwork {
           artist.artworkPath = song.artworkPath
-          artist.lastAddedDate = song.importedDate
-          if let genre = song.genre {
-            artist.genres = [genre]
-          }
-          artistMap[trimmedName] = artist
         }
+        if song.importedDate > artist.lastAddedDate {
+          artist.lastAddedDate = song.importedDate
+        }
+        if let genre = song.genre, !genre.isEmpty {
+          if artist.genres == nil {
+            artist.genres = [genre]
+          } else if !(artist.genres?.contains(genre) ?? false) {
+            artist.genres?.append(genre)
+          }
+        }
+        artistMap[trimmedName] = artist
       }
     }
 
@@ -106,12 +132,51 @@ final class SongLibrary {
       }
     }
 
-    return artistMap.values.sorted { $0.name < $1.name }
+    saveContext()
+    return Array(artistMap.values).sorted { $0.name < $1.name }
   }
 
-  /// Gets an artist by name
+  /// Gets or creates an artist by name
+  private func getOrCreateArtist(named name: String, in modelContext: ModelContext) -> Artist {
+    let trimmedName = name.trimmingCharacters(in: .whitespaces)
+    
+    do {
+      var descriptor = FetchDescriptor<Artist>(
+        predicate: #Predicate<Artist> { $0.name == trimmedName }
+      )
+      descriptor.fetchLimit = 1
+      if let existing = try modelContext.fetch(descriptor).first {
+        return existing
+      }
+    } catch {
+      print("[DEBUG] SongLibrary.getOrCreateArtist: Error fetching: \(error)")
+    }
+    
+    let newArtist = Artist(name: trimmedName)
+    modelContext.insert(newArtist)
+    return newArtist
+  }
+
+  /// Gets an artist by name from current memory list or DB
   func getArtist(named name: String) -> Artist? {
-    artists.first { $0.name.lowercased() == name.lowercased() }
+    let normalized = name.trimmingCharacters(in: .whitespaces).lowercased()
+    
+    // Check local memory first
+    if let match = artists.first(where: { $0.name.lowercased() == normalized }) {
+      return match
+    }
+    
+    // Fallback to fetching from DB
+    guard let modelContext = modelContext else { return nil }
+    do {
+      var descriptor = FetchDescriptor<Artist>(
+        predicate: #Predicate<Artist> { $0.name.localizedStandardContains(name) }
+      )
+      descriptor.fetchLimit = 1
+      return try modelContext.fetch(descriptor).first { $0.name.lowercased() == normalized }
+    } catch {
+      return nil
+    }
   }
 
   /// Gets all songs by a specific artist (including features)
@@ -568,21 +633,29 @@ final class SongLibrary {
       LyricsService.shared.saveLyrics(for: song, content: lyrics)
     }
 
-    // Link to album
-    print("[DEBUG] SongLibrary.importFile: Linking to album")
-    let primaryArtist =
-      ArtistParser.parseArtists(from: metadata.albumArtist ?? metadata.artist).first
-      ?? (metadata.albumArtist ?? metadata.artist)
+    // Link to album and artist
+    print("[DEBUG] SongLibrary.importFile: Linking to album and artist")
+    let artistNames = ArtistParser.parseArtists(from: metadata.albumArtist ?? metadata.artist)
+    let primaryArtistName = artistNames.first ?? (metadata.albumArtist ?? metadata.artist)
+
+    let artist = getOrCreateArtist(named: primaryArtistName, in: modelContext)
+    artist.songCount += 1
+    if !artist.isDedicatedArtwork { artist.artworkPath = artworkPath }
+    if let genre = metadata.genre, !genre.isEmpty {
+      if artist.genres == nil { artist.genres = [genre] }
+      else if !(artist.genres?.contains(genre) ?? false) { artist.genres?.append(genre) }
+    }
 
     if let album = getOrCreateAlbum(
       name: metadata.album,
-      artist: primaryArtist,
+      artist: primaryArtistName,
       year: metadata.year,
       artworkPath: artworkPath,
       in: modelContext
     ) {
       song.albumReference = album
       album.songs.append(song)
+      if album.songs.count == 1 { artist.albumCount += 1 }
     }
 
     // Background fetch online metadata and assets
@@ -662,19 +735,28 @@ final class SongLibrary {
       LyricsService.shared.saveLyrics(for: song, content: lyrics)
     }
 
-    // Link to album
-    let primaryArtist =
-      ArtistParser.parseArtists(from: metadata.albumArtist ?? metadata.artist).first
-      ?? (metadata.albumArtist ?? metadata.artist)
+    // Link to album and artist
+    let artistNames = ArtistParser.parseArtists(from: metadata.albumArtist ?? metadata.artist)
+    let primaryArtistName = artistNames.first ?? (metadata.albumArtist ?? metadata.artist)
+
+    let artist = getOrCreateArtist(named: primaryArtistName, in: modelContext)
+    artist.songCount += 1
+    if !artist.isDedicatedArtwork { artist.artworkPath = artworkPath }
+    if let genre = metadata.genre, !genre.isEmpty {
+      if artist.genres == nil { artist.genres = [genre] }
+      else if !(artist.genres?.contains(genre) ?? false) { artist.genres?.append(genre) }
+    }
+
     if let album = getOrCreateAlbum(
       name: metadata.album,
-      artist: primaryArtist,
+      artist: primaryArtistName,
       year: metadata.year,
       artworkPath: artworkPath,
       in: modelContext
     ) {
       song.albumReference = album
       album.songs.append(song)
+      if album.songs.count == 1 { artist.albumCount += 1 }
     }
 
     // Background fetch online metadata and assets

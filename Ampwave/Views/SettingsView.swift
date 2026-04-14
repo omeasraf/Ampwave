@@ -409,6 +409,16 @@ struct SettingsView: View {
         }
       }
 
+      Link(destination: URL(string: "https://www.theaudiodb.com")!) {
+        HStack {
+          Label("TheAudioDB", systemImage: "music.mic")
+          Spacer()
+          Text("Biography & Fanart")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
       Link(destination: URL(string: "https://lrclib.net")!) {
         HStack {
           Label("LRCLIB", systemImage: "quote.bubble")

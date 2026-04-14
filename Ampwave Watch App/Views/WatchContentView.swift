@@ -54,7 +54,6 @@ struct WatchContentView: View {
                         showPlayer = true
                     }) {
                         Image(systemName: "play.circle.fill")
-                            .foregroundColor(.accentColor)
                     }
                 }
             }
@@ -66,4 +65,8 @@ struct WatchContentView: View {
             }
         }
     }
+}
+
+#Preview {
+    WatchContentView()
 }
