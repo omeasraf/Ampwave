@@ -9,7 +9,13 @@
 import Foundation
 import SwiftData
 internal import SwiftUI
+
+
+#if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 @Model
 final class Playlist: Identifiable, Hashable {
