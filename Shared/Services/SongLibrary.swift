@@ -179,6 +179,34 @@ final class SongLibrary {
     }
   }
 
+  /// Gets an album by name and artist
+  func getAlbum(named name: String, artist artistName: String) -> Album? {
+    let normalizedName = name.lowercased()
+    let normalizedArtist = artistName.lowercased()
+    
+    // Check local memory first
+    if let match = albums.first(where: { 
+      $0.name.lowercased() == normalizedName && 
+      ($0.artist ?? "").lowercased() == normalizedArtist 
+    }) {
+      return match
+    }
+    
+    // Fallback to fetching from DB
+    guard let modelContext = modelContext else { return nil }
+    do {
+      var descriptor = FetchDescriptor<Album>(
+        predicate: #Predicate<Album> { 
+          $0.name == name && $0.artist == artistName 
+        }
+      )
+      descriptor.fetchLimit = 1
+      return try modelContext.fetch(descriptor).first
+    } catch {
+      return nil
+    }
+  }
+
   /// Gets all songs by a specific artist (including features)
   func getSongs(byArtist artistName: String) -> [LibrarySong] {
     let normalized = artistName.trimmingCharacters(in: .whitespaces).lowercased()

@@ -13,6 +13,8 @@ struct AlbumContextMenuModifier: ViewModifier {
 
   @State private var showingAddToPlaylist = false
   @State private var isDeletingShown = false
+  @State private var showArtist = false
+  @State private var showAlbum = false
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -28,6 +30,20 @@ struct AlbumContextMenuModifier: ViewModifier {
 
   func body(content: Content) -> some View {
     content
+      .background {
+        ZStack {
+          if let artistName = (self as? AlbumContextMenuModifier)?.album.artist ?? (self as? SongContextMenuModifier)?.song.artist,
+             let artist = library.getArtist(named: artistName) {
+            NavigationLink("", destination: ArtistView(artist: artist), isActive: $showArtist)
+          }
+          if let song = (self as? SongContextMenuModifier)?.song,
+             let albumName = song.album,
+             let album = library.getAlbum(named: albumName, artist: song.artist) {
+            NavigationLink("", destination: AlbumView(album: album), isActive: $showAlbum)
+          }
+        }
+        .hidden()
+      }
       .contextMenu {
         Button {
           playback.playAlbum(album)
@@ -42,6 +58,14 @@ struct AlbumContextMenuModifier: ViewModifier {
             isAlbumFavorited ? "Remove from Favorites" : "Add to Favorites",
             systemImage: isAlbumFavorited ? "heart.slash" : "heart"
           )
+        }
+
+        if let artistName = album.artist, library.getArtist(named: artistName) != nil {
+          Button {
+            showArtist = true
+          } label: {
+            Label("Show Artist", systemImage: "person")
+          }
         }
 
         Button {
@@ -124,6 +148,8 @@ struct SongContextMenuModifier: ViewModifier {
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
   @State private var isDeletingShown = false
+  @State private var showArtist = false
+  @State private var showAlbum = false
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -135,6 +161,20 @@ struct SongContextMenuModifier: ViewModifier {
 
   func body(content: Content) -> some View {
     content
+      .background {
+        ZStack {
+          if let artistName = (self as? AlbumContextMenuModifier)?.album.artist ?? (self as? SongContextMenuModifier)?.song.artist,
+             let artist = library.getArtist(named: artistName) {
+            NavigationLink("", destination: ArtistView(artist: artist), isActive: $showArtist)
+          }
+          if let song = (self as? SongContextMenuModifier)?.song,
+             let albumName = song.album,
+             let album = library.getAlbum(named: albumName, artist: song.artist) {
+            NavigationLink("", destination: AlbumView(album: album), isActive: $showAlbum)
+          }
+        }
+        .hidden()
+      }
       .contextMenu {
         Button {
           playback.play(song)
@@ -159,6 +199,22 @@ struct SongContextMenuModifier: ViewModifier {
             playlistManager.isLiked(song: song) ? "Remove from Favorites" : "Add to Favorites",
             systemImage: playlistManager.isLiked(song: song) ? "heart.slash" : "heart"
           )
+        }
+
+        if library.getArtist(named: song.artist) != nil {
+          Button {
+            showArtist = true
+          } label: {
+            Label("Show Artist", systemImage: "person")
+          }
+        }
+
+        if let albumName = song.album, let album = library.getAlbum(named: albumName, artist: song.artist) {
+          Button {
+            showAlbum = true
+          } label: {
+            Label("Show Album", systemImage: "square.stack")
+          }
         }
 
         Button {
@@ -228,3 +284,4 @@ extension View {
     modifier(SongContextMenuModifier(song: song, onEdit: onEdit, onDelete: onDelete))
   }
 }
+

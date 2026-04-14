@@ -151,10 +151,20 @@ struct OpenPlayerView: View {
             .font(.system(size: 22, weight: .bold))
             .lineLimit(1)
 
-          Text(playback.currentItem?.artist ?? "")
-            .font(.system(size: 18))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
+          if let song = playback.currentItem, let artist = SongLibrary.shared.getArtist(named: song.artist) {
+            NavigationLink(destination: ArtistView(artist: artist)) {
+              Text(song.artist)
+                .font(.system(size: 18))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+          } else {
+            Text(playback.currentItem?.artist ?? "")
+              .font(.system(size: 18))
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+          }
         }
 
         Spacer()
