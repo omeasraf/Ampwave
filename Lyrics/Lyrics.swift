@@ -9,6 +9,7 @@ import WidgetKit
 struct LyricsEntry: TimelineEntry {
     let date: Date
     let playbackInfo: SharedPlaybackInfo?
+    let configuration: ConfigurationAppIntent
 }
 
 struct LyricsProvider: AppIntentTimelineProvider {
@@ -36,14 +37,14 @@ struct LyricsProvider: AppIntentTimelineProvider {
     }
 
     func placeholder(in context: Context) -> LyricsEntry {
-        LyricsEntry(date: Date(), playbackInfo: nil)
+        LyricsEntry(date: Date(), playbackInfo: nil, configuration: ConfigurationAppIntent())
     }
 
     func snapshot(
         for configuration: ConfigurationAppIntent,
         in context: Context
     ) async -> LyricsEntry {
-        LyricsEntry(date: Date(), playbackInfo: getPlaybackStatus())
+        LyricsEntry(date: Date(), playbackInfo: getPlaybackStatus(), configuration: configuration)
     }
 
     func timeline(
@@ -56,16 +57,19 @@ struct LyricsProvider: AppIntentTimelineProvider {
         var entries: [LyricsEntry] = []
         let now = Date()
 
-        guard let info = playbackInfo, info.isPlaying, let lyrics = info.lyrics,
-            !lyrics.isEmpty
-        else {
-            // Not playing or no lyrics - just one entry
-            entries.append(LyricsEntry(date: now, playbackInfo: playbackInfo))
+        guard let info = playbackInfo, info.isPlaying else {
+            // Not playing - just one entry
+            entries.append(LyricsEntry(date: now, playbackInfo: playbackInfo, configuration: configuration))
             return Timeline(entries: entries, policy: .atEnd)
         }
 
+        
+        guard let lyrics = info.lyrics else {
+             entries.append(LyricsEntry(date: now, playbackInfo: info, configuration: configuration))
+             return Timeline(entries: entries, policy: .atEnd)
+        }
+
         // Generate timeline entries for each lyric line
-        // We only generate for the next 5-10 minutes or until end of song to avoid huge timelines
         let songStartTime = info.lastUpdated.addingTimeInterval(
             -info.currentTime
         )
@@ -77,13 +81,12 @@ struct LyricsProvider: AppIntentTimelineProvider {
         }
 
         if futureLines.isEmpty {
-            // All lyrics passed? Show last one or just current state
-            entries.append(LyricsEntry(date: now, playbackInfo: info))
+            entries.append(LyricsEntry(date: now, playbackInfo: info, configuration: configuration))
         } else {
             // Create an entry for each future line
             for line in futureLines.prefix(50) {  // Limit to 50 entries
                 let lineDate = songStartTime.addingTimeInterval(line.timestamp)
-                entries.append(LyricsEntry(date: lineDate, playbackInfo: info))
+                entries.append(LyricsEntry(date: lineDate, playbackInfo: info, configuration: configuration))
             }
         }
 
@@ -97,54 +100,42 @@ struct LyricsEntryView: View {
 
     var body: some View {
         if let info = entry.playbackInfo {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .center, spacing: 8) {
-                    if let artworkPath = info.artworkPath,
-                        let artworkURL = resolveArtwork(path: artworkPath)
-                    {
-                        Image(
-                            uiImage: UIImage(contentsOfFile: artworkURL.path)
-                                ?? UIImage()
-                        )
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 20, height: 20)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .center, spacing: 8) {
+                        VStack(alignment: .leading) {
+                            Text(info.title)
+                                .font(.system(size: 10, weight: .bold))
+                                .lineLimit(1)
+                            Text(info.artist)
+                                .font(.system(size: 8))
+                                .lineLimit(1)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    .padding(.bottom, 4)
 
-                    VStack(alignment: .leading) {
-                        Text(info.title)
-                            .font(.system(size: 10, weight: .bold))
-                            .lineLimit(1)
-                        Text(info.artist)
-                            .font(.system(size: 8))
-                            .lineLimit(1)
+                    if let lyrics = info.lyrics, !lyrics.isEmpty {
+                        lyricsView(for: lyrics, at: entry.date, info: info)
+                    } else {
+                        Spacer()
+                        Text("No synced lyrics available")
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        Spacer()
                     }
                 }
-                .padding(.bottom, 4)
-
-                if let lyrics = info.lyrics, !lyrics.isEmpty {
-                    lyricsView(for: lyrics, at: entry.date, info: info)
-                } else {
-                    Spacer()
-                    Text("No synced lyrics available")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                    Spacer()
-                }
-            }
-            .frame(
-                maxWidth: .infinity,
-                maxHeight: .infinity,
-                alignment: .topLeading
-            )
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .topLeading
+                )
+            
         } else {
             VStack {
                 Text("Not Playing")
                     .font(.headline)
-                Text("Open Ampwave to start music")
+                Text("Open Ampwave")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -159,82 +150,44 @@ struct LyricsEntryView: View {
     )
         -> some View
     {
-        let songStartTime = info.lastUpdated.addingTimeInterval(
-            -info.currentTime
-        )
-        let relativeTime = date.timeIntervalSince(songStartTime)
+        // Calculate the elapsed time in the song at the exact moment this timeline entry was intended for
+        let timeSinceUpdate = max(0, date.timeIntervalSince(info.lastUpdated))
+        let playbackProgress = info.isPlaying ? timeSinceUpdate : 0
+        let effectiveTime = info.currentTime + playbackProgress
 
-        let currentIndex = lines.lastIndex { $0.timestamp <= relativeTime } ?? 0
+        let currentIndex = lines.lastIndex { $0.timestamp <= effectiveTime } ?? 0
 
         switch family {
         case .systemSmall:
-            // Just the current line
             Text(lines[currentIndex].text)
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .lineLimit(3)
                 .minimumScaleFactor(0.8)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(
-                    maxWidth: .infinity,
-                    maxHeight: .infinity,
-                    alignment: .center
-                )
                 .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
         case .systemMedium, .systemLarge:
-            // Current and next lines
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 ForEach(0..<maxLines(), id: \.self) { offset in
                     let index = currentIndex + offset
                     if index < lines.count {
                         Text(lines[index].text)
-                            .font(
-                                .system(
-                                    size: 16,
-                                    weight: offset == 0 ? .bold : .medium,
-                                    design: .rounded
-                                )
-                            )
-                            .foregroundStyle(
-                                offset == 0 ? .primary : .secondary
-                            )
-                            .fixedSize(horizontal: false, vertical: true)
-                            .lineLimit(family == .systemMedium ? 1 : 3)
+                            .font(.system(size: 16, weight: offset == 0 ? .bold : .medium, design: .rounded))
+                            .foregroundStyle(offset == 0 ? .primary : .secondary)
+                            .lineLimit(family == .systemMedium ? 1 : 2)
                             .opacity(offset == 0 ? 1.0 : 0.6)
                     }
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
         default:
             Text(lines[currentIndex].text)
-                .font(
-                    .system(
-                        size: 12,
-                        design: .rounded
-                    )
-                )
-                .foregroundStyle(
-                    .primary
-                )
-                .fixedSize(horizontal: false, vertical: true)
-                .lineLimit(family == .systemMedium ? 1 : 3)
-                .opacity(0.6)
+                .font(.system(size: 12, design: .rounded))
         }
     }
 
     private func maxLines() -> Int {
-        family == .systemLarge ? 7 : family == .systemMedium ? 4 : family == .accessoryCircular || family ==
-            .accessoryRectangular ? 2 :  3
-    }
-
-    private func resolveArtwork(path: String) -> URL? {
-        // Since we are in an extension, documents directory is different.
-        // We should have shared artwork in the app group if we want to show it in widget.
-        // For now, we'll try to resolve it from the main app's documents via path if possible,
-        // but typically that's not allowed.
-        // If the path is relative to the documents directory, we can't reach it.
-        // Let's assume for now artwork might not show unless we move it to app group.
-        return nil
+        family == .systemLarge ? 6 : 3
     }
 }
 
@@ -252,10 +205,16 @@ struct Lyrics: Widget {
         }
         .configurationDisplayName("Synced Lyrics")
         .description("See real-time lyrics for the current song.")
+#if os(macOS)
+        .supportedFamilies([
+            .systemSmall, .systemMedium, .systemLarge
+        ])
+#else
         .supportedFamilies([
             .systemSmall, .systemMedium, .systemLarge, .accessoryCircular,
             .accessoryRectangular,
         ])
+#endif
     }
 }
 
@@ -275,6 +234,7 @@ struct Lyrics: Widget {
                 LyricLine(timestamp: 12, text: "Third line is current"),
                 LyricLine(timestamp: 20, text: "Fourth line is next"),
             ]
-        )
+        ),
+        configuration: ConfigurationAppIntent()
     )
 }

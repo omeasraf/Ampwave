@@ -10,7 +10,6 @@ public struct SharedPlaybackInfo: Codable {
     public var title: String
     public var artist: String
     public var album: String?
-    public var artworkPath: String?
     public var isPlaying: Bool
     public var currentTime: TimeInterval
     public var duration: TimeInterval
@@ -22,7 +21,6 @@ public struct SharedPlaybackInfo: Codable {
         title: String = "Not Playing",
         artist: String = "No Artist",
         album: String? = nil,
-        artworkPath: String? = nil,
         isPlaying: Bool = false,
         currentTime: TimeInterval = 0,
         duration: TimeInterval = 0,
@@ -33,7 +31,6 @@ public struct SharedPlaybackInfo: Codable {
         self.title = title
         self.artist = artist
         self.album = album
-        self.artworkPath = artworkPath
         self.isPlaying = isPlaying
         self.currentTime = currentTime
         self.duration = duration

@@ -225,8 +225,8 @@ struct ExpandedLyricsView: View {
             
             Button {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-                    PlaybackController.shared.showVocalSlider.toggle()
-                    if PlaybackController.shared.showVocalSlider {
+                    playback.showVocalSlider.toggle()
+                    if playback.showVocalSlider {
                         resetSliderTimer()
                     } else {
                         sliderHideTimer?.invalidate()
@@ -260,7 +260,7 @@ struct ExpandedLyricsView: View {
         sliderHideTimer?.invalidate()
         sliderHideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
             withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-                PlaybackController.shared.showVocalSlider = false
+                self.playback.showVocalSlider = false
             }
         }
     }

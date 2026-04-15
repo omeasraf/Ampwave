@@ -241,7 +241,7 @@ final class PlaybackController {
                 try session.setCategory(
                     .playback,
                     mode: .default,
-                    options: [.allowBluetooth, .allowAirPlay]
+                    options: []
                 )
                 try session.setActive(true)
                 audioSessionConfigured = true

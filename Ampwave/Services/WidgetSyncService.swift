@@ -24,12 +24,37 @@ public class WidgetSyncService {
     duration: TimeInterval,
     lyrics: SyncedLyric? = nil
   ) {
+    // Check if any widgets are active before syncing
+    WidgetCenter.shared.getCurrentConfigurations { result in
+      switch result {
+      case .success(let info):
+        if !info.isEmpty {
+          self.performSync(
+            song: song,
+            isPlaying: isPlaying,
+            currentTime: currentTime,
+            duration: duration,
+            lyrics: lyrics
+          )
+        }
+      case .failure:
+        break
+      }
+    }
+  }
+
+  private func performSync(
+    song: LibrarySong?,
+    isPlaying: Bool,
+    currentTime: TimeInterval,
+    duration: TimeInterval,
+    lyrics: SyncedLyric? = nil
+  ) {
     let info = SharedPlaybackInfo(
       songId: song?.id,
       title: song?.title ?? "Not Playing",
       artist: song?.artist ?? "No Artist",
       album: song?.album,
-      artworkPath: song?.artworkPath,
       isPlaying: isPlaying,
       currentTime: currentTime,
       duration: duration,

@@ -11,10 +11,12 @@ import SwiftData
 internal import SwiftUI
 
 
-#if os(iOS)
-import UIKit
-#elseif os(macOS)
+#if os(macOS)
 import AppKit
+typealias PlatformColor = NSColor
+#else
+import UIKit
+typealias PlatformColor = UIColor
 #endif
 
 @Model
@@ -207,7 +209,7 @@ extension Sequence where Element: Hashable {
 extension Color {
   /// Returns the hex string representation for this Color (assuming UIColor backend).
   func toHexString() -> String {
-    let uiColor = UIColor(self)
+    let uiColor = PlatformColor(self)
     var r: CGFloat = 0
     var g: CGFloat = 0
     var b: CGFloat = 0
