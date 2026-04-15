@@ -11,12 +11,6 @@ import Foundation
 import Observation
 import SwiftData
 
-#if os(iOS)
-  import UIKit
-#else
-  import AppKit
-#endif
-
 @Observable
 final class MetadataService {
   static let shared = MetadataService()
@@ -27,6 +21,7 @@ final class MetadataService {
   private let musicBrainzDefaultURL = "https://musicbrainz.org/ws/2"
   private let coverArtArchiveURL = "https://coverartarchive.org"
   private let fanartTVURL = "https://webservice.fanart.tv/v3/music"
+  private let theAudioDBURL = "https://www.theaudiodb.com/api/v1/json/2"
 
   // Rate limiting - now MainActor isolated
   @MainActor private var lastRequestTime: Date?
@@ -174,20 +169,46 @@ final class MetadataService {
   func fetchMetadata(for artist: Artist) async -> ArtistMetadata? {
     await respectRateLimit()
 
-    guard let artistInfo = await searchArtist(artist: artist) else {
-      return nil
+    let artistInfo = await searchArtist(artist: artist)
+    let theAudioDBInfo = await searchTheAudioDBArtist(artist: artist)
+    
+    var genres: Set<String> = []
+    if let mbGenres = artistInfo?.genres {
+      for g in mbGenres { genres.insert(g.name) }
+    }
+    
+    if let tdbGenre = theAudioDBInfo?.strGenre, !tdbGenre.isEmpty {
+      genres.insert(tdbGenre)
+    }
+    if let tdbStyle = theAudioDBInfo?.strStyle, !tdbStyle.isEmpty {
+      genres.insert(tdbStyle)
     }
 
     return ArtistMetadata(
-      name: artistInfo.name,
-      sortName: artistInfo.sortName,
-      disambiguation: artistInfo.disambiguation,
-      country: artistInfo.country,
-      genres: artistInfo.genres?.map { $0.name },
-      biography: nil,  // Would need additional API
-      musicBrainzId: artistInfo.id,
-      artworkURL: nil
+      name: artistInfo?.name ?? theAudioDBInfo?.strArtist ?? artist.name,
+      sortName: artistInfo?.sortName,
+      disambiguation: artistInfo?.disambiguation,
+      country: artistInfo?.country ?? theAudioDBInfo?.strCountry,
+      origin: theAudioDBInfo?.strCountry,
+      activeYears: calculateActiveYears(tdb: theAudioDBInfo),
+      genres: Array(genres).sorted(),
+      biography: theAudioDBInfo?.strBiography,
+      musicBrainzId: artistInfo?.id ?? theAudioDBInfo?.strMusicBrainzID,
+      artworkURL: theAudioDBInfo?.strArtistThumb.flatMap { URL(string: $0) },
+      fanartURL: theAudioDBInfo?.strArtistFanart.flatMap { URL(string: $0) }
     )
+  }
+
+  private func calculateActiveYears(tdb: TheAudioDBArtist?) -> String? {
+    guard let tdb = tdb else { return nil }
+    
+    let start = tdb.intBornYear ?? tdb.intFormedYear
+    let end = tdb.strDisbanded == "Yes" ? "Disbanded" : "Present"
+    
+    if let startYear = start {
+        return "\(startYear) – \(end)"
+    }
+    return nil
   }
 
   /// Downloads and caches artwork
@@ -196,11 +217,11 @@ final class MetadataService {
       let (data, _) = try await URLSession.shared.data(from: url)
 
       // Validate that data is valid image
-      #if os(iOS)
-        guard UIImage(data: data) != nil else { return nil }
-      #else
-        guard NSImage(data: data) != nil else { return nil }
-      #endif
+//      #if os(iOS)
+//        guard UIImage(data: data) != nil else { return nil }
+//      #else
+//        guard NSImage(data: data) != nil else { return nil }
+//      #endif
 
       // Cache the artwork
       return await cacheArtwork(data, for: nil)
@@ -324,6 +345,26 @@ final class MetadataService {
       return response.artists?.first
     } catch {
       print("[DEBUG] MetadataService.searchArtist: Decoding error: \(error)")
+      return nil
+    }
+  }
+
+  private func searchTheAudioDBArtist(artist: Artist) async -> TheAudioDBArtist? {
+    var components = URLComponents(string: "\(theAudioDBURL)/search.php")
+    components?.queryItems = [
+      URLQueryItem(name: "s", value: artist.name)
+    ]
+    
+    guard let url = components?.url else { return nil }
+    print("[DEBUG] MetadataService.searchTheAudioDBArtist: URL: \(url.absoluteString)")
+    
+    guard let data = await performRequest(url: url) else { return nil }
+    
+    do {
+      let response = try JSONDecoder().decode(TheAudioDBArtistSearchResponse.self, from: data)
+      return response.artists?.first
+    } catch {
+      print("[DEBUG] MetadataService.searchTheAudioDBArtist: Decoding error: \(error)")
       return nil
     }
   }
@@ -454,4 +495,38 @@ final class MetadataService {
 
     return nil
   }
+}
+
+// MARK: - TheAudioDB Models
+
+struct TheAudioDBArtistSearchResponse: Codable {
+  let artists: [TheAudioDBArtist]?
+}
+
+struct TheAudioDBArtist: Codable {
+  let idArtist: String?
+  let strArtist: String?
+  let strGenre: String?
+  let strStyle: String?
+  let strBiography: String?
+  let strArtistThumb: String?
+  let strArtistLogo: String?
+  let strArtistCutout: String?
+  let strArtistClearart: String?
+  let strArtistWideThumb: String?
+  let strArtistFanart: String?
+  let strArtistFanart2: String?
+  let strArtistFanart3: String?
+  let strArtistBanner: String?
+  let strMusicBrainzID: String?
+  let strISNIcode: String?
+  let strFacebook: String?
+  let strTwitter: String?
+  let strWebsite: String?
+  let strGender: String?
+  let strCountry: String?
+  let strCountryCode: String?
+  let intBornYear: String?
+  let intFormedYear: String?
+  let strDisbanded: String?
 }

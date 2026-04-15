@@ -71,11 +71,13 @@ struct AlbumView: View {
         }
       }
     }
-    .listStyle(.insetGrouped)
     .navigationTitle(album.name)
+    .listStyle(platformListStyle)
+#if os(iOS)
     .navigationBarTitleDisplayMode(.large)
+#endif
     .toolbar {
-      ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItem(placement: .primaryAction) {
         Menu {
           Button {
             showingAddToPlaylist = true
@@ -105,6 +107,14 @@ struct AlbumView: View {
       }
     }
   }
+    
+    private var platformListStyle: some ListStyle {
+#if os(iOS)
+        .insetGrouped
+#else
+        .inset
+#endif
+    }
 
   private var albumHeader: some View {
     VStack(spacing: 16) {

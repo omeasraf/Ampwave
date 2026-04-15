@@ -10,8 +10,10 @@ internal import SwiftUI
 
 #if os(iOS)
   import UIKit
+  typealias PlatformImage = UIImage
 #else
   import AppKit
+  typealias PlatformImage = NSImage
 #endif
 
 #if os(iOS)
@@ -74,8 +76,7 @@ internal import SwiftUI
 
       // Resize to 1x1 for average color sampling
       let size = NSSize(width: 1, height: 1)
-      guard
-        let resizedImage = NSImage(
+      let resizedImage = NSImage(
           size: size,
           flipped: false,
           drawingHandler: { rect in
@@ -83,7 +84,6 @@ internal import SwiftUI
             return true
           }
         )
-      else { return nil }
 
       guard let resizedTiff = resizedImage.tiffRepresentation,
         let resizedBitmap = NSBitmapImageRep(data: resizedTiff)
@@ -96,7 +96,15 @@ internal import SwiftUI
       guard let color = resizedBitmap.colorAt(x: 0, y: 0) else {
         return nil
       }
-      color.getRed(&r, green: &g, blue: &b, alpha: &a)
+      
+      let rgbColor: NSColor
+      if color.colorSpaceName != .deviceRGB && color.colorSpaceName != .calibratedRGB {
+          rgbColor = color.usingColorSpace(.deviceRGB) ?? color
+      } else {
+          rgbColor = color
+      }
+      
+      rgbColor.getRed(&r, green: &g, blue: &b, alpha: &a)
 
       return Color(red: r, green: g, blue: b)
     }

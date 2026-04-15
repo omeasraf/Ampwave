@@ -47,6 +47,9 @@ struct SettingsView: View {
         libraryStatsSection
       }
 
+      #if os(iOS)
+      appleWatchSection
+      #endif
       playbackSettingsSection
       librarySettingsSection
       onlineFeaturesSection
@@ -234,6 +237,20 @@ struct SettingsView: View {
     }
   }
 
+  private var appleWatchSection: some View {
+    Section {
+      NavigationLink {
+        WatchSyncSettingsView()
+      } label: {
+        Label("Apple Watch Sync", systemImage: "applewatch")
+      }
+    } header: {
+      Text("Apple Watch")
+    } footer: {
+      Text("Manage songs and playlists synced to your Apple Watch.")
+    }
+  }
+
   private var playbackSettingsSection: some View {
     Section {
       if let preferences = userPreferences {
@@ -389,6 +406,16 @@ struct SettingsView: View {
           Label("Cover Art Archive", systemImage: "photo.stack")
           Spacer()
           Text("Artwork")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      Link(destination: URL(string: "https://www.theaudiodb.com")!) {
+        HStack {
+          Label("TheAudioDB", systemImage: "music.mic")
+          Spacer()
+          Text("Biography & Fanart")
             .font(.caption)
             .foregroundStyle(.secondary)
         }

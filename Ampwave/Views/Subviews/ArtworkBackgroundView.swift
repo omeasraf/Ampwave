@@ -37,7 +37,10 @@ struct ArtworkBackgroundView: View {
         Color.black.ignoresSafeArea()
       }
     }
-    .task {
+    .task(id: artworkPath) {
+      withAnimation(.easeInOut) {
+        image = nil
+      }
       await loadImage()
     }
   }

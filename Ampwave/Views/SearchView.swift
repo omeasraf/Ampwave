@@ -41,11 +41,19 @@ struct SearchView: View {
       .navigationTitle("Search")
       .searchable(
         text: $searchText,
-        placement: .navigationBarDrawer(displayMode: .always),
+        placement: platformSearchPlacement,
         prompt: "Songs, artists, albums..."
       )
     }
   }
+    
+    private var platformSearchPlacement: SearchFieldPlacement {
+#if os(iOS)
+        return .navigationBarDrawer(displayMode: .always)
+#else
+        return .toolbar
+#endif
+    }
 
   private var filterPicker: some View {
     ScrollView(.horizontal, showsIndicators: false) {

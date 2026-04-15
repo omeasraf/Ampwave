@@ -9,7 +9,15 @@
 import Foundation
 import SwiftData
 internal import SwiftUI
+
+
+#if os(macOS)
+import AppKit
+typealias PlatformColor = NSColor
+#else
 import UIKit
+typealias PlatformColor = UIColor
+#endif
 
 @Model
 final class Playlist: Identifiable, Hashable {
@@ -43,6 +51,7 @@ final class Playlist: Identifiable, Hashable {
   // MARK: - User Preferences
   var isPinned: Bool
   var sortOrder: PlaylistSortOrder
+  var shouldSyncToWatch: Bool = false
 
   init(
     name: String,
@@ -50,7 +59,8 @@ final class Playlist: Identifiable, Hashable {
     playlistType: PlaylistType = .custom,
     artworkPath: String? = nil,
     icon: PlaylistIcon? = nil,
-    artworkType: PlaylistArtworkType = .grid
+    artworkType: PlaylistArtworkType = .grid,
+    shouldSyncToWatch: Bool = false
   ) {
     self.id = UUID()
     self.name = name
@@ -63,6 +73,7 @@ final class Playlist: Identifiable, Hashable {
     self.lastModifiedDate = Date()
     self.isPinned = false
     self.sortOrder = .manual
+    self.shouldSyncToWatch = shouldSyncToWatch
   }
 
   /// Returns the song count for this playlist
@@ -196,14 +207,26 @@ extension Sequence where Element: Hashable {
   }
 }
 extension Color {
-  /// Returns the hex string representation for this Color (assuming UIColor backend).
+  /// Returns the hex string representation for this Color (assuming PlatformColor backend).
   func toHexString() -> String {
-    let uiColor = UIColor(self)
+    let platformColor = PlatformColor(self)
+    
+    #if os(macOS)
+    // On macOS, dynamic colors (catalog colors) will crash if we try to access components directly.
+    // We must convert to a compatible color space first.
+    guard let rgbColor = platformColor.usingColorSpace(.deviceRGB) else {
+      // Fallback to black if conversion fails
+      return "#000000"
+    }
+    #else
+    let rgbColor = platformColor
+    #endif
+    
     var r: CGFloat = 0
     var g: CGFloat = 0
     var b: CGFloat = 0
     var a: CGFloat = 0
-    uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+    rgbColor.getRed(&r, green: &g, blue: &b, alpha: &a)
     let rgb: Int = (Int)(r * 255) << 16 | (Int)(g * 255) << 8 | (Int)(b * 255) << 0
     return String(format: "#%06x", rgb)
   }

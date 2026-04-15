@@ -55,6 +55,9 @@ final class LibrarySong: Identifiable, Hashable {
   // MARK: - Fetching status
   var metadataCheckAttempted: Bool = false
   var lyricsCheckAttempted: Bool = false
+  
+  // MARK: - Watch Sync status
+  var shouldSyncToWatch: Bool = false
 
   init(
     title: String,
@@ -82,7 +85,8 @@ final class LibrarySong: Identifiable, Hashable {
     source: String? = nil,
     output: String? = nil,
     mode: String? = nil,
-    processingChain: String? = nil
+    processingChain: String? = nil,
+    shouldSyncToWatch: Bool = false
   ) {
     self.id = UUID()
     self.title = title
@@ -115,6 +119,7 @@ final class LibrarySong: Identifiable, Hashable {
     self.processingChain = processingChain
     self.metadataCheckAttempted = false
     self.lyricsCheckAttempted = false
+    self.shouldSyncToWatch = shouldSyncToWatch
   }
 
   static func == (lhs: LibrarySong, rhs: LibrarySong) -> Bool {

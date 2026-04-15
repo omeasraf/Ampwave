@@ -44,6 +44,7 @@ struct QueueSheetView: View {
         }
       }
       .navigationTitle("Queue")
+#if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
@@ -56,6 +57,7 @@ struct QueueSheetView: View {
           .fontWeight(.semibold)
         }
       }
+#endif
     }
   }
 

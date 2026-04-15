@@ -62,9 +62,11 @@ struct OpenPlayerView: View {
       }
       //      .background(.ultraThinMaterial)
       .navigationTitle("Now Playing")
+      #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
+      #endif
       .toolbar {
-        ToolbarItem(placement: .navigationBarLeading) {
+        ToolbarItem(placement: .navigation) {
           Button {
             dismiss()
           } label: {
@@ -73,7 +75,7 @@ struct OpenPlayerView: View {
           }
         }
 
-        ToolbarItem(placement: .navigationBarTrailing) {
+        ToolbarItem(placement: .primaryAction) {
           Menu {
             //            Button {
             //              // Share
@@ -130,9 +132,15 @@ struct OpenPlayerView: View {
         }
       }
     }
+    #if os(iOS)
     .fullScreenCover(isPresented: $isLyricsExpanded) {
       ExpandedLyricsView(isExpanded: $isLyricsExpanded)
     }
+    #else
+    .sheet(isPresented: $isLyricsExpanded) {
+      ExpandedLyricsView(isExpanded: $isLyricsExpanded)
+    }
+    #endif
     .sheet(isPresented: $isEditingShown) {
       if let song = playback.currentItem {
         SongEditSheet(song: song, isPresented: $isEditingShown)
@@ -151,10 +159,20 @@ struct OpenPlayerView: View {
             .font(.system(size: 22, weight: .bold))
             .lineLimit(1)
 
-          Text(playback.currentItem?.artist ?? "")
-            .font(.system(size: 18))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
+          if let song = playback.currentItem, let artist = SongLibrary.shared.getArtist(named: song.artist) {
+            NavigationLink(destination: ArtistView(artist: artist)) {
+              Text(song.artist)
+                .font(.system(size: 18))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+          } else {
+            Text(playback.currentItem?.artist ?? "")
+              .font(.system(size: 18))
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+          }
         }
 
         Spacer()
@@ -228,33 +246,35 @@ struct OpenPlayerView: View {
   }
 
   private var extraControls: some View {
-    HStack(spacing: 48) {
-      Button {
-        playback.toggleShuffle()
-      } label: {
-        Image(systemName: "shuffle")
-          .font(.system(size: 22))
-          .foregroundStyle(
-            playback.shuffleMode != .off ? .pink : .secondary
-          )
-      }
+    VStack(spacing: 24) {
+      HStack(spacing: 48) {
+        Button {
+          playback.toggleShuffle()
+        } label: {
+          Image(systemName: "shuffle")
+            .font(.system(size: 22))
+            .foregroundStyle(
+              playback.shuffleMode != .off ? .pink : .secondary
+            )
+        }
 
-      Button {
-        playback.cycleRepeatMode()
-      } label: {
-        Image(systemName: repeatIcon)
-          .font(.system(size: 22))
-          .foregroundStyle(repeatColor)
-      }
+        Button {
+          playback.cycleRepeatMode()
+        } label: {
+          Image(systemName: repeatIcon)
+            .font(.system(size: 22))
+            .foregroundStyle(repeatColor)
+        }
 
-      Button {
-        showingQueue = true
-      } label: {
-        Image(systemName: "list.bullet")
-          .font(.system(size: 22))
-      }
-      .sheet(isPresented: $showingQueue) {
-        QueueSheetView()
+        Button {
+          showingQueue = true
+        } label: {
+          Image(systemName: "list.bullet")
+            .font(.system(size: 22))
+        }
+        .sheet(isPresented: $showingQueue) {
+          QueueSheetView()
+        }
       }
     }
   }
@@ -448,9 +468,11 @@ struct TechnicalInfoSheet: View {
         }
       }
       .navigationTitle("Song Info")
+      #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
+      #endif
       .toolbar {
-        ToolbarItem(placement: .navigationBarTrailing) {
+        ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
         }
       }
@@ -463,21 +485,6 @@ struct TechnicalInfoSheet: View {
       return String(format: "%.1f kHz", rate / 1000)
     } else {
       return String(format: "%.0f Hz", rate)
-    }
-  }
-}
-
-struct InfoRow: View {
-  let label: String
-  let value: String
-
-  var body: some View {
-    HStack {
-      Text(label)
-        .foregroundStyle(.secondary)
-      Spacer()
-      Text(value)
-        .fontWeight(.medium)
     }
   }
 }

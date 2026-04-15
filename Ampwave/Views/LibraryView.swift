@@ -66,7 +66,6 @@ struct LibraryView: View {
         }
       }
       .navigationTitle("Library")
-      .toolbarTitleDisplayMode(.inline)
       .toolbar {
           sortMenu
       }

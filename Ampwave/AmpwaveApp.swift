@@ -41,6 +41,19 @@ struct AmpwaveApp: App {
         configurations: [modelConfiguration]
       )
       print("[DEBUG] ModelContainer created successfully")
+      
+      // Initialize shared services with the main context immediately
+      let context = modelContainer.mainContext
+      SongLibrary.shared.setModelContext(context)
+      PlaybackController.shared.setModelContext(context)
+      PlaylistManager.shared.setModelContext(context)
+      ListeningHistoryTracker.shared.setModelContext(context)
+      MetadataService.shared.setModelContext(context)
+      LyricsService.shared.setModelContext(context)
+      #if os(iOS)
+      WatchSyncService.shared.setModelContext(context)
+      #endif
+      
     } catch {
       fatalError("Could not initialize ModelContainer: \(error)")
     }
