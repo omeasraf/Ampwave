@@ -96,9 +96,16 @@ struct OpenTabView: View {
 //      }
     }
 
+    #if os(iOS)
     .tabViewBottomAccessory {
       MiniPlayerView(isExpanded: $isPlayerExpanded)
     }
+    #else
+    .safeAreaInset(edge: .bottom) {
+      MiniPlayerView(isExpanded: $isPlayerExpanded)
+        .background(.ultraThinMaterial)
+    }
+    #endif
     .ignoresSafeArea(.keyboard)
     .safeAreaInset(edge: .top, spacing: 0) {
       IndexingStatusView()

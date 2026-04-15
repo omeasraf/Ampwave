@@ -252,6 +252,7 @@ final class PlaybackController {
     }
 
     private func setupNotifications() {
+        #if os(iOS)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleAudioSessionInterruption),
@@ -265,6 +266,7 @@ final class PlaybackController {
             name: AVAudioSession.routeChangeNotification,
             object: nil
         )
+        #endif
 
         // Handle item did play to end for manual queue management in AVQueuePlayer if needed
         NotificationCenter.default.addObserver(
@@ -275,6 +277,7 @@ final class PlaybackController {
         )
     }
 
+    #if os(iOS)
     @objc private func handleAudioSessionInterruption(
         _ notification: Notification
     ) {
@@ -314,6 +317,7 @@ final class PlaybackController {
             pause()
         }
     }
+    #endif
 
     @objc private func playerItemDidReachEnd(notification: Notification) {
         guard let item = notification.object as? AVPlayerItem,

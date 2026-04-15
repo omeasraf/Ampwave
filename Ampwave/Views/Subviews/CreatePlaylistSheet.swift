@@ -59,7 +59,9 @@ struct CreatePlaylistSheet: View {
         }
       }
       .navigationTitle("New Playlist")
+#if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
+#endif
       .onChange(of: selectedPhotoItem) { _, newItem in
         Task {
           if let data = try? await newItem?.loadTransferable(type: Data.self) {

@@ -5,6 +5,12 @@
 //  Enhanced artist detail view with header, biography, popular songs, albums, and related artists.
 //
 
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
+
 internal import SwiftUI
 
 struct ArtistView: View {
@@ -33,7 +39,9 @@ struct ArtistView: View {
       }
     }
     .navigationTitle(artist.name)
+#if os(iOS)
     .navigationBarTitleDisplayMode(.inline)
+#endif
     .toolbar {
       toolbarContent
     }
@@ -134,11 +142,19 @@ struct ArtistView: View {
           .fill(.ultraThinMaterial)
           .opacity(0.8)
         
+        #if os(macOS)
+        LinearGradient(
+          colors: [.clear, Color(NSColor.windowBackgroundColor)],
+          startPoint: .center,
+          endPoint: .bottom
+        )
+        #else
         LinearGradient(
           colors: [.clear, Color(UIColor.systemBackground)],
           startPoint: .center,
           endPoint: .bottom
         )
+        #endif
       }
       .ignoresSafeArea(edges: .top)
     }
@@ -256,7 +272,7 @@ struct ArtistView: View {
 
   @ToolbarContentBuilder
   private var toolbarContent: some ToolbarContent {
-    ToolbarItem(placement: .topBarTrailing) {
+    ToolbarItem(placement: .primaryAction) {
       Menu {
         Button {
           Task { await viewModel.refreshMetadata() }

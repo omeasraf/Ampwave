@@ -11,7 +11,6 @@ internal import SwiftUI
 import UIKit
 #else
 import AppKit
-typealias PlatformImage = NSImage
 #endif
 
 @MainActor

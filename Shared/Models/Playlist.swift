@@ -207,14 +207,26 @@ extension Sequence where Element: Hashable {
   }
 }
 extension Color {
-  /// Returns the hex string representation for this Color (assuming UIColor backend).
+  /// Returns the hex string representation for this Color (assuming PlatformColor backend).
   func toHexString() -> String {
-    let uiColor = PlatformColor(self)
+    let platformColor = PlatformColor(self)
+    
+    #if os(macOS)
+    // On macOS, dynamic colors (catalog colors) will crash if we try to access components directly.
+    // We must convert to a compatible color space first.
+    guard let rgbColor = platformColor.usingColorSpace(.deviceRGB) else {
+      // Fallback to black if conversion fails
+      return "#000000"
+    }
+    #else
+    let rgbColor = platformColor
+    #endif
+    
     var r: CGFloat = 0
     var g: CGFloat = 0
     var b: CGFloat = 0
     var a: CGFloat = 0
-    uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+    rgbColor.getRed(&r, green: &g, blue: &b, alpha: &a)
     let rgb: Int = (Int)(r * 255) << 16 | (Int)(g * 255) << 8 | (Int)(b * 255) << 0
     return String(format: "#%06x", rgb)
   }

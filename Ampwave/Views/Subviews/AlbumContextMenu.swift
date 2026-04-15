@@ -82,6 +82,7 @@ struct AlbumContextMenuModifier: ViewModifier {
           }
         }
 
+        #if os(iOS)
         Button {
           for song in album.songs {
             WatchSyncService.shared.updateSyncStatus(for: song, shouldSync: true)
@@ -89,6 +90,7 @@ struct AlbumContextMenuModifier: ViewModifier {
         } label: {
           Label("Sync Album to Watch", systemImage: "applewatch")
         }
+        #endif
 
         Button(role: .destructive) {
           isDeletingShown = true
@@ -223,6 +225,7 @@ struct SongContextMenuModifier: ViewModifier {
           Label("Add to Playlist", systemImage: "text.badge.plus")
         }
 
+        #if os(iOS)
         Button {
           WatchSyncService.shared.updateSyncStatus(for: song, shouldSync: !song.shouldSyncToWatch)
         } label: {
@@ -231,6 +234,7 @@ struct SongContextMenuModifier: ViewModifier {
             systemImage: song.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
           )
         }
+        #endif
 
         Button {
           if let onDelete {

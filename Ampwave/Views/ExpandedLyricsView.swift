@@ -40,49 +40,12 @@ struct ExpandedLyricsView: View {
                                         Array(lyrics.lines.enumerated()),
                                         id: \.element.timestamp
                                     ) { index, line in
-                                        Text(line.text)
-                                            .font(
-                                                .system(
-                                                    size: 24,
-                                                    weight: isCurrentLine(index)
-                                                    ? .bold : .semibold
-                                                )
-                                            )
-                                            .foregroundStyle(
-                                                isCurrentLine(index)
-                                                ? .white : .white.opacity(0.35)
-                                            )
-                                            .multilineTextAlignment(.center)
-                                            .lineLimit(nil)
-                                            .fixedSize(
-                                                horizontal: false,
-                                                vertical: true
-                                            )
-                                            .lineSpacing(4)
-                                            .padding(.horizontal, 32)
-                                            .frame(
-                                                minWidth: 0,
-                                                maxWidth: UIScreen.main.bounds.width - 64,
-                                                alignment: .center
-                                            )
-                                            .scaleEffect(
-                                                isCurrentLine(index) ? 1.05 : 1.0,
-                                                anchor: .center
-                                            )
-                                            .id(index)
-                                            .onTapGesture {
-                                                playback.seek(to: line.timestamp)
-                                                if !playback.isPlaying {
-                                                    playback.play()
-                                                }
-                                            }
-                                            .animation(
-                                                .spring(
-                                                    response: 0.3,
-                                                    dampingFraction: 0.7
-                                                ),
-                                                value: playback.currentLyricIndex
-                                            )
+                                        LyricLineView(
+                                            line: line,
+                                            index: index,
+                                            isCurrent: isCurrentLine(index),
+                                            playback: playback
+                                        )
                                     }
                                     
                                     // Bottom spacer for centering last line
@@ -172,9 +135,11 @@ struct ExpandedLyricsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle(playback.currentItem?.title ?? "")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .navigation) {
                     Button {
                         isExpanded = false
                     } label: {
@@ -499,5 +464,46 @@ struct CompactLyricsView: View {
     }()
     
     return ExpandedLyricsView(isExpanded: .constant(true))
+}
+
+struct LyricLineView: View {
+    let line: LyricLine
+    let index: Int
+    let isCurrent: Bool
+    @Bindable var playback: PlaybackController
+
+    var body: some View {
+        Text(line.text)
+            .font(
+                .system(
+                    size: 24,
+                    weight: isCurrent ? .bold : .semibold
+                )
+            )
+            .foregroundStyle(
+                isCurrent ? .white : .white.opacity(0.35)
+            )
+            .multilineTextAlignment(.center)
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
+            .lineSpacing(4)
+            .padding(.horizontal, 32)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .scaleEffect(
+                isCurrent ? 1.05 : 1.0,
+                anchor: .center
+            )
+            .id(index)
+            .onTapGesture {
+                playback.seek(to: line.timestamp)
+                if !playback.isPlaying {
+                    playback.play()
+                }
+            }
+            .animation(
+                .spring(response: 0.3, dampingFraction: 0.7),
+                value: playback.currentLyricIndex
+            )
+    }
 }
 

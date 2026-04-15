@@ -5,14 +5,10 @@
 //  Handles CarPlay scene connection and interface.
 //
 
+#if os(iOS)
 import CarPlay
 import SwiftData
-
-#if os(iOS)
 import UIKit
-#elseif os(macOS)
-import AppKit
-#endif
 
 class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     var interfaceController: CPInterfaceController?
@@ -259,3 +255,4 @@ extension CarPlaySceneDelegate: CPSearchTemplateDelegate {
         completion()
     }
 }
+#endif

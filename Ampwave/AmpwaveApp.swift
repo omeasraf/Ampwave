@@ -50,7 +50,9 @@ struct AmpwaveApp: App {
       ListeningHistoryTracker.shared.setModelContext(context)
       MetadataService.shared.setModelContext(context)
       LyricsService.shared.setModelContext(context)
+      #if os(iOS)
       WatchSyncService.shared.setModelContext(context)
+      #endif
       
     } catch {
       fatalError("Could not initialize ModelContainer: \(error)")

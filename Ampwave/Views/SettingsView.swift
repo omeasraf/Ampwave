@@ -47,7 +47,9 @@ struct SettingsView: View {
         libraryStatsSection
       }
 
+      #if os(iOS)
       appleWatchSection
+      #endif
       playbackSettingsSection
       librarySettingsSection
       onlineFeaturesSection

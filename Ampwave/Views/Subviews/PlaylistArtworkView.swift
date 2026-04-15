@@ -7,11 +7,6 @@
 
 internal import SwiftUI
 
-#if os(iOS)
-  typealias PlatformImage = UIImage
-#else
-  typealias PlatformImage = NSImage
-#endif
 
 struct PlaylistArtworkView: View {
   let playlist: Playlist

@@ -62,9 +62,11 @@ struct OpenPlayerView: View {
       }
       //      .background(.ultraThinMaterial)
       .navigationTitle("Now Playing")
+      #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
+      #endif
       .toolbar {
-        ToolbarItem(placement: .navigationBarLeading) {
+        ToolbarItem(placement: .navigation) {
           Button {
             dismiss()
           } label: {
@@ -73,7 +75,7 @@ struct OpenPlayerView: View {
           }
         }
 
-        ToolbarItem(placement: .navigationBarTrailing) {
+        ToolbarItem(placement: .primaryAction) {
           Menu {
             //            Button {
             //              // Share
@@ -130,9 +132,15 @@ struct OpenPlayerView: View {
         }
       }
     }
+    #if os(iOS)
     .fullScreenCover(isPresented: $isLyricsExpanded) {
       ExpandedLyricsView(isExpanded: $isLyricsExpanded)
     }
+    #else
+    .sheet(isPresented: $isLyricsExpanded) {
+      ExpandedLyricsView(isExpanded: $isLyricsExpanded)
+    }
+    #endif
     .sheet(isPresented: $isEditingShown) {
       if let song = playback.currentItem {
         SongEditSheet(song: song, isPresented: $isEditingShown)
@@ -460,9 +468,11 @@ struct TechnicalInfoSheet: View {
         }
       }
       .navigationTitle("Song Info")
+      #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
+      #endif
       .toolbar {
-        ToolbarItem(placement: .navigationBarTrailing) {
+        ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
         }
       }
