@@ -10,6 +10,7 @@ internal import SwiftUI
 
 struct PlaylistsListView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.theme) private var theme
     @Query private var settings: [AppSettings]
     @State private var showingCreateSheet = false
     @State private var showUnpinAlert = false
@@ -104,12 +105,13 @@ struct PlaylistsListView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(playlist.name)
                                     .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(theme.primaryText)
 
                                 Text(
                                     "\(playlist.songCount) song\(playlist.songCount == 1 ? "" : "s")"
                                 )
                                 .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(theme.secondaryText)
                             }
 
                             Spacer()
@@ -117,7 +119,7 @@ struct PlaylistsListView: View {
                             if playlist.isPinned {
                                 Image(systemName: "pin.fill")
                                     .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(theme.secondaryText)
                             }
                         }
                     }
@@ -149,6 +151,7 @@ struct PlaylistsListView: View {
                             .tint(.orange)
                         }
                     }
+                    .listRowBackground(theme.secondaryBackground)
                     .alert("Cannot Delete", isPresented: $showUnpinAlert) {
                         Button("OK") {}
                     } message: {
@@ -156,6 +159,8 @@ struct PlaylistsListView: View {
                     }
                 }
             }
+            .listRowBackground(theme.secondaryBackground)
+            .background(theme.background.ignoresSafeArea())
             .listStyle(.plain)
             .overlay {
                 if playlistManager.playlists.isEmpty {
@@ -174,7 +179,7 @@ struct PlaylistsListView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .background(Color.clear)
+            .background(theme.background.ignoresSafeArea())
             .navigationTitle("Playlists")
             .searchable(text: $searchText, prompt: "Search in Playlists")
         }.onAppear {

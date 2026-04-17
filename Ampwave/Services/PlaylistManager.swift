@@ -14,6 +14,7 @@ internal import SwiftUI
 @Observable
 final class PlaylistManager {
   static let shared = PlaylistManager()
+  static let playlistsDidUpdateNotification = Notification.Name("PlaylistManagerDidUpdate")
 
   var modelContext: ModelContext?
   private let library = SongLibrary.shared
@@ -45,6 +46,8 @@ final class PlaylistManager {
       // Ensure "Liked Songs" playlist exists
       await ensureLikedSongsPlaylist()
       sortPlaylists()
+      
+      NotificationCenter.default.post(name: Self.playlistsDidUpdateNotification, object: nil)
     } catch {
       print("[DEBUG] PlaylistManager.loadPlaylists: Error: \(error)")
       playlists = []

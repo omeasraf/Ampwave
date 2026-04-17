@@ -13,6 +13,7 @@ import SwiftData
 @MainActor
 final class SongLibrary {
   static let shared = SongLibrary()
+  static let libraryDidUpdateNotification = Notification.Name("SongLibraryDidUpdate")
 
   private let fileManager = FileManager.default
   private(set) var songs: [LibrarySong] = []
@@ -239,6 +240,8 @@ final class SongLibrary {
     await loadAlbums()
     artists = await allArtists()
     print("[DEBUG] SongLibrary.loadSongs: Finished loading songs, albums, and artists")
+    
+    NotificationCenter.default.post(name: Self.libraryDidUpdateNotification, object: nil)
   }
 
   private func loadAlbums() async {
@@ -411,6 +414,8 @@ final class SongLibrary {
 
     print("[DEBUG] Loading songs")
     await loadSongs()
+    
+    NotificationCenter.default.post(name: Self.libraryDidUpdateNotification, object: nil)
   }
 
   private func findAudioFiles(in directory: URL, currentDepth: Int = 0) -> [URL] {

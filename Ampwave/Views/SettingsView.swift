@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
   @Environment(\.modelContext) private var modelContext
+  @Environment(\.theme) private var theme
   @Query private var preferencesList: [UserPreferences]
   @Query private var settingsList: [AppSettings]
   
@@ -69,7 +70,8 @@ struct SettingsView: View {
     }
     .navigationTitle("Settings")
     .scrollContentBackground(.hidden)
-    .background(Color.clear)
+    .background(theme.background.ignoresSafeArea())
+    .listRowBackground(theme.secondaryBackground)
     .fileImporter(
       isPresented: $isPresentingImporter,
       allowedContentTypes: isImportingFolder ? [.folder] : [.audio],

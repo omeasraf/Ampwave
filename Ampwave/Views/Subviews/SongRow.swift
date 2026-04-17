@@ -8,6 +8,7 @@
 internal import SwiftUI
 
 struct SongRow: View {
+  @Environment(\.theme) private var theme
   let song: LibrarySong
   let isCurrent: Bool
   var showArtwork: Bool = true
@@ -23,11 +24,12 @@ struct SongRow: View {
       VStack(alignment: .leading, spacing: 3) {
         Text(song.title)
           .font(.system(size: 16, weight: isCurrent ? .semibold : .regular))
+          .foregroundStyle(isCurrent ? theme.accent : theme.primaryText)
           .lineLimit(1)
 
         Text(song.artist)
           .font(.system(size: 14))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryText)
           .lineLimit(1)
       }
 
@@ -36,13 +38,13 @@ struct SongRow: View {
       if song.shouldSyncToWatch {
         Image(systemName: "applewatch")
           .font(.system(size: 12))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryText)
       }
 
       if isCurrent {
         Image(systemName: "waveform")
           .font(.system(size: 14))
-          .foregroundStyle(Color.accentColor)
+          .foregroundStyle(theme.accent)
           .symbolEffect(.pulse, options: .repeating)
       }
     }
@@ -54,6 +56,7 @@ struct SongRow: View {
 // MARK: - Compact Song Row
 
 struct CompactSongRow: View {
+  @Environment(\.theme) private var theme
   let song: LibrarySong
   let isCurrent: Bool
 
@@ -66,11 +69,12 @@ struct CompactSongRow: View {
       VStack(alignment: .leading, spacing: 2) {
         Text(song.title)
           .font(.system(size: 15, weight: isCurrent ? .semibold : .medium))
+          .foregroundStyle(isCurrent ? theme.accent : theme.primaryText)
           .lineLimit(1)
 
         Text(song.artist)
           .font(.system(size: 13))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryText)
           .lineLimit(1)
       }
 
@@ -79,7 +83,7 @@ struct CompactSongRow: View {
       if isCurrent {
         Image(systemName: "waveform")
           .font(.system(size: 12))
-          .foregroundStyle(Color.accentColor)
+          .foregroundStyle(theme.accent)
           .symbolEffect(.pulse, options: .repeating)
       }
     }
@@ -91,6 +95,7 @@ struct CompactSongRow: View {
 // MARK: - Song Row with Number
 
 struct NumberedSongRow: View {
+  @Environment(\.theme) private var theme
   let number: Int
   let song: LibrarySong
   let isCurrent: Bool
@@ -103,14 +108,14 @@ struct NumberedSongRow: View {
       if isCurrent {
         Image(systemName: "waveform")
           .font(.system(size: 12))
-          .foregroundStyle(Color.accentColor)
+          .foregroundStyle(theme.accent)
           .symbolEffect(.pulse, options: .repeating)
           .frame(width: 28, alignment: .center)
       }
  else {
         Text("\(number)")
           .font(.system(size: 14, weight: .medium))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryText)
           .frame(width: 28, alignment: .center)
       }
 
@@ -119,11 +124,12 @@ struct NumberedSongRow: View {
       VStack(alignment: .leading, spacing: 2) {
         Text(song.title)
           .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
+          .foregroundStyle(isCurrent ? theme.accent : theme.primaryText)
           .lineLimit(1)
 
         Text(song.artist)
           .font(.system(size: 13))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryText)
           .lineLimit(1)
       }
 

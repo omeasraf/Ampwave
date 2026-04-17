@@ -24,6 +24,7 @@ struct ArtistView: View {
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  @Environment(\.theme) private var theme
 
   var body: some View {
     ScrollView {
@@ -38,6 +39,7 @@ struct ArtistView: View {
         }
       }
     }
+    .background(theme.background.ignoresSafeArea())
     .navigationTitle(artist.name)
 #if os(iOS)
     .navigationBarTitleDisplayMode(.inline)
@@ -142,19 +144,11 @@ struct ArtistView: View {
           .fill(.ultraThinMaterial)
           .opacity(0.8)
         
-        #if os(macOS)
         LinearGradient(
-          colors: [.clear, Color(NSColor.windowBackgroundColor)],
+          colors: [.clear, theme.background],
           startPoint: .center,
           endPoint: .bottom
         )
-        #else
-        LinearGradient(
-          colors: [.clear, Color(UIColor.systemBackground)],
-          startPoint: .center,
-          endPoint: .bottom
-        )
-        #endif
       }
       .ignoresSafeArea(edges: .top)
     }

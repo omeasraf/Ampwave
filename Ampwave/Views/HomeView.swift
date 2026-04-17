@@ -12,6 +12,7 @@ internal import SwiftUI
 struct HomeView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.theme) private var theme
 
     private var library: SongLibrary { SongLibrary.shared }
     private var playback: PlaybackController { PlaybackController.shared }
@@ -130,7 +131,7 @@ struct HomeView: View {
             .padding(.vertical, 20)
         }
         .scrollContentBackground(.hidden)
-        .background(Color.clear)
+        .background(theme.background.ignoresSafeArea())
         .navigationTitle("Home")
         .task {
             // Only load data once on initial appearance
@@ -334,6 +335,7 @@ struct HorizontalSongSection: View {
 // MARK: - Song Card
 
 struct SongCard: View {
+    @Environment(\.theme) private var theme
     let song: LibrarySong
 
     var body: some View {
@@ -343,11 +345,12 @@ struct SongCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(song.title)
                     .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(theme.primaryText)
                     .lineLimit(1)
 
                 Text(song.artist)
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondaryText)
                     .lineLimit(1)
             }
             .frame(width: 140, alignment: .leading)
@@ -470,6 +473,7 @@ struct RecommendationsSection: View {
 // MARK: - Recommendation Card
 
 struct RecommendationCard: View {
+    @Environment(\.theme) private var theme
     let recommendation: Recommendation
 
     var body: some View {
@@ -528,11 +532,12 @@ struct RecommendationCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(theme.primaryText)
                     .lineLimit(1)
 
                 Text(recommendation.reason.displayText)
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondaryText)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -619,6 +624,7 @@ struct QuickAccessSection: View {
 // MARK: - Quick Access Button
 
 struct QuickAccessButton: View {
+    @Environment(\.theme) private var theme
     let title: String
     let subtitle: String
     let icon: String
@@ -640,15 +646,16 @@ struct QuickAccessButton: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(theme.primaryText)
                     Text(subtitle)
                         .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(theme.secondaryText)
                 }
 
                 Spacer()
             }
             .padding()
-            .background(.ultraThinMaterial)
+            .background(theme.secondaryBackground)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -694,6 +701,7 @@ struct BrowseSection: View {
 // MARK: - Browse Card
 
 struct BrowseCard: View {
+    @Environment(\.theme) private var theme
     let title: String
     let icon: String
     let color: Color
@@ -707,6 +715,7 @@ struct BrowseCard: View {
 
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(theme.primaryText)
             }
             .frame(width: 100, height: 100)
             .background(color.opacity(0.12))

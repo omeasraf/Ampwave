@@ -10,6 +10,7 @@ internal import SwiftUI
 
 struct LibraryView: View {
   @Environment(\.modelContext) private var modelContext
+    @Environment(\.theme) private var theme
   @Query private var settings: [AppSettings]
   @State private var selectedTab: LibraryTab = .songs
   @State private var searchText = ""
@@ -70,7 +71,9 @@ struct LibraryView: View {
           sortMenu
       }
       .searchable(text: $searchText, prompt: "Search in Library")
-    }
+    }    .scrollContentBackground(.hidden)
+          .listRowBackground(theme.secondaryBackground)
+          .background(theme.background.ignoresSafeArea())
     .onAppear {
       playlistManager.setModelContext(modelContext)
     }
@@ -139,6 +142,7 @@ struct SongsListView: View {
   let searchText: String
   @Environment(\.modelContext) private var modelContext
   @Query private var settings: [AppSettings]
+    @Environment(\.theme) private var theme
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playback: PlaybackController { PlaybackController.shared }
@@ -204,6 +208,7 @@ struct SongsListView: View {
           song: song,
           isCurrent: playback.currentItem?.id == song.id
         )
+        .listRowBackground(theme.secondaryBackground)
         .contentShape(Rectangle())
         .onTapGesture {
           playback.playQueue(
@@ -236,7 +241,8 @@ struct SongsListView: View {
     }
     .listStyle(.plain)
     .scrollContentBackground(.hidden)
-    .background(Color.clear)
+    .listRowBackground(theme.secondaryBackground)
+    .background(theme.background.ignoresSafeArea())
     .overlay {
       if library.songs.isEmpty {
         ContentUnavailableView(
@@ -262,6 +268,7 @@ struct SongsListView: View {
 struct AlbumsGridView: View {
   let searchText: String
   @Environment(\.modelContext) private var modelContext
+  @Environment(\.theme) private var theme
   @Query private var settings: [AppSettings]
 
   private var library: SongLibrary { SongLibrary.shared }
@@ -338,6 +345,8 @@ struct AlbumsGridView: View {
         .padding(.top, 12)
       }
     }
+    .scrollContentBackground(.hidden)
+    .background(theme.background.ignoresSafeArea())
   }
 }
 
@@ -350,6 +359,7 @@ struct AlbumsGridView: View {
 struct ArtistsListView: View {
   let searchText: String
   @Environment(\.modelContext) private var modelContext
+  @Environment(\.theme) private var theme
   @Query private var settings: [AppSettings]
   @State private var artists: [Artist] = []
 
@@ -408,10 +418,13 @@ struct ArtistsListView: View {
               .foregroundStyle(.secondary)
             }
           }
-        }
+        }.listRowBackground(theme.secondaryBackground)
       }
     }
     .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .listRowBackground(theme.secondaryBackground)
+    .background(theme.background.ignoresSafeArea())
     .overlay {
       if artists.isEmpty {
         ContentUnavailableView(

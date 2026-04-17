@@ -73,4 +73,42 @@ extension Color {
             return String(format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255))
         }
     }
+
+    func adjusted(by amount: Double) -> Color {
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        
+        #if os(macOS)
+        let uiColor = NSColor(self)
+        guard let rgbColor = uiColor.usingColorSpace(.deviceRGB) else { return self }
+        rgbColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        #else
+        let uiColor = UIColor(self)
+        if !uiColor.getRed(&r, green: &g, blue: &b, alpha: &a) {
+            if uiColor.getWhite(&r, alpha: &a) {
+                g = r
+                b = r
+            } else {
+                return self
+            }
+        }
+        #endif
+        
+        return Color(
+            red: min(max(Double(r) + amount, 0), 1),
+            green: min(max(Double(g) + amount, 0), 1),
+            blue: min(max(Double(b) + amount, 0), 1),
+            opacity: Double(a)
+        )
+    }
+
+    func lighter(by amount: Double = 0.1) -> Color {
+        return adjusted(by: amount)
+    }
+
+    func darker(by amount: Double = 0.1) -> Color {
+        return adjusted(by: -amount)
+    }
 }

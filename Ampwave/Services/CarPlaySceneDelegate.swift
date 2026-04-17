@@ -13,6 +13,7 @@ import UIKit
 @MainActor
 class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     var interfaceController: CPInterfaceController?
+    private var observers: [Any] = []
     
     // Use the shared services
     private let playback = PlaybackController.shared
@@ -23,13 +24,115 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
         print("[DEBUG] CarPlay: Connected")
         self.interfaceController = controller
         
+        setupObservers()
+        
         // Setup initial interface
         updateRootTemplate()
+        
+        // Trigger loading if library is empty
+        if library.songs.isEmpty {
+            Task {
+                await library.loadSongs()
+            }
+        }
+        
+        if playlistManager.playlists.isEmpty {
+            Task {
+                await playlistManager.loadPlaylists()
+            }
+        }
     }
     
     func templateApplicationScene(_ scene: CPTemplateApplicationScene, didDisconnectFrom controller: CPInterfaceController) {
         print("[DEBUG] CarPlay: Disconnected")
         self.interfaceController = nil
+        observers.removeAll()
+    }
+    
+    private func setupObservers() {
+        observers.append(NotificationCenter.default.addObserver(forName: SongLibrary.libraryDidUpdateNotification, object: nil, queue: .main) { [weak self] _ in
+            print("[DEBUG] CarPlay: Library updated, refreshing root template")
+            self?.updateRootTemplate()
+        })
+        
+        observers.append(NotificationCenter.default.addObserver(forName: PlaylistManager.playlistsDidUpdateNotification, object: nil, queue: .main) { [weak self] _ in
+            print("[DEBUG] CarPlay: Playlists updated, refreshing root template")
+            self?.updateRootTemplate()
+        })
+        
+        observers.append(NotificationCenter.default.addObserver(forName: PlaybackController.playbackStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            print("[DEBUG] CarPlay: Playback state changed, updating lyrics")
+            self?.updateLyricsTab()
+        })
+        
+        observers.append(NotificationCenter.default.addObserver(forName: PlaybackController.lyricIndexDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateLyricsTab()
+        })
+    }
+    
+    private func updateLyricsTab() {
+        guard let interfaceController = interfaceController,
+              let tabBar = interfaceController.rootTemplate as? CPTabBarTemplate else { return }
+        
+        // Find the lyrics template in the tab bar
+        guard let lyricsTemplate = tabBar.templates.first(where: { $0.tabTitle == "Lyrics" }) as? CPListTemplate else { return }
+        
+        guard let song = playback.currentItem else {
+            let section = CPListSection(items: [CPListItem(text: "Not Playing", detailText: nil)])
+            lyricsTemplate.updateSections([section])
+            return
+        }
+        
+        guard let lyrics = playback.currentLyrics, !lyrics.lines.isEmpty else {
+            let section = CPListSection(items: [CPListItem(text: "No lyrics available for this song", detailText: nil)])
+            lyricsTemplate.updateSections([section])
+            return
+        }
+        
+        let currentIndex = playback.currentLyricIndex ?? 0
+        
+        // Show a window of lyrics around the current line for better at-a-glance viewing in CarPlay
+        // This also avoids issues with long lists and ensures the current line is always visible
+        let windowSize = 6
+        let halfWindow = windowSize / 2
+        
+        var start = max(0, currentIndex - halfWindow)
+        let end = min(lyrics.lines.count, start + windowSize)
+        
+        // Adjust start if we are near the end
+        if end == lyrics.lines.count {
+            start = max(0, end - windowSize)
+        }
+        
+        let windowedLines = lyrics.lines[start..<end]
+        
+        let items = windowedLines.enumerated().map { offset, line in
+            let index = start + offset
+            let item = CPListItem(text: line.text, detailText: nil)
+            if index == currentIndex {
+                item.setImage(UIImage(systemName: "play.fill"))
+                // Optional: add a visual indicator in text too
+                item.setText("▶ \(line.text)")
+            }
+            return item
+        }
+        
+        let section = CPListSection(items: items)
+        
+        // Add a "Show All Lyrics" item if we are windowing
+        var footerItems: [CPListItem] = []
+        if lyrics.lines.count > windowSize {
+            let moreItem = CPListItem(text: "... more lyrics ...", detailText: "See full lyrics on iPhone")
+            moreItem.isEnabled = false
+            footerItems.append(moreItem)
+        }
+        
+        var sections = [section]
+        if !footerItems.isEmpty {
+            sections.append(CPListSection(items: footerItems))
+        }
+        
+        lyricsTemplate.updateSections(sections)
     }
     
     private func updateRootTemplate() {
@@ -37,12 +140,25 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
         let libraryTemplate = createLibraryTemplate()
         let playlistsTemplate = createPlaylistsTemplate()
         let searchTab = createSearchTabTemplate()
+        let lyricsTab = createLyricsTabTemplate()
         
-        let tabBar = CPTabBarTemplate(templates: [recentlyPlayed, libraryTemplate, playlistsTemplate, searchTab])
+        let tabBar = CPTabBarTemplate(templates: [recentlyPlayed, libraryTemplate, playlistsTemplate, lyricsTab, searchTab])
         interfaceController?.setRootTemplate(tabBar, animated: true, completion: nil)
+        
+        // Initial update for lyrics if something is already playing
+        updateLyricsTab()
     }
     
     // MARK: - Templates
+    
+    private func createLyricsTabTemplate() -> CPListTemplate {
+        let template = CPListTemplate(title: "Lyrics", sections: [])
+        template.tabImage = UIImage(systemName: "quote.bubble.fill")
+        template.tabTitle = "Lyrics"
+        
+        // We will update this template dynamically when it's about to appear
+        return template
+    }
     
     private func createSearchTabTemplate() -> CPListTemplate {
         let item = CPListItem(text: "Search", detailText: "Search your library")

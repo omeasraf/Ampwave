@@ -27,6 +27,8 @@ struct OpenPlayerView: View {
     playlistManager.playlists.filter { $0.playlistType != .likedSongs }
   }
 
+  @Environment(\.theme) private var theme
+
   enum PlayerTab: String, CaseIterable {
     case lyrics = "Lyrics"
     case queue = "Queue"
@@ -60,7 +62,8 @@ struct OpenPlayerView: View {
         .padding(.top, 20)
         .padding(.bottom, 10)
       }
-      //      .background(.ultraThinMaterial)
+      .scrollContentBackground(.hidden)
+      .background(theme.background.ignoresSafeArea())
       .navigationTitle("Now Playing")
       #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)

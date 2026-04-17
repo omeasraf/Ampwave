@@ -113,6 +113,8 @@ final class VocalIsolator {
 @MainActor
 final class PlaybackController {
     static let shared = PlaybackController()
+    static let playbackStateDidChangeNotification = Notification.Name("PlaybackStateDidChange")
+    static let lyricIndexDidChangeNotification = Notification.Name("LyricIndexDidChange")
 
     private var player: AVQueuePlayer?
     private var timeObserver: Any?
@@ -961,18 +963,19 @@ final class PlaybackController {
 
     private func updateCurrentLyric() {
         guard let lyrics = currentLyrics else {
-            currentLyricIndex = nil
+            if currentLyricIndex != nil {
+                currentLyricIndex = nil
+                NotificationCenter.default.post(name: Self.lyricIndexDidChangeNotification, object: nil)
+            }
             return
         }
-        currentLyricIndex = lyrics.lineIndex(at: currentTime)
 
         let newIndex = lyrics.lineIndex(at: currentTime)
 
         if newIndex != currentLyricIndex {
             currentLyricIndex = newIndex
             updateWidget(force: true)
-        } else {
-            currentLyricIndex = newIndex
+            NotificationCenter.default.post(name: Self.lyricIndexDidChangeNotification, object: nil)
         }
     }
 
@@ -1031,6 +1034,7 @@ final class PlaybackController {
         )
 
         updateWidget(force: true)
+        NotificationCenter.default.post(name: Self.playbackStateDidChangeNotification, object: nil)
     }
 
     private var lastWidgetSongId: UUID?

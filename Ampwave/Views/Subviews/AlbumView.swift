@@ -12,68 +12,70 @@ struct AlbumView: View {
 
   @State private var showingAddToPlaylist = false
 
-  private var playback: PlaybackController { PlaybackController.shared }
-  private var playlistManager: PlaylistManager { PlaylistManager.shared }
+    @Environment(\.theme) private var theme
+    private var playback: PlaybackController { PlaybackController.shared }
+    private var playlistManager: PlaylistManager { PlaylistManager.shared }
 
-  var sortedSongs: [LibrarySong] {
-    album.songs.sorted { ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0) }
-  }
-
-  var body: some View {
-    List {
-      Section {
-        albumHeader
-      }
-      .listRowBackground(Color.clear)
-      .listRowInsets(EdgeInsets())
-
-      Section {
-        actionButtons
-      }
-      .listRowBackground(Color.clear)
-
-      if !sortedSongs.isEmpty {
-        Section {
-          ForEach(Array(sortedSongs.enumerated()), id: \.element.id) {
-            index,
-            song in
-            NumberedSongRow(
-              number: index + 1,
-              song: song,
-              isCurrent: playback.currentItem?.id == song.id
-            )
-            .contentShape(Rectangle())
-            .onTapGesture {
-              playback.playAlbum(album, startingAtTrack: index)
-            }
-            .swipeActions(edge: .trailing) {
-              Button {
-                playlistManager.toggleLike(song: song)
-              } label: {
-                Image(
-                  systemName: playlistManager.isLiked(
-                    song: song
-                  ) ? "heart.slash" : "heart"
-                )
-              }
-              .tint(.pink)
-
-              Button {
-                playback.playNext(song)
-              } label: {
-                Label("Play Next", systemImage: "text.insert")
-              }
-              .tint(.orange)
-            }
-          }
-        } header: {
-          Text("Tracks")
-        }
-      }
+    var sortedSongs: [LibrarySong] {
+        album.songs.sorted { ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0) }
     }
-    .navigationTitle(album.name)
-    .listStyle(platformListStyle)
-    .scrollContentBackground(.hidden)
+
+    var body: some View {
+        List {
+            Section {
+                albumHeader
+            }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets())
+
+            Section {
+                actionButtons
+            }
+            .listRowBackground(Color.clear)
+
+            if !sortedSongs.isEmpty {
+                Section {
+                    ForEach(Array(sortedSongs.enumerated()), id: \.element.id) {
+                        index,
+                        song in
+                        NumberedSongRow(
+                            number: index + 1,
+                            song: song,
+                            isCurrent: playback.currentItem?.id == song.id
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            playback.playAlbum(album, startingAtTrack: index)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button {
+                                playlistManager.toggleLike(song: song)
+                            } label: {
+                                Image(
+                                    systemName: playlistManager.isLiked(
+                                        song: song
+                                    ) ? "heart.slash" : "heart"
+                                )
+                            }
+                            .tint(.pink)
+
+                            Button {
+                                playback.playNext(song)
+                            } label: {
+                                Label("Play Next", systemImage: "text.insert")
+                            }
+                            .tint(.orange)
+                        }
+                    }
+                } header: {
+                    Text("Tracks")
+                }
+            }
+        }
+        .navigationTitle(album.name)
+        .listStyle(platformListStyle)
+        .scrollContentBackground(.hidden)
+        .background(theme.background.ignoresSafeArea())
 #if os(iOS)
     .navigationBarTitleDisplayMode(.large)
 #endif

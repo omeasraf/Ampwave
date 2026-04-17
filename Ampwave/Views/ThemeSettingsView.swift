@@ -10,6 +10,7 @@ struct ThemeSettingsView: View {
     @Bindable var preferences: UserPreferences
     @Environment(\.modelContext) private var modelContext
     @Environment(\.colorScheme) var colorScheme
+    @Environment(\.theme) private var theme
     
     @State private var accentColor: Color = .blue
     @State private var backgroundColor: Color = .black
@@ -91,6 +92,8 @@ struct ThemeSettingsView: View {
         }
         .navigationTitle("Appearance")
         .scrollContentBackground(.hidden)
+        .listRowBackground(theme.secondaryBackground)
+        .background(theme.background.ignoresSafeArea())
         .onAppear {
             updateColorsFromPreferences()
         }
@@ -123,45 +126,3 @@ struct ThemeSettingsView: View {
     }
 }
 
-extension View {
-    func themeAware(_ preferences: UserPreferences) -> some View {
-        modifier(ThemeModifier(preferences: preferences))
-    }
-}
-
-struct ThemeModifier: ViewModifier {
-    @Bindable var preferences: UserPreferences
-    @Environment(\.colorScheme) var colorScheme
-    
-    func body(content: Content) -> some View {
-        let isDark = preferences.selectedTheme.preferredColorScheme == .dark || (preferences.selectedTheme == .system && colorScheme == .dark)
-        let backgroundColor = currentBackgroundColor(isDark: isDark)
-        let accentColor = currentAccentColor
-        
-        content
-            .tint(accentColor)
-            .accentColor(accentColor)
-            .preferredColorScheme(preferences.selectedTheme.preferredColorScheme)
-            .scrollContentBackground(.hidden)
-            .background(backgroundColor.ignoresSafeArea())
-            // Ensure toolbars are also themed or transparent
-            .toolbarBackground(backgroundColor, for: .navigationBar, .tabBar)
-            .toolbarBackground(.visible, for: .navigationBar, .tabBar)
-    }
-    
-    private func currentBackgroundColor(isDark: Bool) -> Color {
-        if preferences.selectedTheme == .custom {
-            if let hex = preferences.customBackgroundColorHex, let color = Color(hex: hex) {
-                return color
-            }
-        }
-        return preferences.selectedTheme.backgroundColor(isDark: isDark) ?? (isDark ? Color(white: 0.05) : Color(white: 0.95))
-    }
-    
-    private var currentAccentColor: Color {
-        if let hex = preferences.customAccentColorHex, let color = Color(hex: hex) {
-            return color
-        }
-        return preferences.selectedTheme.accentColor() ?? .accentColor
-    }
-}

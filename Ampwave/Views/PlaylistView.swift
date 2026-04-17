@@ -16,49 +16,53 @@ struct PlaylistView: View {
   @State private var showingAddSongsSheet = false
   @State private var showingDeleteConfirmation = false
 
-  private var playback: PlaybackController { PlaybackController.shared }
-  private var playlistManager: PlaylistManager { PlaylistManager.shared }
+    @Environment(\.theme) private var theme
+    private var playback: PlaybackController { PlaybackController.shared }
+    private var playlistManager: PlaylistManager { PlaylistManager.shared }
 
-  var body: some View {
-    List {
-      Section {
-        playlistHeader
-      }
-      .listRowBackground(Color.clear)
-      .listRowInsets(EdgeInsets())
-
-      if !playlist.songs.isEmpty {
-        Section {
-          ForEach(playlist.songs) { song in
-            SongRow(
-              song: song,
-              isCurrent: playback.currentItem?.id == song.id
-            )
-            .contentShape(Rectangle())
-            .onTapGesture {
-              playback.playPlaylist(
-                playlist,
-                startingAt: playlist.songs.firstIndex(where: {
-                  $0.id == song.id
-                }) ?? 0
-              )
+    var body: some View {
+        List {
+            Section {
+                playlistHeader
             }
-          }
-          .onDelete(perform: deleteSongs)
-          .onMove(perform: moveSongs)
+            .listRowBackground(theme.secondaryBackground)
+            .background(theme.background.ignoresSafeArea())
+            .listRowInsets(EdgeInsets())
+
+            if !playlist.songs.isEmpty {
+                Section {
+                    ForEach(playlist.songs) { song in
+                        SongRow(
+                            song: song,
+                            isCurrent: playback.currentItem?.id == song.id
+                        )
+                        .listRowBackground(theme.secondaryBackground)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            playback.playPlaylist(
+                                playlist,
+                                startingAt: playlist.songs.firstIndex(where: {
+                                    $0.id == song.id
+                                }) ?? 0
+                            )
+                        }
+                    }
+                    .onDelete(perform: deleteSongs)
+                    .onMove(perform: moveSongs)
+                }
+            } else {
+                Section {
+                    ContentUnavailableView(
+                        "Empty Playlist",
+                        systemImage: "music.note.list",
+                        description: Text("Add songs to get started")
+                    )
+                }
+            }
         }
-      } else {
-        Section {
-          ContentUnavailableView(
-            "Empty Playlist",
-            systemImage: "music.note.list",
-            description: Text("Add songs to get started")
-          )
-        }
-      }
-    }
-    .listStyle(platformListStyle)
-    .scrollContentBackground(.hidden)
+        .listStyle(platformListStyle)
+        .scrollContentBackground(.hidden)
+        .background(theme.background.ignoresSafeArea())
     .navigationTitle(playlist.name)
     #if os(iOS)
     .navigationBarTitleDisplayMode(.large)
