@@ -10,6 +10,7 @@ import SwiftData
 internal import SwiftUI
 
 struct OpenTabView: View {
+  @Bindable var preferences: UserPreferences
   @Environment(\.modelContext) private var modelContext
   @Binding var isPlayerExpanded: Bool
   @State private var selectedTab: AppTab = .home
@@ -87,15 +88,7 @@ struct OpenTabView: View {
           SettingsView()
         }
       }
-
-      // Search tab (special role)
-//      Tab(value: AppTab.search, role: .search) {
-//        NavigationStack {
-//          SearchView()
-//        }
-//      }
     }
-
     #if os(iOS)
     .tabViewBottomAccessory {
       MiniPlayerView(isExpanded: $isPlayerExpanded)
@@ -167,5 +160,5 @@ struct OpenTabView: View {
 // Custom floating tab bar removed in favor of native TabView
 
 #Preview {
-  OpenTabView(isPlayerExpanded: .constant(false))
+  OpenTabView(preferences: UserPreferences(), isPlayerExpanded: .constant(false))
 }

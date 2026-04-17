@@ -222,7 +222,7 @@ struct SongsListView: View {
                 ? "heart.slash" : "heart"
             )
           }
-          .tint(playlistManager.isLiked(song: song) ? .gray : .pink)
+          .tint(playlistManager.isLiked(song: song) ? .gray : .accentColor)
         }
         .swipeActions(edge: .leading) {
           Button {
@@ -235,6 +235,8 @@ struct SongsListView: View {
       }
     }
     .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .background(Color.clear)
     .overlay {
       if library.songs.isEmpty {
         ContentUnavailableView(

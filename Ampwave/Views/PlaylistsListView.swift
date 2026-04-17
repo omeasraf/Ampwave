@@ -171,9 +171,12 @@ struct PlaylistsListView: View {
                         description: Text("No playlists match your search")
                     )
                 }
-            }.listStyle(.plain)
-                .navigationTitle("Playlists")
-                .searchable(text: $searchText, prompt: "Search in Playlists")
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
+            .navigationTitle("Playlists")
+            .searchable(text: $searchText, prompt: "Search in Playlists")
         }.onAppear {
             playlistManager.setModelContext(modelContext)
         }

@@ -449,6 +449,8 @@ final class PlaybackController {
         commandCenter.playCommand.isEnabled = true
         commandCenter.pauseCommand.isEnabled = true
         commandCenter.likeCommand.isEnabled = true
+        commandCenter.nextTrackCommand.isEnabled = true
+        commandCenter.previousTrackCommand.isEnabled = true
 
         // Disable unwanted buttons in Control Center
         commandCenter.togglePlayPauseCommand.isEnabled = false

@@ -129,6 +129,8 @@ struct HomeView: View {
             }
             .padding(.vertical, 20)
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
         .navigationTitle("Home")
         .task {
             // Only load data once on initial appearance
@@ -236,7 +238,7 @@ struct HomeView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 14)
-                .background(Color.pink)
+                .background(Color.accentColor)
                 .clipShape(Capsule())
             }
 
@@ -570,7 +572,7 @@ struct QuickAccessSection: View {
                             title: "Liked Songs",
                             subtitle: "\(likedSongs.songCount) songs",
                             icon: "heart.fill",
-                            color: .pink
+                            color: .accentColor
                         ) {
                             playback.playPlaylist(likedSongs)
                         }
@@ -580,7 +582,7 @@ struct QuickAccessSection: View {
                         title: "Shuffle All",
                         subtitle: "Random playback",
                         icon: "shuffle",
-                        color: .blue
+                        color: .accentColor
                     ) {
                         playback.shuffleMode = .on
                         playback.playQueue(SongLibrary.shared.songs.shuffled())
@@ -590,7 +592,7 @@ struct QuickAccessSection: View {
                         title: "Recently Added",
                         subtitle: "New in library",
                         icon: "clock",
-                        color: .orange
+                        color: .accentColor
                     ) {
                         let recent = SongLibrary.shared.songs.prefix(50).map {
                             $0
@@ -671,16 +673,16 @@ struct BrowseSection: View {
                     BrowseCard(
                         title: "Albums",
                         icon: "square.stack",
-                        color: .purple
+                        color: .accentColor
                     ).disabled(true)
-                    BrowseCard(title: "Artists", icon: "person.2", color: .pink)
+                    BrowseCard(title: "Artists", icon: "person.2", color: .accentColor)
                         .disabled(true)
                     BrowseCard(
                         title: "Playlists",
                         icon: "list.bullet",
-                        color: .cyan
+                        color: .accentColor
                     ).disabled(true)
-                    BrowseCard(title: "Genres", icon: "tag", color: .indigo)
+                    BrowseCard(title: "Genres", icon: "tag", color: .accentColor)
                         .disabled(true)
                 }
                 .padding(.horizontal, 20)

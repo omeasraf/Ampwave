@@ -42,7 +42,7 @@ struct SongRow: View {
       if isCurrent {
         Image(systemName: "waveform")
           .font(.system(size: 14))
-          .foregroundStyle(.pink)
+          .foregroundStyle(Color.accentColor)
           .symbolEffect(.pulse, options: .repeating)
       }
     }
@@ -79,7 +79,7 @@ struct CompactSongRow: View {
       if isCurrent {
         Image(systemName: "waveform")
           .font(.system(size: 12))
-          .foregroundStyle(.pink)
+          .foregroundStyle(Color.accentColor)
           .symbolEffect(.pulse, options: .repeating)
       }
     }
@@ -103,10 +103,11 @@ struct NumberedSongRow: View {
       if isCurrent {
         Image(systemName: "waveform")
           .font(.system(size: 12))
-          .foregroundStyle(.pink)
+          .foregroundStyle(Color.accentColor)
           .symbolEffect(.pulse, options: .repeating)
           .frame(width: 28, alignment: .center)
-      } else {
+      }
+ else {
         Text("\(number)")
           .font(.system(size: 14, weight: .medium))
           .foregroundStyle(.secondary)

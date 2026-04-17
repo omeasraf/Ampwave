@@ -9,17 +9,26 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
   @Environment(\.modelContext) private var modelContext
+  @Query private var preferencesList: [UserPreferences]
+  @Query private var settingsList: [AppSettings]
+  
   @State private var isPresentingImporter = false
   @State private var isImportingFolder = false
   @State private var importError: String?
   @State private var isImporting = false
   @State private var importProgress: Double = 0
-  @State private var settings: AppSettings?
-  @State private var userPreferences: UserPreferences?
   @State private var showingClearCacheConfirmation = false
   @State private var showingResetConfirmation = false
   @State private var showingResetStatsConfirmation = false
   @State private var isResetting = false
+
+  private var userPreferences: UserPreferences? {
+    preferencesList.first
+  }
+  
+  private var settings: AppSettings? {
+    settingsList.first
+  }
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -50,6 +59,7 @@ struct SettingsView: View {
       #if os(iOS)
       appleWatchSection
       #endif
+      appearanceSection
       playbackSettingsSection
       librarySettingsSection
       onlineFeaturesSection
@@ -58,6 +68,8 @@ struct SettingsView: View {
       aboutSection
     }
     .navigationTitle("Settings")
+    .scrollContentBackground(.hidden)
+    .background(Color.clear)
     .fileImporter(
       isPresented: $isPresentingImporter,
       allowedContentTypes: isImportingFolder ? [.folder] : [.audio],
@@ -141,12 +153,9 @@ struct SettingsView: View {
       metadataService.setModelContext(modelContext)
     }
 
-    loadSettings()
-  }
-
-  private func loadSettings() {
-    settings = AppSettings.getOrCreate(in: modelContext)
-    userPreferences = UserPreferences.getOrCreate(in: modelContext)
+    // Ensure they exist in SwiftData
+    _ = UserPreferences.getOrCreate(in: modelContext)
+    _ = AppSettings.getOrCreate(in: modelContext)
   }
 
   private var importSection: some View {
@@ -248,6 +257,20 @@ struct SettingsView: View {
       Text("Apple Watch")
     } footer: {
       Text("Manage songs and playlists synced to your Apple Watch.")
+    }
+  }
+
+  private var appearanceSection: some View {
+    Section {
+      if let preferences = userPreferences {
+        NavigationLink {
+          ThemeSettingsView(preferences: preferences)
+        } label: {
+          Label("Appearance", systemImage: "paintbrush")
+        }
+      }
+    } header: {
+      Text("Appearance")
     }
   }
 

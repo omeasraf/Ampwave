@@ -73,6 +73,7 @@ struct AlbumView: View {
     }
     .navigationTitle(album.name)
     .listStyle(platformListStyle)
+    .scrollContentBackground(.hidden)
 #if os(iOS)
     .navigationBarTitleDisplayMode(.large)
 #endif

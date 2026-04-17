@@ -10,6 +10,7 @@ import CarPlay
 import SwiftData
 import UIKit
 
+@MainActor
 class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     var interfaceController: CPInterfaceController?
     
@@ -26,18 +27,38 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
         updateRootTemplate()
     }
     
+    func templateApplicationScene(_ scene: CPTemplateApplicationScene, didDisconnectFrom controller: CPInterfaceController) {
+        print("[DEBUG] CarPlay: Disconnected")
+        self.interfaceController = nil
+    }
+    
     private func updateRootTemplate() {
         let recentlyPlayed = createRecentlyPlayedTemplate()
         let libraryTemplate = createLibraryTemplate()
         let playlistsTemplate = createPlaylistsTemplate()
-        let searchTemplate = CPSearchTemplate()
-        searchTemplate.delegate = self
+        let searchTab = createSearchTabTemplate()
         
-        let tabBar = CPTabBarTemplate(templates: [recentlyPlayed, libraryTemplate, playlistsTemplate, searchTemplate])
+        let tabBar = CPTabBarTemplate(templates: [recentlyPlayed, libraryTemplate, playlistsTemplate, searchTab])
         interfaceController?.setRootTemplate(tabBar, animated: true, completion: nil)
     }
     
     // MARK: - Templates
+    
+    private func createSearchTabTemplate() -> CPListTemplate {
+        let item = CPListItem(text: "Search", detailText: "Search your library")
+        item.setImage(UIImage(systemName: "magnifyingglass"))
+        item.handler = { [weak self] _, completion in
+            let searchTemplate = CPSearchTemplate()
+            searchTemplate.delegate = self
+            self?.interfaceController?.pushTemplate(searchTemplate, animated: true, completion: nil)
+            completion()
+        }
+        
+        let section = CPListSection(items: [item])
+        let template = CPListTemplate(title: "Search", sections: [section])
+        template.tabImage = UIImage(systemName: "magnifyingglass")
+        return template
+    }
     
     private func createRecentlyPlayedTemplate() -> CPListTemplate {
         let songs = ListeningHistoryTracker.shared.getRecentlyPlayed(limit: 20)

@@ -189,7 +189,7 @@ struct OpenPlayerView: View {
             .font(.system(size: 24))
             .foregroundStyle(
               PlaylistManager.shared.isLiked(song: song)
-                ? .pink : .primary
+                ? Color.accentColor : .primary
             )
           }
           .contentTransition(.symbolEffect(.replace))
@@ -254,7 +254,7 @@ struct OpenPlayerView: View {
           Image(systemName: "shuffle")
             .font(.system(size: 22))
             .foregroundStyle(
-              playback.shuffleMode != .off ? .pink : .secondary
+              playback.shuffleMode != .off ? Color.accentColor : .secondary
             )
         }
 
@@ -288,7 +288,7 @@ struct OpenPlayerView: View {
   }
 
   private var repeatColor: Color {
-    playback.repeatMode == .off ? .secondary : .pink
+    playback.repeatMode == .off ? .secondary : Color.accentColor
   }
 
   private var tabSection: some View {

@@ -189,12 +189,12 @@ final class PlaylistIcon: Identifiable, Hashable {
   init(icon: String, color: Color) {
     self.id = UUID()
     self.icon = icon
-    self.colorHex = color.toHexString()
+    self.colorHex = color.toHex() ?? "#000000"
   }
 
   var color: Color {
-    get { Color(hex: colorHex) }
-    set { colorHex = newValue.toHexString() }
+      get { Color(hex: colorHex) ?? .accentColor }
+    set { colorHex = newValue.toHex() ?? "#000000" }
   }
 }
 
@@ -204,42 +204,5 @@ extension Sequence where Element: Hashable {
   func uniqued() -> [Element] {
     var seen = Set<Element>()
     return filter { seen.insert($0).inserted }
-  }
-}
-extension Color {
-  /// Returns the hex string representation for this Color (assuming PlatformColor backend).
-  func toHexString() -> String {
-    let platformColor = PlatformColor(self)
-    
-    #if os(macOS)
-    // On macOS, dynamic colors (catalog colors) will crash if we try to access components directly.
-    // We must convert to a compatible color space first.
-    guard let rgbColor = platformColor.usingColorSpace(.deviceRGB) else {
-      // Fallback to black if conversion fails
-      return "#000000"
-    }
-    #else
-    let rgbColor = platformColor
-    #endif
-    
-    var r: CGFloat = 0
-    var g: CGFloat = 0
-    var b: CGFloat = 0
-    var a: CGFloat = 0
-    rgbColor.getRed(&r, green: &g, blue: &b, alpha: &a)
-    let rgb: Int = (Int)(r * 255) << 16 | (Int)(g * 255) << 8 | (Int)(b * 255) << 0
-    return String(format: "#%06x", rgb)
-  }
-
-  /// Initializes Color from a hex string.
-  init(hex: String) {
-    var hex = hex
-    if hex.hasPrefix("#") { hex.removeFirst() }
-    var int = UInt64()
-    Scanner(string: hex).scanHexInt64(&int)
-    let r = Double((int >> 16) & 0xFF) / 255.0
-    let g = Double((int >> 8) & 0xFF) / 255.0
-    let b = Double(int & 0xFF) / 255.0
-    self = Color(red: r, green: g, blue: b)
   }
 }

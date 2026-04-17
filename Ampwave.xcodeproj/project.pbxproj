@@ -11,11 +11,25 @@
 		B40A39322F411B23005DD316 /* MobileVLCKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B40A392F2F411B23005DD316 /* MobileVLCKit.xcframework */; platformFilter = ios; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B40A39332F411B23005DD316 /* VLCKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40A39342F411B23005DD316 /* VLCKit.xcframework */; platformFilters = (macos, ); };
 		B40A39352F411B23005DD316 /* VLCKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B40A39342F411B23005DD316 /* VLCKit.xcframework */; platformFilters = (macos, ); settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		B45266262F8B190E007FDE40 /* Ampwave Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = B452661C2F8B190D007FDE40 /* Ampwave Watch App.app */; platformFilters = (ios, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B44858522F9152CC0095BEEF /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44858512F9152CC0095BEEF /* AppTheme.swift */; };
+		B44858532F9152CC0095BEEF /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44858512F9152CC0095BEEF /* AppTheme.swift */; };
+		B44858542F9152CC0095BEEF /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44858512F9152CC0095BEEF /* AppTheme.swift */; };
+		B44858582F917B6C0095BEEF /* ColorExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44858572F917B6C0095BEEF /* ColorExtensions.swift */; };
+		B44858592F917BF90095BEEF /* ColorExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44858572F917B6C0095BEEF /* ColorExtensions.swift */; };
+		B448585A2F917BF90095BEEF /* ColorExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44858572F917B6C0095BEEF /* ColorExtensions.swift */; };
+		B448585B2F917BFF0095BEEF /* DataExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B46194DC2F8B3A8900FF14A5 /* DataExtensions.swift */; };
+		B448585C2F917BFF0095BEEF /* DataExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B46194DC2F8B3A8900FF14A5 /* DataExtensions.swift */; };
+		B448585E2F917C820095BEEF /* BindingExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B448585D2F917C7D0095BEEF /* BindingExtensions.swift */; };
+		B448585F2F917C820095BEEF /* BindingExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B448585D2F917C7D0095BEEF /* BindingExtensions.swift */; };
+		B44858602F917C820095BEEF /* BindingExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B448585D2F917C7D0095BEEF /* BindingExtensions.swift */; };
+		B44858622F917F4B0095BEEF /* ViewExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44858612F917F460095BEEF /* ViewExtensions.swift */; };
+		B44858632F917F4B0095BEEF /* ViewExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44858612F917F460095BEEF /* ViewExtensions.swift */; };
+		B44858642F917F4B0095BEEF /* ViewExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44858612F917F460095BEEF /* ViewExtensions.swift */; };
+		B45266262F8B190E007FDE40 /* Ampwave Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = B452661C2F8B190D007FDE40 /* Ampwave Watch App.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B461950C2F8B3A8900FF14A5 /* DataExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B46194DC2F8B3A8900FF14A5 /* DataExtensions.swift */; };
 		B46195542F8B3AAE00FF14A5 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B46195532F8B3AAE00FF14A5 /* WidgetKit.framework */; };
 		B46195562F8B3AAE00FF14A5 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B46195552F8B3AAE00FF14A5 /* SwiftUI.framework */; };
-		B46195632F8B3AAF00FF14A5 /* LyricsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B46195522F8B3AAE00FF14A5 /* LyricsExtension.appex */; platformFilters = (ios, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B46195632F8B3AAF00FF14A5 /* LyricsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B46195522F8B3AAE00FF14A5 /* LyricsExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B461956B2F8B3F8D00FF14A5 /* SharedPlaybackInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B46195692F8B3F8D00FF14A5 /* SharedPlaybackInfo.swift */; };
 		B46195A02F8B458F00FF14A5 /* LimitSort.swift in Sources */ = {isa = PBXBuildFile; fileRef = B461957E2F8B458F00FF14A5 /* LimitSort.swift */; };
 		B46195A12F8B458F00FF14A5 /* FetchedMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = B461957A2F8B458F00FF14A5 /* FetchedMetadata.swift */; };
@@ -203,6 +217,10 @@
 		B40A39192F411B23005DD316 /* Ampwave.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ampwave.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B40A392F2F411B23005DD316 /* MobileVLCKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = MobileVLCKit.xcframework; sourceTree = "<group>"; };
 		B40A39342F411B23005DD316 /* VLCKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = VLCKit.xcframework; sourceTree = "<group>"; };
+		B44858512F9152CC0095BEEF /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
+		B44858572F917B6C0095BEEF /* ColorExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorExtensions.swift; sourceTree = "<group>"; };
+		B448585D2F917C7D0095BEEF /* BindingExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BindingExtensions.swift; sourceTree = "<group>"; };
+		B44858612F917F460095BEEF /* ViewExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewExtensions.swift; sourceTree = "<group>"; };
 		B452661C2F8B190D007FDE40 /* Ampwave Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Ampwave Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B46194DC2F8B3A8900FF14A5 /* DataExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataExtensions.swift; sourceTree = "<group>"; };
 		B46195522F8B3AAE00FF14A5 /* LyricsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LyricsExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -352,6 +370,7 @@
 		B46195952F8B458F00FF14A5 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				B44858512F9152CC0095BEEF /* AppTheme.swift */,
 				B46195732F8B458F00FF14A5 /* Album.swift */,
 				B46195742F8B458F00FF14A5 /* AppSettings.swift */,
 				B46195752F8B458F00FF14A5 /* Artist.swift */,
@@ -419,6 +438,9 @@
 		B46196212F8B45D600FF14A5 /* Extensions */ = {
 			isa = PBXGroup;
 			children = (
+				B44858612F917F460095BEEF /* ViewExtensions.swift */,
+				B448585D2F917C7D0095BEEF /* BindingExtensions.swift */,
+				B44858572F917B6C0095BEEF /* ColorExtensions.swift */,
 				B46194DC2F8B3A8900FF14A5 /* DataExtensions.swift */,
 			);
 			path = Extensions;
@@ -577,6 +599,7 @@
 				B46195F92F8B458F00FF14A5 /* PlaylistType.swift in Sources */,
 				B46195FA2F8B458F00FF14A5 /* RepeatMode.swift in Sources */,
 				B46195FB2F8B458F00FF14A5 /* SongLibrary.swift in Sources */,
+				B44858642F917F4B0095BEEF /* ViewExtensions.swift in Sources */,
 				B46195FC2F8B458F00FF14A5 /* PathManager.swift in Sources */,
 				B46195FD2F8B458F00FF14A5 /* UserPreferences.swift in Sources */,
 				B46195FE2F8B458F00FF14A5 /* Playlist.swift in Sources */,
@@ -586,6 +609,9 @@
 				B46196022F8B458F00FF14A5 /* PlaySource.swift in Sources */,
 				B46196032F8B458F00FF14A5 /* Artist.swift in Sources */,
 				B46196042F8B458F00FF14A5 /* Album.swift in Sources */,
+				B44858582F917B6C0095BEEF /* ColorExtensions.swift in Sources */,
+				B44858602F917C820095BEEF /* BindingExtensions.swift in Sources */,
+				B44858542F9152CC0095BEEF /* AppTheme.swift in Sources */,
 				B46196052F8B458F00FF14A5 /* SongPlayStatistics.swift in Sources */,
 				B46196062F8B458F00FF14A5 /* LRCParser.swift in Sources */,
 				B46196072F8B458F00FF14A5 /* IndexingStatus.swift in Sources */,
@@ -632,16 +658,21 @@
 				B46195D52F8B458F00FF14A5 /* Recommendation.swift in Sources */,
 				B46195D62F8B458F00FF14A5 /* AudioMetadataExtractor.swift in Sources */,
 				B46195D72F8B458F00FF14A5 /* ArtistParser.swift in Sources */,
+				B448585B2F917BFF0095BEEF /* DataExtensions.swift in Sources */,
 				B46195D82F8B458F00FF14A5 /* PlaySource.swift in Sources */,
 				B46195D92F8B458F00FF14A5 /* Artist.swift in Sources */,
 				B46195DA2F8B458F00FF14A5 /* Album.swift in Sources */,
 				B46195DB2F8B458F00FF14A5 /* SongPlayStatistics.swift in Sources */,
 				B46195DC2F8B458F00FF14A5 /* LRCParser.swift in Sources */,
 				B46195DD2F8B458F00FF14A5 /* IndexingStatus.swift in Sources */,
+				B44858592F917BF90095BEEF /* ColorExtensions.swift in Sources */,
+				B44858532F9152CC0095BEEF /* AppTheme.swift in Sources */,
 				B46195DE2F8B458F00FF14A5 /* LRCLIBResponse.swift in Sources */,
 				B46195DF2F8B458F00FF14A5 /* ConnectionType.swift in Sources */,
+				B44858632F917F4B0095BEEF /* ViewExtensions.swift in Sources */,
 				B46195E02F8B458F00FF14A5 /* AppSettings.swift in Sources */,
 				B46195E12F8B458F00FF14A5 /* MetadataService.swift in Sources */,
+				B448585F2F917C820095BEEF /* BindingExtensions.swift in Sources */,
 				B46195E22F8B458F00FF14A5 /* LyricsService.swift in Sources */,
 				B46195E32F8B458F00FF14A5 /* PlaylistSortOrder.swift in Sources */,
 				B46195E42F8B458F00FF14A5 /* RuleField.swift in Sources */,
@@ -670,9 +701,11 @@
 				B46195A02F8B458F00FF14A5 /* LimitSort.swift in Sources */,
 				B46195A12F8B458F00FF14A5 /* FetchedMetadata.swift in Sources */,
 				B46195A22F8B458F00FF14A5 /* RuleOperation.swift in Sources */,
+				B448585C2F917BFF0095BEEF /* DataExtensions.swift in Sources */,
 				B46195A32F8B458F00FF14A5 /* ArtworkQuality.swift in Sources */,
 				B46195A42F8B458F00FF14A5 /* CoverArtArchive.swift in Sources */,
 				B46195A52F8B458F00FF14A5 /* PlaylistType.swift in Sources */,
+				B448585A2F917BF90095BEEF /* ColorExtensions.swift in Sources */,
 				B46195A62F8B458F00FF14A5 /* RepeatMode.swift in Sources */,
 				B46195A72F8B458F00FF14A5 /* SongLibrary.swift in Sources */,
 				B46195A82F8B458F00FF14A5 /* PathManager.swift in Sources */,
@@ -680,6 +713,7 @@
 				B46195AA2F8B458F00FF14A5 /* Playlist.swift in Sources */,
 				B46195AB2F8B458F00FF14A5 /* Recommendation.swift in Sources */,
 				B46195AC2F8B458F00FF14A5 /* AudioMetadataExtractor.swift in Sources */,
+				B448585E2F917C820095BEEF /* BindingExtensions.swift in Sources */,
 				B46195AD2F8B458F00FF14A5 /* ArtistParser.swift in Sources */,
 				B46195AE2F8B458F00FF14A5 /* PlaySource.swift in Sources */,
 				B46195AF2F8B458F00FF14A5 /* Artist.swift in Sources */,
@@ -706,7 +740,9 @@
 				B46195C42F8B458F00FF14A5 /* ListeningHistory.swift in Sources */,
 				B46195C52F8B458F00FF14A5 /* NetworkStatus.swift in Sources */,
 				B46195C62F8B458F00FF14A5 /* ShuffleMode.swift in Sources */,
+				B44858622F917F4B0095BEEF /* ViewExtensions.swift in Sources */,
 				B46195C72F8B458F00FF14A5 /* RecommendationSource.swift in Sources */,
+				B44858522F9152CC0095BEEF /* AppTheme.swift in Sources */,
 				B46195C82F8B458F00FF14A5 /* RecommendationItem.swift in Sources */,
 				B46195C92F8B458F00FF14A5 /* RecommendationReason.swift in Sources */,
 			);

@@ -58,6 +58,7 @@ struct PlaylistView: View {
       }
     }
     .listStyle(platformListStyle)
+    .scrollContentBackground(.hidden)
     .navigationTitle(playlist.name)
     #if os(iOS)
     .navigationBarTitleDisplayMode(.large)
@@ -208,7 +209,7 @@ struct PlaylistView: View {
             .foregroundStyle(.white)
             .frame(width: 120)
             .padding(.vertical, 12)
-            .background(Color.pink)
+            .background(Color.accentColor)
             .clipShape(Capsule())
           }
 

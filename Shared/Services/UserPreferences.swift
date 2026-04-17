@@ -37,6 +37,15 @@ final class UserPreferences: Identifiable {
 
   var enableRecommendations: Bool
   var recommendationSourcesRaw: [String]
+  
+  // Theme Settings
+  var selectedThemeRaw: String?
+  var customAccentColorHex: String?
+  var customBackgroundColorHex: String?
+  var customSecondaryBackgroundColorHex: String?
+  var fullArtworkBackground: Bool?
+  var miniPlayerFloating: Bool?
+  var isPremiumUser: Bool? = true
 
   var defaultShuffleMode: ShuffleMode {
     get { ShuffleMode(rawValue: defaultShuffleModeRaw) ?? .off }
@@ -56,6 +65,11 @@ final class UserPreferences: Identifiable {
   var recommendationSources: [RecommendationSource] {
     get { recommendationSourcesRaw.compactMap { RecommendationSource(rawValue: $0) } }
     set { recommendationSourcesRaw = newValue.map { $0.rawValue } }
+  }
+  
+  var selectedTheme: AppTheme {
+      get { AppTheme(rawValue: selectedThemeRaw ?? AppTheme.system.rawValue) ?? .system }
+    set { selectedThemeRaw = newValue.rawValue }
   }
 
   init() {
@@ -82,6 +96,10 @@ final class UserPreferences: Identifiable {
       RecommendationSource.listeningHistory.rawValue, RecommendationSource.genres.rawValue,
       RecommendationSource.similarArtists.rawValue,
     ]
+    self.selectedThemeRaw = AppTheme.system.rawValue
+    self.fullArtworkBackground = false
+    self.miniPlayerFloating = true
+    self.isPremiumUser = true
   }
 
   static func getOrCreate(in modelContext: ModelContext) -> UserPreferences {

@@ -149,7 +149,6 @@ struct ExpandedLyricsView: View {
                     }
                 }
             }
-            .preferredColorScheme(.dark)
             .onAppear {
 #if os(iOS)
                 UIApplication.shared.isIdleTimerDisabled = true
