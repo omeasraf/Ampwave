@@ -4,6 +4,7 @@
 //
 
 internal import SwiftUI
+import SwiftData
 
 #if os(iOS)
   import UIKit
@@ -27,7 +28,13 @@ struct OpenPlayerView: View {
     playlistManager.playlists.filter { $0.playlistType != .likedSongs }
   }
 
-  @Environment(\.theme) private var theme
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.theme) private var theme
+    @Query private var preferencesList: [UserPreferences]
+    
+    private var userPreferences: UserPreferences? {
+        preferencesList.first
+    }
 
   enum PlayerTab: String, CaseIterable {
     case lyrics = "Lyrics"
@@ -37,11 +44,15 @@ struct OpenPlayerView: View {
   var body: some View {
     NavigationStack {
       ScrollView {
-        VStack(spacing: 28) {
-          // Large Artwork
-          LargeFixedArtworkView(
-            artworkPath: playback.currentItem?.artworkPath
-          )
+          VStack(spacing:28) {
+            if (userPreferences?.fullArtworkBackground ?? false) {
+                Image(systemName: "music.note")
+            } else {
+                // Large Artwork
+                LargeFixedArtworkView(
+                    artworkPath: playback.currentItem?.artworkPath
+                )
+            }
 
           // Track info
           trackInfoSection
@@ -59,7 +70,7 @@ struct OpenPlayerView: View {
           tabSection
         }
         .padding(.horizontal, 24)
-        .padding(.top, 20)
+        .padding(.top, !(userPreferences?.fullArtworkBackground ?? false) ? 20 : 0)
         .padding(.bottom, 10)
       }
       .scrollContentBackground(.hidden)
@@ -491,3 +502,53 @@ struct TechnicalInfoSheet: View {
     }
   }
 }
+
+#Preview {
+    let mockSong = LibrarySong(
+        title: "Preview Track",
+        artist: "The Mockers",
+        fileName: "nonsense.mp3",
+        fileHash: "abc",
+        size: 1024,
+        duration: 200,
+        album: "Mocking Album",
+        artworkPath: "preview_artwork"
+    )
+    
+    let mockLines = [
+        LyricLine(timestamp: 0, text: "Welcome to the preview"),
+        LyricLine(timestamp: 5, text: "This is a synced lyric"),
+        LyricLine(timestamp: 10, text: "Showing in the mini player"),
+        LyricLine(timestamp: 15, text: "And the expanded view if you click"),
+        LyricLine(timestamp: 20, text: "Everything seems to be working"),
+        LyricLine(timestamp: 25, text: "Testing long lines for wrapping in the compact view"),
+        LyricLine(timestamp: 30, text: "The end of the preview lines")
+    ]
+    
+    let mockLyrics = SyncedLyric(
+        songId: mockSong.id,
+        lines: mockLines,
+        source: .local
+    )
+    
+    let _ = {
+        PlaybackController.shared.setupMockPlayback(
+            song: mockSong,
+            lyrics: mockLyrics,
+            time: 8
+        )
+        
+        #if os(iOS)
+        if let image = UIImage(systemName: "music.note") {
+            ImageCache.shared.insert(image, for: "preview_artwork")
+        }
+        #else
+        if let image = NSImage(systemSymbolName: "music.note", accessibilityDescription: nil) {
+            ImageCache.shared.insert(image, for: "preview_artwork")
+        }
+        #endif
+    }()
+    
+    return OpenPlayerView()
+}
+
