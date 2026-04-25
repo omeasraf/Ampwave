@@ -50,12 +50,13 @@ struct FullArtworkBackgroundView: View {
             LinearGradient(
               stops: [
                 .init(color: .clear, location: 0),
-                .init(color: .clear, location: 0.1),
-                .init(color: theme.accent.opacity(0.05), location: 0.3),
-                .init(color: theme.accent.opacity(0.15), location: 0.5),
-                .init(color: theme.background.opacity(0.4), location: 0.7),
-                .init(color: theme.background.opacity(0.8), location: 0.85),
-                .init(color: theme.background.opacity(0.95), location: 0.95),
+                .init(color: .clear, location: 0.2),
+                .init(color: theme.accent.opacity(0.03), location: 0.4),
+                .init(color: theme.accent.opacity(0.1), location: 0.6),
+                .init(color: theme.background.opacity(0.3), location: 0.75),
+                .init(color: theme.background.opacity(0.6), location: 0.85),
+                .init(color: theme.background.opacity(0.85), location: 0.93),
+                .init(color: theme.background.opacity(0.95), location: 0.97),
                 .init(color: theme.background, location: 1.0)
               ],
               startPoint: .top,

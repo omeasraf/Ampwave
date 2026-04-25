@@ -6,6 +6,9 @@
 //
 
 internal import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct ExpandedLyricsView: View {
     @Binding var isExpanded: Bool
@@ -52,9 +55,12 @@ struct ExpandedLyricsView: View {
                                     Color.clear
                                         .frame(height: 200)
                                 }
+                                #if os(iOS)
+                                .frame(width: UIScreen.main.bounds.width)
+                                #else
                                 .frame(maxWidth: .infinity)
+                                #endif
                             }
-                            .padding(.horizontal, 20)
                             .id(playback.currentItem?.id)
                             .onChange(of: playback.currentLyricIndex) { _, newIndex in
                                 guard let idx = newIndex, !isUserScrolling else {
@@ -487,8 +493,12 @@ struct LyricLineView: View {
             .lineLimit(nil)
             .fixedSize(horizontal: false, vertical: true)
             .lineSpacing(4)
-            .padding(.horizontal, 50)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 32)
+            #if os(iOS)
+            .frame(maxWidth: UIScreen.main.bounds.width - 64)
+            #else
+            .frame(maxWidth: .infinity)
+            #endif
             .scaleEffect(
                 isCurrent ? 1.05 : 1.0,
                 anchor: .center
