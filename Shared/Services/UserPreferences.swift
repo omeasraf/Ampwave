@@ -44,6 +44,7 @@ final class UserPreferences: Identifiable {
   var customBackgroundColorHex: String?
   var customSecondaryBackgroundColorHex: String?
   var fullArtworkBackground: Bool?
+  var showFullArtworkGradient: Bool?
   var miniPlayerFloating: Bool?
   var isPremiumUser: Bool? = true
 
@@ -98,6 +99,7 @@ final class UserPreferences: Identifiable {
     ]
     self.selectedThemeRaw = AppTheme.system.rawValue
     self.fullArtworkBackground = false
+    self.showFullArtworkGradient = true
     self.miniPlayerFloating = true
     self.isPremiumUser = true
   }

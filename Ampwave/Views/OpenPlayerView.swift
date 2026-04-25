@@ -43,42 +43,53 @@ struct OpenPlayerView: View {
 
   var body: some View {
     NavigationStack {
-      ScrollView {
-          VStack(spacing:28) {
+      ZStack {
+        theme.background.ignoresSafeArea()
+
+        ScrollView {
+          VStack(spacing: 28) {
             if (userPreferences?.fullArtworkBackground ?? false) {
-                Image(systemName: "music.note")
+              FullArtworkBackgroundView(artworkPath: playback.currentItem?.artworkPath)
+                .frame(height: 500)
+                .ignoresSafeArea(edges: .top)
+                .listRowInsets(EdgeInsets())
             } else {
-                // Large Artwork
-                LargeFixedArtworkView(
-                    artworkPath: playback.currentItem?.artworkPath
-                )
+              // Large Artwork
+              LargeFixedArtworkView(
+                artworkPath: playback.currentItem?.artworkPath
+              )
+              .padding(.top, 20)
+              .padding(.horizontal, 24)
             }
 
-          // Track info
-          trackInfoSection
+            VStack(spacing: 28) {
+              // Track info
+              trackInfoSection
 
-          // Progress
-          PlayerProgressView()
+              // Progress
+              PlayerProgressView()
 
-          // Playback controls
-          PlayerPlaybackControlsView()
+              // Playback controls
+              PlayerPlaybackControlsView()
 
-          // Extra controls
-          extraControls
+              // Extra controls
+              extraControls
 
-          // Lyrics/Queue tabs
-          tabSection
+              // Lyrics/Queue tabs
+              tabSection
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 10)
+          }
         }
-        .padding(.horizontal, 24)
-        .padding(.top, !(userPreferences?.fullArtworkBackground ?? false) ? 20 : 0)
-        .padding(.bottom, 10)
+        .scrollContentBackground(.hidden)
+        .ignoresSafeArea(edges: .top, condition: userPreferences?.fullArtworkBackground ?? false)
       }
-      .scrollContentBackground(.hidden)
-      .background(theme.background.ignoresSafeArea())
       .navigationTitle("Now Playing")
       #if os(iOS)
-      .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.inline)
       #endif
+      .toolbarBackground(.hidden, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .navigation) {
           Button {
@@ -86,6 +97,7 @@ struct OpenPlayerView: View {
           } label: {
             Image(systemName: "chevron.down")
               .font(.system(size: 18, weight: .semibold))
+              .shadow(radius: 2)
           }
         }
 
@@ -124,6 +136,7 @@ struct OpenPlayerView: View {
           } label: {
             Image(systemName: "ellipsis")
               .font(.system(size: 18, weight: .semibold))
+              .shadow(radius: 2)
           }
         }
       }.confirmationDialog(
@@ -501,6 +514,17 @@ struct TechnicalInfoSheet: View {
       return String(format: "%.0f Hz", rate)
     }
   }
+}
+
+private extension View {
+    @ViewBuilder
+    func ignoresSafeArea(edges: Edge.Set, condition: Bool) -> some View {
+        if condition {
+            self.ignoresSafeArea(edges: edges)
+        } else {
+            self
+        }
+    }
 }
 
 #Preview {

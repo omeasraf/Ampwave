@@ -74,6 +74,11 @@ struct ThemeSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 
+                if preferences.fullArtworkBackground ?? false {
+                    Toggle("Full Artwork Gradient", isOn: $preferences.showFullArtworkGradient.withDefault(true))
+                        .onChange(of: preferences.showFullArtworkGradient) { save() }
+                }
+                
                 Toggle("Floating Mini Player", isOn: $preferences.miniPlayerFloating.withDefault(true))
                     .onChange(of: preferences.miniPlayerFloating) { save() }
                 Text("Whether the mini player should float or be fixed at the bottom")
