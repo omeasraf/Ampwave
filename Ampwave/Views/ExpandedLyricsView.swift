@@ -54,6 +54,7 @@ struct ExpandedLyricsView: View {
                                 }
                                 .frame(maxWidth: .infinity)
                             }
+                            .padding(.horizontal, 20)
                             .id(playback.currentItem?.id)
                             .onChange(of: playback.currentLyricIndex) { _, newIndex in
                                 guard let idx = newIndex, !isUserScrolling else {
@@ -486,7 +487,7 @@ struct LyricLineView: View {
             .lineLimit(nil)
             .fixedSize(horizontal: false, vertical: true)
             .lineSpacing(4)
-            .padding(.horizontal, 32)
+            .padding(.horizontal, 50)
             .frame(maxWidth: .infinity, alignment: .center)
             .scaleEffect(
                 isCurrent ? 1.05 : 1.0,

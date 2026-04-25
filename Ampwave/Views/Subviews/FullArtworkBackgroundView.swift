@@ -45,21 +45,23 @@ struct FullArtworkBackgroundView: View {
             )
         }
 
-        if userPreferences?.showFullArtworkGradient ?? true {
-          // The "bottom blue" and "feathering"
-          LinearGradient(
-            stops: [
-              .init(color: .clear, location: 0),
-              .init(color: .clear, location: 0.8),
-              .init(color: theme.accent.opacity(0.15), location: 0.9),
-              .init(color: theme.accent.opacity(0.25), location: 0.95),
-              .init(color: theme.background.opacity(0.9), location: 0.99),
-              .init(color: theme.background, location: 1.0)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-          )
-        }
+          if userPreferences?.showFullArtworkGradient ?? true {
+            // The "bottom blue" and "feathering"
+            LinearGradient(
+              stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .clear, location: 0.1),
+                .init(color: theme.accent.opacity(0.05), location: 0.3),
+                .init(color: theme.accent.opacity(0.15), location: 0.5),
+                .init(color: theme.background.opacity(0.4), location: 0.7),
+                .init(color: theme.background.opacity(0.8), location: 0.85),
+                .init(color: theme.background.opacity(0.95), location: 0.95),
+                .init(color: theme.background, location: 1.0)
+              ],
+              startPoint: .top,
+              endPoint: .bottom
+            )
+          }
       }
     }
     .frame(height: 520) // Slightly taller for better effect
