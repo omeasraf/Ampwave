@@ -23,9 +23,8 @@ struct SearchView: View {
   }
 
   var body: some View {
-    NavigationStack {
-      VStack(spacing: 0) {
-        if !searchText.isEmpty {
+    VStack(spacing: 0) {
+      if !searchText.isEmpty {
           filterPicker
         }
 
@@ -44,7 +43,6 @@ struct SearchView: View {
         placement: platformSearchPlacement,
         prompt: "Songs, artists, albums..."
       )
-    }
   }
     
     private var platformSearchPlacement: SearchFieldPlacement {

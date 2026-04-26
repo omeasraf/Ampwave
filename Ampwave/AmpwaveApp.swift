@@ -62,13 +62,29 @@ struct AmpwaveApp: App {
 
   var body: some Scene {
     WindowGroup {
+      #if os(macOS)
+      MacOSMainView()
+        .environment(\.modelContext, modelContainer.mainContext)
+        .tint(Color("AccentColor"))
+      #else
       ContentView()
         .environment(\.modelContext, modelContainer.mainContext)
         .tint(Color("AccentColor"))
         .onAppear {
           print("[DEBUG] App completely loaded and onAppear")
         }
+      #endif
     }
     .modelContainer(modelContainer)
+
+    #if os(macOS)
+    Window("Lyrics", id: "lyrics") {
+      MacOSLyricsWindowView()
+        .environment(\.modelContext, modelContainer.mainContext)
+    }
+    .windowStyle(.hiddenTitleBar)
+    .windowResizability(.contentSize)
+    .defaultSize(width: 400, height: 600)
+    #endif
   }
 }

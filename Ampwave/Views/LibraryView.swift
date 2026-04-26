@@ -8,6 +8,60 @@
 import SwiftData
 internal import SwiftUI
 
+struct LibrarySortMenu: View {
+    let selectedTab: LibraryView.LibraryTab
+    @Bindable var appSettings: AppSettings
+    
+    var body: some View {
+        Menu {
+            Picker("Sort Order", selection: currentSortBinding) {
+                ForEach(availableSortOrders, id: \.self) { order in
+                    Label(order.rawValue, systemImage: order.icon).tag(order)
+                }
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down.circle")
+        }
+    }
+    
+    private var currentSortBinding: Binding<LibrarySortOrder> {
+        switch selectedTab {
+        case .songs:
+            return Binding(
+                get: { appSettings.songSortOrder },
+                set: { appSettings.songSortOrder = $0 }
+            )
+        case .albums:
+            return Binding(
+                get: { appSettings.albumSortOrder },
+                set: { appSettings.albumSortOrder = $0 }
+            )
+        case .artists:
+            return Binding(
+                get: { appSettings.artistSortOrder },
+                set: { appSettings.artistSortOrder = $0 }
+            )
+        }
+    }
+
+    private var availableSortOrders: [LibrarySortOrder] {
+        switch selectedTab {
+        case .songs:
+            return [
+                .titleAscending, .titleDescending, .artistAscending, .artistDescending,
+                .dateAddedDescending, .dateAddedAscending, .yearDescending, .yearAscending, .random
+            ]
+        case .albums:
+            return [
+                .titleAscending, .titleDescending, .artistAscending, .artistDescending,
+                .dateAddedDescending, .yearDescending, .yearAscending, .random
+            ]
+        case .artists:
+            return [.titleAscending, .titleDescending, .dateAddedDescending, .random]
+        }
+    }
+}
+
 struct LibraryView: View {
   @Environment(\.modelContext) private var modelContext
   @Query private var settings: [AppSettings]
@@ -25,110 +79,48 @@ struct LibraryView: View {
     case songs = "Songs"
     case albums = "Albums"
     case artists = "Artists"
-//    case playlists = "Playlists"
 
     var icon: String {
       switch self {
       case .songs: return "music.note"
       case .albums: return "square.stack"
       case .artists: return "person.2"
-//      case .playlists: return "list.bullet"
       }
     }
   }
 
   var body: some View {
-    NavigationStack {
-      VStack(spacing: 0) {
-        // Tab picker
-        Picker("Library Section", selection: $selectedTab) {
-          ForEach(LibraryTab.allCases, id: \.self) { tab in
-            Label(tab.rawValue, systemImage: tab.icon)
-              .tag(tab)
-          }
+    VStack(spacing: 0) {
+      // Tab picker
+      Picker("Library Section", selection: $selectedTab) {
+        ForEach(LibraryTab.allCases, id: \.self) { tab in
+          Label(tab.rawValue, systemImage: tab.icon)
+            .tag(tab)
         }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+      }
+      .pickerStyle(.segmented)
+      .padding(.horizontal, 20)
+      .padding(.vertical, 12)
 
-        // Content based on selected tab
-        Group {
-          switch selectedTab {
-          case .songs:
-            SongsListView(searchText: searchText)
-          case .albums:
-            AlbumsGridView(searchText: searchText)
-          case .artists:
-            ArtistsListView(searchText: searchText)
-//          case .playlists:
-//            PlaylistsListView(searchText: searchText)
-          }
+      // Content based on selected tab
+      Group {
+        switch selectedTab {
+        case .songs:
+          SongsListView(searchText: searchText)
+        case .albums:
+          AlbumsGridView(searchText: searchText)
+        case .artists:
+          ArtistsListView(searchText: searchText)
         }
       }
-      .navigationTitle("Library")
-      .toolbar {
-          sortMenu
-      }
-      .searchable(text: $searchText, prompt: "Search in Library")
     }
+    .navigationTitle("Library")
+    .toolbar {
+      LibrarySortMenu(selectedTab: selectedTab, appSettings: appSettings)
+    }
+    .searchable(text: $searchText, prompt: "Search in Library")
     .onAppear {
       playlistManager.setModelContext(modelContext)
-    }
-  }
-
-  private var sortMenu: some View {
-    Menu {
-      Picker("Sort Order", selection: currentSortBinding) {
-        ForEach(availableSortOrders, id: \.self) { order in
-          Label(order.rawValue, systemImage: order.icon).tag(order)
-        }
-      }
-    } label: {
-      Image(systemName: "arrow.up.arrow.down.circle")
-    }
-  }
-
-  private var currentSortBinding: Binding<LibrarySortOrder> {
-    switch selectedTab {
-    case .songs:
-      return Binding(
-        get: { appSettings.songSortOrder },
-        set: { appSettings.songSortOrder = $0 }
-      )
-    case .albums:
-      return Binding(
-        get: { appSettings.albumSortOrder },
-        set: { appSettings.albumSortOrder = $0 }
-      )
-    case .artists:
-      return Binding(
-        get: { appSettings.artistSortOrder },
-        set: { appSettings.artistSortOrder = $0 }
-      )
-//    case .playlists:
-//      return Binding(
-//        get: { appSettings.playlistSortOrder },
-//        set: { appSettings.playlistSortOrder = $0 }
-//      )
-    }
-  }
-
-  private var availableSortOrders: [LibrarySortOrder] {
-    switch selectedTab {
-    case .songs:
-      return [
-        .titleAscending, .titleDescending, .artistAscending, .artistDescending,
-        .dateAddedDescending, .dateAddedAscending, .yearDescending, .yearAscending, .random
-      ]
-    case .albums:
-      return [
-        .titleAscending, .titleDescending, .artistAscending, .artistDescending,
-        .dateAddedDescending, .yearDescending, .yearAscending, .random
-      ]
-    case .artists:
-      return [.titleAscending, .titleDescending, .dateAddedDescending, .random]
-//    case .playlists:
-//      return [.titleAscending, .titleDescending, .dateAddedDescending, .dateAddedAscending, .random]
     }
   }
 }

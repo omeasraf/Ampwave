@@ -134,6 +134,12 @@ final class PlaybackController {
     private(set) var isPlaying: Bool = false
     private(set) var isLoading: Bool = false
     
+    var volume: Float = 1.0 {
+        didSet {
+            player?.volume = volume
+        }
+    }
+    
     // MARK: - Vocal Isolation
     
     var showVocalSlider: Bool = false
@@ -193,6 +199,19 @@ final class PlaybackController {
         setupNotifications()
     }
 
+    private func cleanupPlayer() {
+        if let observer = timeObserver {
+            player?.removeTimeObserver(observer)
+            timeObserver = nil
+        }
+        player?.pause()
+        player = nil
+        
+        // Invalidate item observers
+        itemObservers.forEach { $0.invalidate() }
+        itemObservers.removeAll()
+    }
+
     func setModelContext(_ context: ModelContext) {
         print("[DEBUG] PlaybackController.setModelContext: Setting context")
         self.isInitializing = true
@@ -213,9 +232,17 @@ final class PlaybackController {
             )
         }
 
-        // Restore state
+        // Restore state - if library is empty, this will fail but SongLibrary will retry after loading
         restoreState()
         self.isInitializing = false
+    }
+
+    /// Retries state restoration after library has finished loading songs
+    func restoreStateAfterLoading() {
+        print("[DEBUG] PlaybackController.restoreStateAfterLoading called")
+        if currentItem == nil {
+            restoreState()
+        }
     }
 
     // MARK: - Mock for Previews
@@ -252,6 +279,13 @@ final class PlaybackController {
     }
 
     private func setupNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleLibraryDidLoad),
+            name: Notification.Name("SongLibraryDidLoad"),
+            object: nil
+        )
+
         #if os(iOS)
         NotificationCenter.default.addObserver(
             self,
@@ -275,6 +309,13 @@ final class PlaybackController {
             name: .AVPlayerItemDidPlayToEndTime,
             object: nil
         )
+    }
+
+    @objc private func handleLibraryDidLoad() {
+        Task { @MainActor in
+            print("[DEBUG] PlaybackController: SongLibraryDidLoad notification received")
+            restoreStateAfterLoading()
+        }
     }
 
     #if os(iOS)
@@ -492,6 +533,7 @@ final class PlaybackController {
 
         if player == nil {
             player = AVQueuePlayer(items: [item])
+            player?.volume = volume
             addTimeObserver()
             observePlayerItemChange()
         } else {
@@ -815,7 +857,7 @@ final class PlaybackController {
                 pause()
                 currentItem = nil
                 currentQueueIndex = 0
-                player?.removeAllItems()
+                cleanupPlayer()
             } else {
                 // If we were at the last item, move to the new last item or wrap
                 if currentQueueIndex >= queue.count {
@@ -855,7 +897,7 @@ final class PlaybackController {
         queue.removeAll()
         originalQueue.removeAll()
         currentQueueIndex = 0
-        player?.removeAllItems()
+        cleanupPlayer()
         saveState()
     }
 
@@ -962,15 +1004,12 @@ final class PlaybackController {
             currentLyricIndex = nil
             return
         }
-        currentLyricIndex = lyrics.lineIndex(at: currentTime)
-
+        
         let newIndex = lyrics.lineIndex(at: currentTime)
 
         if newIndex != currentLyricIndex {
             currentLyricIndex = newIndex
             updateWidget(force: true)
-        } else {
-            currentLyricIndex = newIndex
         }
     }
 
@@ -1121,6 +1160,10 @@ final class PlaybackController {
                 print(
                     "[DEBUG] PlaybackController.restoreState.MainActor: Setting up UI"
                 )
+                
+                // Clean up any existing player before creating a new one
+                self.cleanupPlayer()
+                
                 self.queue = restoredQueue
                 self.originalQueue = restoredQueue
                 self.currentQueueIndex = state.lastQueueIndex
@@ -1141,6 +1184,7 @@ final class PlaybackController {
                     // Prepare player but don't play
                     let item = createPlayerItem(for: song)
                     self.player = AVQueuePlayer(items: [item])
+                    self.player?.volume = self.volume
                     item.seek(
                         to: CMTime(
                             seconds: state.lastTime,
@@ -1178,12 +1222,15 @@ final class PlaybackController {
     // MARK: - Observers
 
     private func addTimeObserver() {
+        guard let player = player else { return }
+        
         if let observer = timeObserver {
-            player?.removeTimeObserver(observer)
+            player.removeTimeObserver(observer)
+            timeObserver = nil
         }
 
         let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
-        timeObserver = player?.addPeriodicTimeObserver(
+        timeObserver = player.addPeriodicTimeObserver(
             forInterval: interval,
             queue: .main
         ) {

@@ -78,103 +78,102 @@ struct PlaylistsListView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Button {
-                    showingCreateSheet = true
-                } label: {
-                    Label("New Playlist", systemImage: "plus.circle.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                }
-                .listRowBackground(Color.clear)
-                .sheet(isPresented: $showingCreateSheet) {
-                    CreatePlaylistSheet()
-                }
+        List {
+            Button {
+                showingCreateSheet = true
+            } label: {
+                Label("New Playlist", systemImage: "plus.circle.fill")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .listRowBackground(Color.clear)
+            .sheet(isPresented: $showingCreateSheet) {
+                CreatePlaylistSheet()
+            }
 
-                ForEach(filteredPlaylists) { playlist in
-                    NavigationLink(
-                        destination: PlaylistView(playlist: playlist)
-                    ) {
-                        HStack(spacing: 12) {
-                            PlaylistArtworkView(
-                                playlist: playlist,
-                                size: 60
+            ForEach(filteredPlaylists) { playlist in
+                NavigationLink(
+                    destination: PlaylistView(playlist: playlist)
+                ) {
+                    HStack(spacing: 12) {
+                        PlaylistArtworkView(
+                            playlist: playlist,
+                            size: 60
+                        )
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(playlist.name)
+                                .font(.system(size: 16, weight: .medium))
+
+                            Text(
+                                "\(playlist.songCount) song\(playlist.songCount == 1 ? "" : "s")"
                             )
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                        }
 
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(playlist.name)
-                                    .font(.system(size: 16, weight: .medium))
+                        Spacer()
 
-                                Text(
-                                    "\(playlist.songCount) song\(playlist.songCount == 1 ? "" : "s")"
-                                )
-                                .font(.system(size: 13))
+                        if playlist.isPinned {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            if playlist.isPinned {
-                                Image(systemName: "pin.fill")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                            }
                         }
                     }
-                    .swipeActions(edge: .trailing) {
-                        if playlist.playlistType != .likedSongs {
-                            if playlist.playlistType == .custom
-                                || playlist.playlistType == .smart
-                            {
-                                Button(role: .destructive) {
-                                    if playlist.isPinned {
-                                        showUnpinAlert = true
-                                    } else {
-                                        playlistManager.deletePlaylist(playlist)
-                                    }
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
+                }
+                .swipeActions(edge: .trailing) {
+                    if playlist.playlistType != .likedSongs {
+                        if playlist.playlistType == .custom
+                            || playlist.playlistType == .smart
+                        {
+                            Button(role: .destructive) {
+                                if playlist.isPinned {
+                                    showUnpinAlert = true
+                                } else {
+                                    playlistManager.deletePlaylist(playlist)
                                 }
-                                .opacity(playlist.isPinned ? 0.5 : 1.0)  // Visual disable cue
-                            }
-
-                            Button {
-                                playlistManager.togglePin(playlist)
                             } label: {
-                                Image(
-                                    systemName: playlist.isPinned
-                                        ? "pin.slash" : "pin"
-                                )
+                                Label("Delete", systemImage: "trash")
                             }
-                            .tint(.orange)
+                            .opacity(playlist.isPinned ? 0.5 : 1.0)  // Visual disable cue
                         }
+
+                        Button {
+                            playlistManager.togglePin(playlist)
+                        } label: {
+                            Image(
+                                systemName: playlist.isPinned
+                                    ? "pin.slash" : "pin"
+                                )
+                        }
+                        .tint(.orange)
                     }
-                    .alert("Cannot Delete", isPresented: $showUnpinAlert) {
-                        Button("OK") {}
-                    } message: {
-                        Text("Unpin the playlist first.")
-                    }
+                }
+                .alert("Cannot Delete", isPresented: $showUnpinAlert) {
+                    Button("OK") {}
+                } message: {
+                    Text("Unpin the playlist first.")
                 }
             }
-            .listStyle(.plain)
-            .overlay {
-                if playlistManager.playlists.isEmpty {
-                    ContentUnavailableView(
-                        "No Playlists",
-                        systemImage: "list.bullet",
-                        description: Text("Create your first playlist")
-                    )
-                } else if filteredPlaylists.isEmpty {
-                    ContentUnavailableView(
-                        "No Results",
-                        systemImage: "magnifyingglass",
-                        description: Text("No playlists match your search")
-                    )
-                }
-            }.listStyle(.plain)
-                .navigationTitle("Playlists")
-                .searchable(text: $searchText, prompt: "Search in Playlists")
-        }.onAppear {
+        }
+        .listStyle(.plain)
+        .overlay {
+            if playlistManager.playlists.isEmpty {
+                ContentUnavailableView(
+                    "No Playlists",
+                    systemImage: "list.bullet",
+                    description: Text("Create your first playlist")
+                )
+            } else if filteredPlaylists.isEmpty {
+                ContentUnavailableView(
+                    "No Results",
+                    systemImage: "magnifyingglass",
+                    description: Text("No playlists match your search")
+                )
+            }
+        }
+        .navigationTitle("Playlists")
+        .searchable(text: $searchText, prompt: "Search in Playlists")
+        .onAppear {
             playlistManager.setModelContext(modelContext)
         }
     }

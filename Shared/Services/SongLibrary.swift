@@ -1323,6 +1323,13 @@ final class SongLibrary {
     print(
       "[\(Date()).ISO8601Format()] [DEBUG] Context assigned, took \(Date().timeIntervalSince(start))s"
     )
+
+    // Load songs immediately to ensure library is ready for other services
+    Task {
+      await loadSongs()
+      // Notify that library is loaded so other services (like PlaybackController) can react
+      NotificationCenter.default.post(name: Notification.Name("SongLibraryDidLoad"), object: nil)
+    }
   }
 }
 
