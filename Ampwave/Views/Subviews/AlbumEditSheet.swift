@@ -12,6 +12,7 @@ internal import SwiftUI
 struct AlbumEditSheet: View {
   let album: Album
   @Binding var isPresented: Bool
+  @Environment(ThemeManager.self) private var themeManager
 
   @State private var name: String
   @State private var artist: String

@@ -48,6 +48,7 @@ struct PlaylistView: View {
           .onDelete(perform: deleteSongs)
           .onMove(perform: moveSongs)
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
       } else {
         Section {
           ContentUnavailableView(
@@ -56,6 +57,7 @@ struct PlaylistView: View {
             description: Text("Add songs to get started")
           )
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
       }
     }
     .listStyle(platformListStyle)
@@ -63,7 +65,7 @@ struct PlaylistView: View {
     .scrollContentBackground(.hidden)
     .navigationTitle(playlist.name)
     #if os(iOS)
-    .navigationBarTitleDisplayMode(.large)
+      .navigationBarTitleDisplayMode(.large)
     #endif
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
@@ -107,14 +109,15 @@ struct PlaylistView: View {
           }
 
           #if os(iOS)
-          Button {
-            WatchSyncService.shared.updateSyncStatus(for: playlist, shouldSync: !playlist.shouldSyncToWatch)
-          } label: {
-            Label(
-              playlist.shouldSyncToWatch ? "Remove from Watch" : "Sync to Watch",
-              systemImage: playlist.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
-            )
-          }
+            Button {
+              WatchSyncService.shared.updateSyncStatus(
+                for: playlist, shouldSync: !playlist.shouldSyncToWatch)
+            } label: {
+              Label(
+                playlist.shouldSyncToWatch ? "Remove from Watch" : "Sync to Watch",
+                systemImage: playlist.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
+              )
+            }
           #endif
 
           if playlist.playlistType == .custom
@@ -133,9 +136,9 @@ struct PlaylistView: View {
         }
       }
     }
-#if os(iOS)
-    .environment(\.editMode, .constant(isEditing ? .active : .inactive))
-#endif
+    #if os(iOS)
+      .environment(\.editMode, .constant(isEditing ? .active : .inactive))
+    #endif
     .sheet(isPresented: $showingEditSheet) {
       EditPlaylistSheet(playlist: playlist)
     }
@@ -151,14 +154,14 @@ struct PlaylistView: View {
       Text("This action cannot be undone.")
     }
   }
-    
-    private var platformListStyle: some ListStyle {
-#if os(iOS)
-        .insetGrouped
-#else
-        .inset
-#endif
-    }
+
+  private var platformListStyle: some ListStyle {
+    #if os(iOS)
+      .insetGrouped
+    #else
+      .inset
+    #endif
+  }
 
   private var playlistHeader: some View {
     VStack(spacing: 20) {
@@ -236,8 +239,8 @@ struct PlaylistView: View {
             .background(themeManager.cardBackgroundColor)
             .clipShape(Capsule())
             .overlay(
-                Capsule()
-                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+              Capsule()
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
             )
           }
         }

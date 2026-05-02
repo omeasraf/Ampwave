@@ -25,7 +25,7 @@ final class Artist: Identifiable, Hashable {
   var artworkPath: String?
   var isDedicatedArtwork: Bool = false
   var remoteArtworkURL: String?
-  
+
   // New caching fields
   var cachedBiography: String?
   var cachedOrigin: String?

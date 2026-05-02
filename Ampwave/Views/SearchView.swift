@@ -26,34 +26,34 @@ struct SearchView: View {
   var body: some View {
     VStack(spacing: 0) {
       if !searchText.isEmpty {
-          filterPicker
-        }
-
-        if searchText.isEmpty {
-          SearchEmptyState()
-        } else {
-          SearchResultsView(
-            searchText: searchText,
-            filter: selectedFilter
-          )
-        }
+        filterPicker
       }
-      .background(themeManager.backgroundColor)
-      .navigationTitle("Search")
-      .searchable(
-        text: $searchText,
-        placement: platformSearchPlacement,
-        prompt: "Songs, artists, albums..."
-      )
-  }
-    
-    private var platformSearchPlacement: SearchFieldPlacement {
-#if os(iOS)
-        return .navigationBarDrawer(displayMode: .always)
-#else
-        return .toolbar
-#endif
+
+      if searchText.isEmpty {
+        SearchEmptyState()
+      } else {
+        SearchResultsView(
+          searchText: searchText,
+          filter: selectedFilter
+        )
+      }
     }
+    .background(themeManager.backgroundColor)
+    .navigationTitle("Search")
+    .searchable(
+      text: $searchText,
+      placement: platformSearchPlacement,
+      prompt: "Songs, artists, albums..."
+    )
+  }
+
+  private var platformSearchPlacement: SearchFieldPlacement {
+    #if os(iOS)
+      return .navigationBarDrawer(displayMode: .always)
+    #else
+      return .toolbar
+    #endif
+  }
 
   private var filterPicker: some View {
     ScrollView(.horizontal, showsIndicators: false) {
@@ -267,6 +267,7 @@ struct SearchResultsView: View {
           Text("Top Result")
             .font(.system(size: 18, weight: .semibold))
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
       }
 
       if !matchingSongs.isEmpty {
@@ -295,6 +296,7 @@ struct SearchResultsView: View {
             description: Text("Try a different search term")
           )
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
       }
     }
   }
@@ -321,6 +323,7 @@ struct SearchResultsView: View {
         }
       }
     }
+    .listRowBackground(themeManager.cardBackgroundColor)
   }
 
   private func albumsSection(_ albums: [Album]) -> some View {
@@ -337,6 +340,7 @@ struct SearchResultsView: View {
       Text("Albums")
         .font(.system(size: 18, weight: .semibold))
     }
+    .listRowBackground(themeManager.cardBackgroundColor)
   }
 
   private func artistsSection(_ artists: [Artist]) -> some View {
@@ -363,6 +367,7 @@ struct SearchResultsView: View {
       Text("Artists")
         .font(.system(size: 18, weight: .semibold))
     }
+    .listRowBackground(themeManager.cardBackgroundColor)
   }
 
   private func playlistsSection(_ playlists: [Playlist]) -> some View {
@@ -386,6 +391,7 @@ struct SearchResultsView: View {
       Text("Playlists")
         .font(.system(size: 18, weight: .semibold))
     }
+    .listRowBackground(themeManager.cardBackgroundColor)
   }
 }
 
@@ -431,7 +437,7 @@ struct TopResultCard: View {
       .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
       .overlay(
         RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .stroke(Color.secondary.opacity(0.1), lineWidth: 1)
+          .stroke(Color.secondary.opacity(0.1), lineWidth: 1)
       )
     }
     .buttonStyle(.plain)

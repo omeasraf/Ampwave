@@ -3,8 +3,8 @@
 //  Ampwave
 //
 
-internal import SwiftUI
 import SwiftData
+internal import SwiftUI
 
 struct FullArtworkBackgroundView: View {
   let artworkPath: String?
@@ -23,43 +23,43 @@ struct FullArtworkBackgroundView: View {
       ZStack(alignment: .bottom) {
         if let image = image {
           #if os(iOS)
-          Image(uiImage: image)
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .frame(width: size.width, height: size.height)
-            .clipped()
+            Image(uiImage: image)
+              .resizable()
+              .aspectRatio(contentMode: .fill)
+              .frame(width: size.width, height: size.height)
+              .clipped()
           #else
-          Image(nsImage: image)
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .frame(width: size.width, height: size.height)
-            .clipped()
+            Image(nsImage: image)
+              .resizable()
+              .aspectRatio(contentMode: .fill)
+              .frame(width: size.width, height: size.height)
+              .clipped()
           #endif
         } else {
           Color.gray.opacity(0.2)
             .overlay(
-                Image(systemName: "music.note")
-                    .font(.system(size: 100))
-                    .foregroundStyle(.secondary)
+              Image(systemName: "music.note")
+                .font(.system(size: 100))
+                .foregroundStyle(.secondary)
             )
         }
 
         if theme.showFullArtworkGradient {
-            // The "bottom" gradient to blend with background
-            LinearGradient(
-              stops: [
-                .init(color: .clear, location: 0),
-                .init(color: .clear, location: 0.4), // Start higher to cover more artwork
-                .init(color: theme.backgroundColor.opacity(0.1), location: 0.55),
-                .init(color: theme.backgroundColor.opacity(0.3), location: 0.7),
-                .init(color: theme.backgroundColor.opacity(0.6), location: 0.85),
-                .init(color: theme.backgroundColor.opacity(0.85), location: 0.93),
-                .init(color: theme.backgroundColor.opacity(0.95), location: 0.98),
-                .init(color: theme.backgroundColor, location: 1.0)
-              ],
-              startPoint: .top,
-              endPoint: .bottom
-            )
+          // The "bottom" gradient to blend with background
+          LinearGradient(
+            stops: [
+              .init(color: .clear, location: 0),
+              .init(color: .clear, location: 0.4),  // Start higher to cover more artwork
+              .init(color: theme.backgroundColor.opacity(0.1), location: 0.55),
+              .init(color: theme.backgroundColor.opacity(0.3), location: 0.7),
+              .init(color: theme.backgroundColor.opacity(0.6), location: 0.85),
+              .init(color: theme.backgroundColor.opacity(0.85), location: 0.93),
+              .init(color: theme.backgroundColor.opacity(0.95), location: 0.98),
+              .init(color: theme.backgroundColor, location: 1.0),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+          )
         }
       }
     }
@@ -69,11 +69,11 @@ struct FullArtworkBackgroundView: View {
   }
 
   private func loadImage() async {
-    guard let path = artworkPath, !path.isEmpty else { 
+    guard let path = artworkPath, !path.isEmpty else {
       image = nil
-      return 
+      return
     }
-    
+
     if let cached = await ImageCache.shared.image(for: path) {
       self.image = cached
       return
@@ -84,13 +84,13 @@ struct FullArtworkBackgroundView: View {
       do {
         let data = try Data(contentsOf: url)
         #if os(iOS)
-        return UIImage(data: data)
+          return UIImage(data: data)
         #else
-        return NSImage(data: data)
+          return NSImage(data: data)
         #endif
       } catch { return nil }
     }
-    
+
     if let loadedImage = await task.value {
       await ImageCache.shared.insert(loadedImage, for: path)
       self.image = loadedImage

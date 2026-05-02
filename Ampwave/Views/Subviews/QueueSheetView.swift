@@ -9,6 +9,7 @@ internal import SwiftUI
 
 struct QueueSheetView: View {
   @Environment(\.dismiss) private var dismiss
+  @Environment(ThemeManager.self) private var themeManager
   private var playback: PlaybackController { PlaybackController.shared }
 
   var body: some View {
@@ -18,6 +19,7 @@ struct QueueSheetView: View {
           Section("Now Playing") {
             SongRow(song: current, isCurrent: true)
           }
+          .listRowBackground(themeManager.cardBackgroundColor)
         }
 
         if !playback.upNext.isEmpty {
@@ -32,6 +34,7 @@ struct QueueSheetView: View {
             .onDelete(perform: removeSongs)
             .onMove(perform: moveSongs)
           }
+          .listRowBackground(themeManager.cardBackgroundColor)
         }
 
         if !playback.previouslyPlayed.isEmpty {
@@ -41,23 +44,26 @@ struct QueueSheetView: View {
                 .opacity(0.6)
             }
           }
+          .listRowBackground(themeManager.cardBackgroundColor)
         }
       }
+      .background(themeManager.backgroundColor)
+      .scrollContentBackground(.hidden)
       .navigationTitle("Queue")
-#if os(iOS)
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .topBarLeading) {
-          EditButton()
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") {
-            dismiss()
+      #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+          ToolbarItem(placement: .topBarLeading) {
+            EditButton()
           }
-          .fontWeight(.semibold)
+          ToolbarItem(placement: .topBarTrailing) {
+            Button("Done") {
+              dismiss()
+            }
+            .fontWeight(.semibold)
+          }
         }
-      }
-#endif
+      #endif
     }
   }
 

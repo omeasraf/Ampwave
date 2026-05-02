@@ -12,6 +12,7 @@ internal import SwiftUI
 struct SongEditSheet: View {
   let song: LibrarySong
   @Binding var isPresented: Bool
+  @Environment(ThemeManager.self) private var themeManager
 
   @State private var title: String
   @State private var artist: String
@@ -169,12 +170,14 @@ struct SongEditSheet: View {
           }
           .padding(.vertical, 5)
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
 
         Section("Basic Info") {
           TextField("Title", text: $title)
           TextField("Artist", text: $artist)
           TextField("Album", text: $album)
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
 
         Section("Details") {
           TextField("Genre", text: $genre)
@@ -187,6 +190,7 @@ struct SongEditSheet: View {
               .keyboardType(.numberPad)
             #endif
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
 
         Section("Technical Metadata") {
           TextField("Format", text: $format)
@@ -207,6 +211,7 @@ struct SongEditSheet: View {
           TextField("Mode", text: $mode)
           TextField("Processing Chain", text: $processingChain)
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
 
         Section("Lyrics") {
           HStack {
@@ -236,7 +241,11 @@ struct SongEditSheet: View {
             .frame(minHeight: 200)
             .font(.system(.body, design: .monospaced))
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
       }
+      .background(themeManager.backgroundColor)
+      .scrollContentBackground(.hidden)
+      .tint(themeManager.accentColor)
       .navigationTitle("Edit Song")
       .onChange(of: selectedPhotoItem) { _, newItem in
         Task {

@@ -84,7 +84,7 @@ struct OpenPlayerView: View {
       }
       .navigationTitle("Now Playing")
       #if os(iOS)
-      .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.inline)
       #endif
       .toolbar {
         ToolbarItem(placement: .navigation) {
@@ -141,13 +141,13 @@ struct OpenPlayerView: View {
       }
     }
     #if os(iOS)
-    .fullScreenCover(isPresented: $isLyricsExpanded) {
-      ExpandedLyricsView(isExpanded: $isLyricsExpanded)
-    }
+      .fullScreenCover(isPresented: $isLyricsExpanded) {
+        ExpandedLyricsView(isExpanded: $isLyricsExpanded)
+      }
     #else
-    .sheet(isPresented: $isLyricsExpanded) {
-      ExpandedLyricsView(isExpanded: $isLyricsExpanded)
-    }
+      .sheet(isPresented: $isLyricsExpanded) {
+        ExpandedLyricsView(isExpanded: $isLyricsExpanded)
+      }
     #endif
     .sheet(isPresented: $isEditingShown) {
       if let song = playback.currentItem {
@@ -168,7 +168,9 @@ struct OpenPlayerView: View {
             .lineLimit(1)
             .foregroundStyle(.primary)
 
-          if let song = playback.currentItem, let artist = SongLibrary.shared.getArtist(named: song.artist) {
+          if let song = playback.currentItem,
+            let artist = SongLibrary.shared.getArtist(named: song.artist)
+          {
             NavigationLink(destination: ArtistView(artist: artist)) {
               Text(song.artist)
                 .font(.system(size: 18))
@@ -313,24 +315,25 @@ struct OpenPlayerView: View {
 
   private func updateArtworkColor() async {
     guard let path = playback.currentItem?.artworkPath,
-          let url = PathManager.resolve(path) else {
+      let url = PathManager.resolve(path)
+    else {
       artworkColor = .clear
       return
     }
-    
+
     let color = await Task.detached(priority: .userInitiated) { () -> Color in
       #if os(iOS)
-      if let image = UIImage(contentsOfFile: url.path) {
-        return image.dominantColor()?.opacity(0.3) ?? .clear
-      }
+        if let image = UIImage(contentsOfFile: url.path) {
+          return image.dominantColor()?.opacity(0.3) ?? .clear
+        }
       #else
-      if let image = NSImage(contentsOfFile: url.path) {
-        return image.dominantColor()?.opacity(0.3) ?? .clear
-      }
+        if let image = NSImage(contentsOfFile: url.path) {
+          return image.dominantColor()?.opacity(0.3) ?? .clear
+        }
       #endif
       return .clear
     }.value
-    
+
     await MainActor.run {
       withAnimation(.easeInOut) {
         artworkColor = color
@@ -343,7 +346,7 @@ struct OpenPlayerView: View {
 
 private struct PlayerProgressView: View {
   private var playback: PlaybackController { PlaybackController.shared }
-  
+
   var body: some View {
     let duration = playback.duration
     let progress = duration > 0 ? min(max(playback.currentTime / duration, 0), 1) : 0.0
@@ -373,7 +376,7 @@ private struct PlayerProgressView: View {
       }
     }
   }
-  
+
   private func formatTime(_ seconds: TimeInterval) -> String {
     let s = Int(seconds)
     let m = s / 60
@@ -384,7 +387,7 @@ private struct PlayerProgressView: View {
 
 private struct PlayerPlaybackControlsView: View {
   private var playback: PlaybackController { PlaybackController.shared }
-  
+
   var body: some View {
     HStack(spacing: 44) {
       Button {
@@ -419,6 +422,7 @@ private struct PlayerPlaybackControlsView: View {
 struct TechnicalInfoSheet: View {
   let song: LibrarySong
   @Environment(\.dismiss) private var dismiss
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     NavigationStack {
@@ -453,6 +457,7 @@ struct TechnicalInfoSheet: View {
             )
           )
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
 
         Section("Playback Details") {
           InfoRow(
@@ -469,16 +474,18 @@ struct TechnicalInfoSheet: View {
             value: song.processingChain ?? "None"
           )
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
 
         Section("Location") {
           Text(song.fileName)
             .font(.system(size: 12, design: .monospaced))
             .foregroundStyle(.secondary)
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
       }
       .navigationTitle("Song Info")
       #if os(iOS)
-      .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.inline)
       #endif
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {

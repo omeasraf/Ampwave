@@ -32,13 +32,16 @@ struct AlbumContextMenuModifier: ViewModifier {
     content
       .background {
         ZStack {
-          if let artistName = (self as? AlbumContextMenuModifier)?.album.artist ?? (self as? SongContextMenuModifier)?.song.artist,
-             let artist = library.getArtist(named: artistName) {
+          if let artistName = (self as? AlbumContextMenuModifier)?.album.artist
+            ?? (self as? SongContextMenuModifier)?.song.artist,
+            let artist = library.getArtist(named: artistName)
+          {
             NavigationLink("", destination: ArtistView(artist: artist), isActive: $showArtist)
           }
           if let song = (self as? SongContextMenuModifier)?.song,
-             let albumName = song.album,
-             let album = library.getAlbum(named: albumName, artist: song.artist) {
+            let albumName = song.album,
+            let album = library.getAlbum(named: albumName, artist: song.artist)
+          {
             NavigationLink("", destination: AlbumView(album: album), isActive: $showAlbum)
           }
         }
@@ -83,13 +86,13 @@ struct AlbumContextMenuModifier: ViewModifier {
         }
 
         #if os(iOS)
-        Button {
-          for song in album.songs {
-            WatchSyncService.shared.updateSyncStatus(for: song, shouldSync: true)
+          Button {
+            for song in album.songs {
+              WatchSyncService.shared.updateSyncStatus(for: song, shouldSync: true)
+            }
+          } label: {
+            Label("Sync Album to Watch", systemImage: "applewatch")
           }
-        } label: {
-          Label("Sync Album to Watch", systemImage: "applewatch")
-        }
         #endif
 
         Button(role: .destructive) {
@@ -121,7 +124,8 @@ struct AlbumContextMenuModifier: ViewModifier {
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        Text("This will permanently delete the album and all its songs from your library and device.")
+        Text(
+          "This will permanently delete the album and all its songs from your library and device.")
       }
   }
 
@@ -165,13 +169,16 @@ struct SongContextMenuModifier: ViewModifier {
     content
       .background {
         ZStack {
-          if let artistName = (self as? AlbumContextMenuModifier)?.album.artist ?? (self as? SongContextMenuModifier)?.song.artist,
-             let artist = library.getArtist(named: artistName) {
+          if let artistName = (self as? AlbumContextMenuModifier)?.album.artist
+            ?? (self as? SongContextMenuModifier)?.song.artist,
+            let artist = library.getArtist(named: artistName)
+          {
             NavigationLink("", destination: ArtistView(artist: artist), isActive: $showArtist)
           }
           if let song = (self as? SongContextMenuModifier)?.song,
-             let albumName = song.album,
-             let album = library.getAlbum(named: albumName, artist: song.artist) {
+            let albumName = song.album,
+            let album = library.getAlbum(named: albumName, artist: song.artist)
+          {
             NavigationLink("", destination: AlbumView(album: album), isActive: $showAlbum)
           }
         }
@@ -211,7 +218,9 @@ struct SongContextMenuModifier: ViewModifier {
           }
         }
 
-        if let albumName = song.album, let album = library.getAlbum(named: albumName, artist: song.artist) {
+        if let albumName = song.album,
+          let album = library.getAlbum(named: albumName, artist: song.artist)
+        {
           Button {
             showAlbum = true
           } label: {
@@ -226,14 +235,14 @@ struct SongContextMenuModifier: ViewModifier {
         }
 
         #if os(iOS)
-        Button {
-          WatchSyncService.shared.updateSyncStatus(for: song, shouldSync: !song.shouldSyncToWatch)
-        } label: {
-          Label(
-            song.shouldSyncToWatch ? "Remove from Watch" : "Sync to Watch",
-            systemImage: song.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
-          )
-        }
+          Button {
+            WatchSyncService.shared.updateSyncStatus(for: song, shouldSync: !song.shouldSyncToWatch)
+          } label: {
+            Label(
+              song.shouldSyncToWatch ? "Remove from Watch" : "Sync to Watch",
+              systemImage: song.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
+            )
+          }
         #endif
 
         Button {
@@ -288,4 +297,3 @@ extension View {
     modifier(SongContextMenuModifier(song: song, onEdit: onEdit, onDelete: onDelete))
   }
 }
-

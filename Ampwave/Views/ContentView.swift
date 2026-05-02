@@ -17,7 +17,7 @@ struct ContentView: View {
   var body: some View {
     ZStack {
       themeManager.backgroundColor.ignoresSafeArea()
-      
+
       OpenTabView(isPlayerExpanded: $isPlayerExpanded)
         .sheet(isPresented: $isPlayerExpanded) {
           OpenPlayerView()

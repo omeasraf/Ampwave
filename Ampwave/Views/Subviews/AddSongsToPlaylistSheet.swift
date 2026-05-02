@@ -75,9 +75,9 @@ struct AddSongsToPlaylistSheet: View {
       }
       .searchable(text: $searchText, prompt: "Search songs")
       .navigationTitle("Add Songs")
-        #if os(iOS)
-      .navigationBarTitleDisplayMode(.inline)
-        #endif
+      #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+      #endif
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
           Button("Cancel") {

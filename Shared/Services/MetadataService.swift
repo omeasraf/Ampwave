@@ -171,12 +171,12 @@ final class MetadataService {
 
     let artistInfo = await searchArtist(artist: artist)
     let theAudioDBInfo = await searchTheAudioDBArtist(artist: artist)
-    
+
     var genres: Set<String> = []
     if let mbGenres = artistInfo?.genres {
       for g in mbGenres { genres.insert(g.name) }
     }
-    
+
     if let tdbGenre = theAudioDBInfo?.strGenre, !tdbGenre.isEmpty {
       genres.insert(tdbGenre)
     }
@@ -201,12 +201,12 @@ final class MetadataService {
 
   private func calculateActiveYears(tdb: TheAudioDBArtist?) -> String? {
     guard let tdb = tdb else { return nil }
-    
+
     let start = tdb.intBornYear ?? tdb.intFormedYear
     let end = tdb.strDisbanded == "Yes" ? "Disbanded" : "Present"
-    
+
     if let startYear = start {
-        return "\(startYear) – \(end)"
+      return "\(startYear) – \(end)"
     }
     return nil
   }
@@ -217,11 +217,11 @@ final class MetadataService {
       let (data, _) = try await URLSession.shared.data(from: url)
 
       // Validate that data is valid image
-//      #if os(iOS)
-//        guard UIImage(data: data) != nil else { return nil }
-//      #else
-//        guard NSImage(data: data) != nil else { return nil }
-//      #endif
+      //      #if os(iOS)
+      //        guard UIImage(data: data) != nil else { return nil }
+      //      #else
+      //        guard NSImage(data: data) != nil else { return nil }
+      //      #endif
 
       // Cache the artwork
       return await cacheArtwork(data, for: nil)
@@ -354,12 +354,12 @@ final class MetadataService {
     components?.queryItems = [
       URLQueryItem(name: "s", value: artist.name)
     ]
-    
+
     guard let url = components?.url else { return nil }
     print("[DEBUG] MetadataService.searchTheAudioDBArtist: URL: \(url.absoluteString)")
-    
+
     guard let data = await performRequest(url: url) else { return nil }
-    
+
     do {
       let response = try JSONDecoder().decode(TheAudioDBArtistSearchResponse.self, from: data)
       return response.artists?.first

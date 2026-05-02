@@ -41,7 +41,7 @@ struct AmpwaveApp: App {
         configurations: [modelConfiguration]
       )
       print("[DEBUG] ModelContainer created successfully")
-      
+
       // Initialize shared services with the main context immediately
       let context = modelContainer.mainContext
       SongLibrary.shared.setModelContext(context)
@@ -51,12 +51,12 @@ struct AmpwaveApp: App {
       MetadataService.shared.setModelContext(context)
       LyricsService.shared.setModelContext(context)
       #if os(iOS)
-      WatchSyncService.shared.setModelContext(context)
+        WatchSyncService.shared.setModelContext(context)
       #endif
-      
+
       // Setup preferences and theme
       _ = UserPreferences.getOrCreate(in: context)
-      
+
     } catch {
       fatalError("Could not initialize ModelContainer: \(error)")
     }
@@ -68,34 +68,34 @@ struct AmpwaveApp: App {
   var body: some Scene {
     WindowGroup {
       #if os(macOS)
-      MacOSMainView()
-        .environment(\.modelContext, modelContainer.mainContext)
-        .environment(themeManager)
-        .tint(themeManager.accentColor)
-        .preferredColorScheme(themeManager.colorScheme)
+        MacOSMainView()
+          .environment(\.modelContext, modelContainer.mainContext)
+          .environment(themeManager)
+          .tint(themeManager.accentColor)
+          .preferredColorScheme(themeManager.colorScheme)
       #else
-      ContentView()
-        .environment(\.modelContext, modelContainer.mainContext)
-        .environment(themeManager)
-        .tint(themeManager.accentColor)
-        .preferredColorScheme(themeManager.colorScheme)
-        .onAppear {
-          print("[DEBUG] App completely loaded and onAppear")
-        }
+        ContentView()
+          .environment(\.modelContext, modelContainer.mainContext)
+          .environment(themeManager)
+          .tint(themeManager.accentColor)
+          .preferredColorScheme(themeManager.colorScheme)
+          .onAppear {
+            print("[DEBUG] App completely loaded and onAppear")
+          }
       #endif
     }
     .modelContainer(modelContainer)
 
     #if os(macOS)
-    Window("Lyrics", id: "lyrics") {
-      MacOSLyricsWindowView()
-        .environment(\.modelContext, modelContainer.mainContext)
-        .environment(themeManager)
-        .preferredColorScheme(themeManager.colorScheme)
-    }
-    .windowStyle(.hiddenTitleBar)
-    .windowResizability(.automatic)
-    .defaultSize(width: 400, height: 600)
+      Window("Lyrics", id: "lyrics") {
+        MacOSLyricsWindowView()
+          .environment(\.modelContext, modelContainer.mainContext)
+          .environment(themeManager)
+          .preferredColorScheme(themeManager.colorScheme)
+      }
+      .windowStyle(.hiddenTitleBar)
+      .windowResizability(.automatic)
+      .defaultSize(width: 400, height: 600)
     #endif
   }
 }

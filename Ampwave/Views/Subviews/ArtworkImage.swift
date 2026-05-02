@@ -11,7 +11,7 @@ struct ArtworkImage: View {
   let artworkPath: String?
   let size: CGFloat
   let cornerRadius: CGFloat
-  
+
   @State private var image: PlatformImage?
 
   init(artworkPath: String?, size: CGFloat, cornerRadius: CGFloat = 8) {
@@ -24,13 +24,13 @@ struct ArtworkImage: View {
     Group {
       if let image = image {
         #if os(iOS)
-        Image(uiImage: image)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
+          Image(uiImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
         #else
-        Image(nsImage: image)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
+          Image(nsImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
         #endif
       } else {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -51,7 +51,7 @@ struct ArtworkImage: View {
 
   private func loadImage() async {
     guard let path = artworkPath, !path.isEmpty else { return }
-    
+
     // Check memory cache first
     if let cached = await ImageCache.shared.image(for: path) {
       self.image = cached
@@ -61,19 +61,19 @@ struct ArtworkImage: View {
     // Resolve path and load from disk in background
     let task = Task.detached(priority: .userInitiated) { () -> PlatformImage? in
       guard let url = PathManager.resolve(path) else { return nil }
-      
+
       do {
         let data = try Data(contentsOf: url)
         #if os(iOS)
-        return UIImage(data: data)
+          return UIImage(data: data)
         #else
-        return NSImage(data: data)
+          return NSImage(data: data)
         #endif
       } catch {
         return nil
       }
     }
-    
+
     if let loadedImage = await task.value {
       await ImageCache.shared.insert(loadedImage, for: path)
       self.image = loadedImage
@@ -86,20 +86,20 @@ struct ArtworkImage: View {
 struct ArtistImageView: View {
   let artworkPath: String?
   let size: CGFloat
-  
+
   @State private var image: PlatformImage?
 
   var body: some View {
     Group {
       if let image = image {
         #if os(iOS)
-        Image(uiImage: image)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
+          Image(uiImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
         #else
-        Image(nsImage: image)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
+          Image(nsImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
         #endif
       } else {
         Circle()
@@ -120,7 +120,7 @@ struct ArtistImageView: View {
 
   private func loadImage() async {
     guard let path = artworkPath, !path.isEmpty else { return }
-    
+
     if let cached = await ImageCache.shared.image(for: path) {
       self.image = cached
       return
@@ -128,19 +128,19 @@ struct ArtistImageView: View {
 
     let task = Task.detached(priority: .userInitiated) { () -> PlatformImage? in
       guard let url = PathManager.resolve(path) else { return nil }
-      
+
       do {
         let data = try Data(contentsOf: url)
         #if os(iOS)
-        return UIImage(data: data)
+          return UIImage(data: data)
         #else
-        return NSImage(data: data)
+          return NSImage(data: data)
         #endif
       } catch {
         return nil
       }
     }
-    
+
     if let loadedImage = await task.value {
       await ImageCache.shared.insert(loadedImage, for: path)
       self.image = loadedImage

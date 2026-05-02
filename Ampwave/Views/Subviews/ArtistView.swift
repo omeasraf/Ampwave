@@ -5,14 +5,14 @@
 //  Enhanced artist detail view with header, biography, popular songs, albums, and related artists.
 //
 
-#if os(iOS)
-import UIKit
-#else
-import AppKit
-#endif
-
-internal import SwiftUI
 import SwiftData
+internal import SwiftUI
+
+#if os(iOS)
+  import UIKit
+#else
+  import AppKit
+#endif
 
 struct ArtistView: View {
   let artist: Artist
@@ -42,9 +42,9 @@ struct ArtistView: View {
     }
     .background(themeManager.backgroundColor)
     .navigationTitle(artist.name)
-#if os(iOS)
-    .navigationBarTitleDisplayMode(.inline)
-#endif
+    #if os(iOS)
+      .navigationBarTitleDisplayMode(.inline)
+    #endif
     .toolbar {
       toolbarContent
     }
@@ -85,7 +85,7 @@ struct ArtistView: View {
         SectionHeader(title: "All Songs")
         allSongsList
       }
-      
+
       // Padding for mini player
       Spacer().frame(height: 100)
     }
@@ -127,15 +127,15 @@ struct ArtistView: View {
         // Background Image
         Group {
           if let fanartPath = artist.fanartPath, let url = PathManager.resolve(fanartPath) {
-             #if os(iOS)
-             if let image = UIImage(contentsOfFile: url.path) {
+            #if os(iOS)
+              if let image = UIImage(contentsOfFile: url.path) {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
-             }
-             #else
-             if let image = NSImage(contentsOfFile: url.path) {
+              }
+            #else
+              if let image = NSImage(contentsOfFile: url.path) {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-             }
-             #endif
+              }
+            #endif
           } else if let fanart = artist.fanartURL, let url = URL(string: fanart) {
             AsyncImage(url: url) { phase in
               if let image = phase.image {
@@ -149,12 +149,12 @@ struct ArtistView: View {
             Color.gray.opacity(0.1)
           }
         }
-        
+
         // Blur and Gradient overlays
         Rectangle()
           .fill(.ultraThinMaterial)
           .opacity(0.8)
-        
+
         LinearGradient(
           colors: [.clear, themeManager.backgroundColor],
           startPoint: .center,
@@ -209,7 +209,9 @@ struct ArtistView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture {
-          playback.playQueue(viewModel.songs, startingAt: viewModel.songs.firstIndex(where: { $0.id == song.id }) ?? 0)
+          playback.playQueue(
+            viewModel.songs,
+            startingAt: viewModel.songs.firstIndex(where: { $0.id == song.id }) ?? 0)
         }
         .swipeActions(edge: .trailing) {
           Button {
@@ -245,7 +247,7 @@ struct ArtistView: View {
           NavigationLink(destination: ArtistView(artist: relatedArtist)) {
             VStack(spacing: 10) {
               ArtistImageView(artworkPath: relatedArtist.artworkPath, size: 120)
-              
+
               Text(relatedArtist.name)
                 .font(.system(size: 14, weight: .medium))
                 .lineLimit(1)
@@ -268,7 +270,9 @@ struct ArtistView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture {
-          playback.playQueue(viewModel.songs, startingAt: viewModel.songs.firstIndex(where: { $0.id == song.id }) ?? 0)
+          playback.playQueue(
+            viewModel.songs,
+            startingAt: viewModel.songs.firstIndex(where: { $0.id == song.id }) ?? 0)
         }
       }
     }
@@ -290,7 +294,7 @@ struct ArtistView: View {
         } label: {
           Label("Add to Playlist", systemImage: "text.badge.plus")
         }
-        
+
         ShareLink(item: artist.name, subject: Text("Check out \(artist.name) on Ampwave"))
       } label: {
         Image(systemName: "ellipsis.circle")
@@ -308,10 +312,10 @@ struct ArtistView: View {
   }
 
   private var hasArtistInfo: Bool {
-    (artist.cachedBiography != nil && !artist.cachedBiography!.isEmpty) ||
-    (artist.biography != nil && !artist.biography!.isEmpty) ||
-    (artist.origin != nil && !artist.origin!.isEmpty) ||
-    (artist.activeYears != nil && !artist.activeYears!.isEmpty)
+    (artist.cachedBiography != nil && !artist.cachedBiography!.isEmpty)
+      || (artist.biography != nil && !artist.biography!.isEmpty)
+      || (artist.origin != nil && !artist.origin!.isEmpty)
+      || (artist.activeYears != nil && !artist.activeYears!.isEmpty)
   }
 
   private var noInfoView: some View {
@@ -319,7 +323,7 @@ struct ArtistView: View {
       Text("No biography available")
         .font(.system(size: 15))
         .foregroundStyle(.secondary)
-      
+
       Button {
         Task { await viewModel.refreshMetadata() }
       } label: {
@@ -343,23 +347,23 @@ struct ArtistInfoSection: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       SectionHeader(title: "About")
-      
+
       VStack(alignment: .leading, spacing: 12) {
         if let origin = artist.cachedOrigin ?? artist.origin, !origin.isEmpty {
           InfoRow(label: "Origin", value: origin)
         }
-        
+
         if let activeYears = artist.cachedActiveYears ?? artist.activeYears, !activeYears.isEmpty {
           InfoRow(label: "Active", value: activeYears)
         }
-        
+
         if let biography = artist.cachedBiography ?? artist.biography, !biography.isEmpty {
           Text(biography)
             .font(.system(size: 15))
             .foregroundStyle(.secondary)
             .lineLimit(isExpanded ? nil : 4)
             .padding(.top, 4)
-          
+
           if !isExpanded {
             Button("Read More") {
               withAnimation(.spring()) {
@@ -387,7 +391,7 @@ struct InfoRow: View {
         .font(.system(size: 14, weight: .bold))
         .foregroundStyle(.primary)
         .frame(width: 60, alignment: .leading)
-      
+
       Text(value)
         .font(.system(size: 14))
         .foregroundStyle(.secondary)
@@ -450,7 +454,7 @@ class ArtistDetailViewModel {
 
     // Find related artists based on genre similarity
     await findRelatedArtists()
-    
+
     // If genres are missing, try to fetch them
     if artist.genres == nil || artist.genres?.isEmpty == true {
       await refreshMetadata()
@@ -469,26 +473,26 @@ class ArtistDetailViewModel {
       artist.activeYears = metadata.activeYears
       artist.fanartURL = metadata.fanartURL?.absoluteString
       artist.musicBrainzId = metadata.musicBrainzId
-      
+
       // Cache text data
       artist.cachedBiography = metadata.biography
       artist.cachedOrigin = metadata.origin
       artist.cachedActiveYears = metadata.activeYears
       artist.cachedGenres = metadata.genres
-      
+
       if let artworkURL = metadata.artworkURL {
         if let path = await metadataService.downloadArtwork(from: artworkURL) {
           artist.artworkPath = path
           artist.isDedicatedArtwork = true
         }
       }
-      
+
       if let fanartURL = metadata.fanartURL {
         if let path = await metadataService.downloadArtwork(from: fanartURL) {
           artist.fanartPath = path
         }
       }
-      
+
       artist.lastUpdatedDate = Date()
       try? artist.modelContext?.save()
     }
@@ -499,7 +503,7 @@ class ArtistDetailViewModel {
 
     let allArtists = await library.allArtists()
     let genreSet = Set(artistGenres.map { $0.lowercased() })
-    
+
     relatedArtists = allArtists.filter { otherArtist in
       guard otherArtist.id != artist.id else { return false }
       guard let otherGenres = otherArtist.genres, !otherGenres.isEmpty else { return false }

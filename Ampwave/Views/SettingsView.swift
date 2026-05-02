@@ -43,21 +43,21 @@ struct SettingsView: View {
 
   var body: some View {
     List {
-      importSection
-      libraryStatsSection
-      playbackSettingsSection
-      librarySettingsSection
-      
+      importSection.listRowBackground(themeManager.cardBackgroundColor)
+      libraryStatsSection.listRowBackground(themeManager.cardBackgroundColor)
+      playbackSettingsSection.listRowBackground(themeManager.cardBackgroundColor)
+      librarySettingsSection.listRowBackground(themeManager.cardBackgroundColor)
+
       #if os(iOS)
-      appleWatchSection
+        appleWatchSection.listRowBackground(themeManager.cardBackgroundColor)
       #endif
 
-      themingSection
-      layoutSection
-      onlineFeaturesSection
-      dataManagementSection
-      dataSourcesSection
-      aboutSection
+      themingSection.listRowBackground(themeManager.cardBackgroundColor)
+      layoutSection.listRowBackground(themeManager.cardBackgroundColor)
+      onlineFeaturesSection.listRowBackground(themeManager.cardBackgroundColor)
+      dataManagementSection.listRowBackground(themeManager.cardBackgroundColor)
+      dataSourcesSection.listRowBackground(themeManager.cardBackgroundColor)
+      aboutSection.listRowBackground(themeManager.cardBackgroundColor)
     }
     .listRowBackground(themeManager.cardBackgroundColor)
     .background(themeManager.backgroundColor)
@@ -161,19 +161,22 @@ struct SettingsView: View {
   private var themingSection: some View {
     Section {
       if let preferences = userPreferences {
-        Picker("App Theme", selection: Binding(
-          get: { preferences.selectedTheme },
-          set: { preferences.selectedTheme = $0 }
-        )) {
+        Picker(
+          "App Theme",
+          selection: Binding(
+            get: { preferences.selectedTheme },
+            set: { preferences.selectedTheme = $0 }
+          )
+        ) {
           ForEach(AppTheme.allCases) { theme in
             Text(theme.displayName).tag(theme)
           }
         }
-        
+
         if preferences.selectedTheme == .custom {
-            NavigationLink("Custom Colors") {
-                AddThemeView()
-            }
+          NavigationLink("Custom Colors") {
+            AddThemeView()
+          }
         }
       }
     } header: {
@@ -184,22 +187,26 @@ struct SettingsView: View {
   private var layoutSection: some View {
     Section {
       if let preferences = userPreferences {
-        Toggle("Full Artwork Background", isOn: Binding(
-          get: { preferences.fullArtworkBackground ?? false },
-          set: { preferences.fullArtworkBackground = $0 }
-        ))
-        
+        Toggle(
+          "Full Artwork Background",
+          isOn: Binding(
+            get: { preferences.fullArtworkBackground ?? false },
+            set: { preferences.fullArtworkBackground = $0 }
+          ))
+
         if preferences.fullArtworkBackground ?? false {
-            Toggle("Show Background Gradient", isOn: Binding(
+          Toggle(
+            "Show Background Gradient",
+            isOn: Binding(
               get: { preferences.showFullArtworkGradient ?? false },
               set: { preferences.showFullArtworkGradient = $0 }
             ))
         }
 
-//        Toggle("Mini Player Floating", isOn: Binding(
-//          get: { preferences.miniPlayerFloating ?? false },
-//          set: { preferences.miniPlayerFloating = $0 }
-//        ))
+        //        Toggle("Mini Player Floating", isOn: Binding(
+        //          get: { preferences.miniPlayerFloating ?? false },
+        //          set: { preferences.miniPlayerFloating = $0 }
+        //        ))
       }
     } header: {
       Text("Layout")
@@ -500,7 +507,9 @@ struct SettingsView: View {
     } header: {
       Text("Data Sources")
     } footer: {
-      Text("Ampwave uses these open-source community databases for high-quality metadata, artwork, and lyrics.")
+      Text(
+        "Ampwave uses these open-source community databases for high-quality metadata, artwork, and lyrics."
+      )
     }
   }
 
@@ -813,94 +822,108 @@ struct SettingsView: View {
 // MARK: - Custom Theme Views
 
 struct AddThemeView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var preferencesList: [UserPreferences]
-    @Environment(ThemeManager.self) private var themeManager
-    
-    private var userPreferences: UserPreferences? {
-        preferencesList.first
-    }
-    
-    var body: some View {
-        Form {
-            if let preferences = userPreferences {
-                Section("Theme Details") {
-                    Picker("Color Scheme", selection: Binding(
-                        get: { preferences.customColorScheme ?? .dark },
-                        set: { preferences.customColorScheme = $0 }
-                    )) {
-                        Text("Light").tag(ColorScheme.light)
-                        Text("Dark").tag(ColorScheme.dark)
-                    }
-                }
-                .listRowBackground(themeManager.cardBackgroundColor)
-                
-                Section("Custom Colors") {
-                    ColorPicker("Accent Color", selection: Binding(
-                        get: { preferences.customAccentColorHex.map { Color(hex: $0) } ?? .pink },
-                        set: { preferences.customAccentColorHex = $0.toHex() }
-                    ))
-                    
-                    ColorPicker("Background Color", selection: Binding(
-                        get: { preferences.customBackgroundColorHex.map { Color(hex: $0) } ?? .black },
-                        set: { preferences.customBackgroundColorHex = $0.toHex() }
-                    ))
-                    
-                    ColorPicker("Card Background", selection: Binding(
-                        get: { preferences.customCardBackgroundColorHex.map { Color(hex: $0) } ?? Color(white: 0.1) },
-                        set: { preferences.customCardBackgroundColorHex = $0.toHex() }
-                    ))
-                }
-                .listRowBackground(themeManager.cardBackgroundColor)
-                
-                Section("Preview") {
-                    VStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(preferences.customCardBackgroundColorHex.map { Color(hex: $0) } ?? Color(white: 0.1))
-                            .frame(height: 60)
-                            .overlay {
-                                HStack {
-                                    Circle()
-                                        .fill(preferences.customAccentColorHex.map { Color(hex: $0) } ?? .pink)
-                                        .frame(width: 30, height: 30)
-                                    VStack(alignment: .leading) {
-                                        Text("Song Title")
-                                            .foregroundStyle(preferences.customColorScheme == .light ? .black : .white)
-                                        Text("Artist Name")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "play.fill")
-                                        .foregroundStyle(preferences.customAccentColorHex.map { Color(hex: $0) } ?? .pink)
-                                }
-                                .padding()
-                            }
-                    }
-                    .padding(.vertical)
-                    .frame(maxWidth: .infinity)
-                    .background(preferences.customBackgroundColorHex.map { Color(hex: $0) } ?? .black)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                }
-                .listRowBackground(Color.clear) // Keep preview clear
-                
-                Section {
-                    Button("Reset to Defaults") {
-                        preferences.customAccentColorHex = nil
-                        preferences.customBackgroundColorHex = nil
-                        preferences.customCardBackgroundColorHex = nil
-                    }
-                    .foregroundStyle(.red)
-                }
-                .listRowBackground(themeManager.cardBackgroundColor)
-            }
+  @Environment(\.modelContext) private var modelContext
+  @Query private var preferencesList: [UserPreferences]
+  @Environment(ThemeManager.self) private var themeManager
+
+  private var userPreferences: UserPreferences? {
+    preferencesList.first
+  }
+
+  var body: some View {
+    Form {
+      if let preferences = userPreferences {
+        Section("Theme Details") {
+          Picker(
+            "Color Scheme",
+            selection: Binding(
+              get: { preferences.customColorScheme ?? .dark },
+              set: { preferences.customColorScheme = $0 }
+            )
+          ) {
+            Text("Light").tag(ColorScheme.light)
+            Text("Dark").tag(ColorScheme.dark)
+          }
         }
-        .background(themeManager.backgroundColor)
-        .scrollContentBackground(.hidden)
-        .tint(themeManager.accentColor)
-        .navigationTitle("Custom Colors")
-        .navigationBarTitleDisplayMode(.inline)
+        .listRowBackground(themeManager.cardBackgroundColor)
+
+        Section("Custom Colors") {
+          ColorPicker(
+            "Accent Color",
+            selection: Binding(
+              get: { preferences.customAccentColorHex.map { Color(hex: $0) } ?? .pink },
+              set: { preferences.customAccentColorHex = $0.toHex() }
+            ))
+
+          ColorPicker(
+            "Background Color",
+            selection: Binding(
+              get: { preferences.customBackgroundColorHex.map { Color(hex: $0) } ?? .black },
+              set: { preferences.customBackgroundColorHex = $0.toHex() }
+            ))
+
+          ColorPicker(
+            "Card Background",
+            selection: Binding(
+              get: {
+                preferences.customCardBackgroundColorHex.map { Color(hex: $0) } ?? Color(white: 0.1)
+              },
+              set: { preferences.customCardBackgroundColorHex = $0.toHex() }
+            ))
+        }
+        .listRowBackground(themeManager.cardBackgroundColor)
+
+        Section("Preview") {
+          VStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 12)
+              .fill(
+                preferences.customCardBackgroundColorHex.map { Color(hex: $0) } ?? Color(white: 0.1)
+              )
+              .frame(height: 60)
+              .overlay {
+                HStack {
+                  Circle()
+                    .fill(preferences.customAccentColorHex.map { Color(hex: $0) } ?? .pink)
+                    .frame(width: 30, height: 30)
+                  VStack(alignment: .leading) {
+                    Text("Song Title")
+                      .foregroundStyle(preferences.customColorScheme == .light ? .black : .white)
+                    Text("Artist Name")
+                      .font(.caption)
+                      .foregroundStyle(.secondary)
+                  }
+                  Spacer()
+                  Image(systemName: "play.fill")
+                    .foregroundStyle(
+                      preferences.customAccentColorHex.map { Color(hex: $0) } ?? .pink)
+                }
+                .padding()
+              }
+          }
+          .padding(.vertical)
+          .frame(maxWidth: .infinity)
+          .background(preferences.customBackgroundColorHex.map { Color(hex: $0) } ?? .black)
+          .clipShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .listRowBackground(Color.clear)  // Keep preview clear
+
+        Section {
+          Button("Reset to Defaults") {
+            preferences.customAccentColorHex = nil
+            preferences.customBackgroundColorHex = nil
+            preferences.customCardBackgroundColorHex = nil
+          }
+          .foregroundStyle(.red)
+        }
+        .listRowBackground(themeManager.cardBackgroundColor)
+      }
     }
+    .background(themeManager.backgroundColor)
+    .scrollContentBackground(.hidden)
+    .tint(themeManager.accentColor)
+    .navigationTitle("Custom Colors")
+    .navigationBarTitleDisplayMode(.inline)
+  }
 }
 
 // MARK: - Network Status View

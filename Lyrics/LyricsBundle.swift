@@ -5,12 +5,12 @@
 //  Created by Ome Asraf on 4/11/26.
 //
 
-import WidgetKit
 internal import SwiftUI
+import WidgetKit
 
 @main
 struct LyricsBundle: WidgetBundle {
-    var body: some Widget {
-        Lyrics()
-    }
+  var body: some Widget {
+    Lyrics()
+  }
 }

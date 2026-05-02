@@ -3,8 +3,8 @@
 //  Ampwave
 //
 
-internal import SwiftUI
 import SwiftData
+internal import SwiftUI
 
 struct MiniPlayerView: View {
   @Binding var isExpanded: Bool
@@ -17,7 +17,7 @@ struct MiniPlayerView: View {
 
   var body: some View {
     let isFloating = userPreferences?.miniPlayerFloating ?? true
-    
+
     HStack(spacing: 12) {
       // Artwork
       FixedArtworkThumbnail(

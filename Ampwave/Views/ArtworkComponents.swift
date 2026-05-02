@@ -17,13 +17,13 @@ struct ArtworkImageView: View {
     Group {
       if let image = image {
         #if os(iOS)
-        Image(uiImage: image)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
+          Image(uiImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
         #else
-        Image(nsImage: image)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
+          Image(nsImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
         #endif
       } else {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -44,11 +44,11 @@ struct ArtworkImageView: View {
   }
 
   private func loadImage() async {
-    guard let path = artworkPath, !path.isEmpty else { 
+    guard let path = artworkPath, !path.isEmpty else {
       image = nil
-      return 
+      return
     }
-    
+
     if let cached = await ImageCache.shared.image(for: path) {
       self.image = cached
       return
@@ -59,13 +59,13 @@ struct ArtworkImageView: View {
       do {
         let data = try Data(contentsOf: url)
         #if os(iOS)
-        return UIImage(data: data)
+          return UIImage(data: data)
         #else
-        return NSImage(data: data)
+          return NSImage(data: data)
         #endif
       } catch { return nil }
     }
-    
+
     if let loadedImage = await task.value {
       await ImageCache.shared.insert(loadedImage, for: path)
       self.image = loadedImage
@@ -81,13 +81,13 @@ struct LargeArtworkImageView: View {
     Group {
       if let image = image {
         #if os(iOS)
-        Image(uiImage: image)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
+          Image(uiImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
         #else
-        Image(nsImage: image)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
+          Image(nsImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
         #endif
       } else {
         RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -109,11 +109,11 @@ struct LargeArtworkImageView: View {
   }
 
   private func loadImage() async {
-    guard let path = artworkPath, !path.isEmpty else { 
+    guard let path = artworkPath, !path.isEmpty else {
       image = nil
-      return 
+      return
     }
-    
+
     if let cached = await ImageCache.shared.image(for: path) {
       self.image = cached
       return
@@ -124,13 +124,13 @@ struct LargeArtworkImageView: View {
       do {
         let data = try Data(contentsOf: url)
         #if os(iOS)
-        return UIImage(data: data)
+          return UIImage(data: data)
         #else
-        return NSImage(data: data)
+          return NSImage(data: data)
         #endif
       } catch { return nil }
     }
-    
+
     if let loadedImage = await task.value {
       await ImageCache.shared.insert(loadedImage, for: path)
       self.image = loadedImage

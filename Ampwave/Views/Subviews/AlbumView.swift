@@ -71,17 +71,18 @@ struct AlbumView: View {
         } header: {
           Text("Tracks")
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
       }
     }
     .background(themeManager.backgroundColor)
     .scrollContentBackground(.hidden)
     .navigationTitle(album.name)
     .listStyle(platformListStyle)
-#if os(iOS)
-    .navigationBarTitleDisplayMode(.large)
-#endif
+    #if os(iOS)
+      .navigationBarTitleDisplayMode(.large)
+    #endif
     .toolbar {
-        ToolbarItem(placement: .primaryAction) {
+      ToolbarItem(placement: .primaryAction) {
         Menu {
           Button {
             showingAddToPlaylist = true
@@ -112,14 +113,14 @@ struct AlbumView: View {
       }
     }
   }
-    
-    private var platformListStyle: some ListStyle {
-#if os(iOS)
-        .insetGrouped
-#else
-        .inset
-#endif
-    }
+
+  private var platformListStyle: some ListStyle {
+    #if os(iOS)
+      .insetGrouped
+    #else
+      .inset
+    #endif
+  }
 
   private var albumHeader: some View {
     VStack(spacing: 16) {
@@ -198,8 +199,8 @@ struct AlbumView: View {
         .background(themeManager.cardBackgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+          RoundedRectangle(cornerRadius: 12)
+            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
         )
       }
     }

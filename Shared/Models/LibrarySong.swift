@@ -55,7 +55,7 @@ final class LibrarySong: Identifiable, Hashable {
   // MARK: - Fetching status
   var metadataCheckAttempted: Bool = false
   var lyricsCheckAttempted: Bool = false
-  
+
   // MARK: - Watch Sync status
   var shouldSyncToWatch: Bool = false
 

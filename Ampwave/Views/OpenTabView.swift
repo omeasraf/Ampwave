@@ -68,18 +68,18 @@ struct OpenTabView: View {
         }
         .background(themeManager.backgroundColor)
       }
-        
-        // Playlists
-        Tab(
-            AppTab.playlists.rawValue,
-            systemImage: AppTab.playlists.icon,
-            value: AppTab.playlists
-        ) {
-            NavigationStack {
-                PlaylistsListView()
-            }
-            .background(themeManager.backgroundColor)
+
+      // Playlists
+      Tab(
+        AppTab.playlists.rawValue,
+        systemImage: AppTab.playlists.icon,
+        value: AppTab.playlists
+      ) {
+        NavigationStack {
+          PlaylistsListView()
         }
+        .background(themeManager.backgroundColor)
+      }
 
       // Settings
       Tab(
@@ -94,23 +94,23 @@ struct OpenTabView: View {
       }
 
       // Search tab (special role)
-//      Tab(value: AppTab.search, role: .search) {
-//        NavigationStack {
-//          SearchView()
-//        }
-//      }
+      //      Tab(value: AppTab.search, role: .search) {
+      //        NavigationStack {
+      //          SearchView()
+      //        }
+      //      }
     }
 
     #if os(iOS)
-    .tabViewBottomAccessory {
-      MiniPlayerView(isExpanded: $isPlayerExpanded)
+      .tabViewBottomAccessory {
+        MiniPlayerView(isExpanded: $isPlayerExpanded)
         .background(themeManager.backgroundColor)
-    }
+      }
     #else
-    .safeAreaInset(edge: .bottom) {
-      MiniPlayerView(isExpanded: $isPlayerExpanded)
+      .safeAreaInset(edge: .bottom) {
+        MiniPlayerView(isExpanded: $isPlayerExpanded)
         .background(.ultraThinMaterial)
-    }
+      }
     #endif
     .ignoresSafeArea(.keyboard)
     .safeAreaInset(edge: .top, spacing: 0) {

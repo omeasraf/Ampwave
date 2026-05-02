@@ -15,7 +15,7 @@ final class AppSettings: Identifiable {
   var groupSongsByAlbum: Bool = true
   /// Whether to automatically merge duplicate albums with same name and artist
   var mergeAlbumDuplicates: Bool = true
-  
+
   /// Sorting preferences for library tabs
   var songSortOrderRaw: String = LibrarySortOrder.titleAscending.rawValue
   var albumSortOrderRaw: String = LibrarySortOrder.titleAscending.rawValue
@@ -23,8 +23,8 @@ final class AppSettings: Identifiable {
   var playlistSortOrderRaw: String = LibrarySortOrder.dateAddedDescending.rawValue
 
   init(
-    groupSongsByAlbum: Bool = true, 
-    mergeAlbumDuplicates: Bool = true, 
+    groupSongsByAlbum: Bool = true,
+    mergeAlbumDuplicates: Bool = true,
     songSortOrder: LibrarySortOrder = .titleAscending,
     albumSortOrder: LibrarySortOrder = .titleAscending,
     artistSortOrder: LibrarySortOrder = .titleAscending,
@@ -38,22 +38,22 @@ final class AppSettings: Identifiable {
     self.artistSortOrderRaw = artistSortOrder.rawValue
     self.playlistSortOrderRaw = playlistSortOrder.rawValue
   }
-  
+
   var songSortOrder: LibrarySortOrder {
     get { LibrarySortOrder(rawValue: songSortOrderRaw) ?? .titleAscending }
     set { songSortOrderRaw = newValue.rawValue }
   }
-  
+
   var albumSortOrder: LibrarySortOrder {
     get { LibrarySortOrder(rawValue: albumSortOrderRaw) ?? .titleAscending }
     set { albumSortOrderRaw = newValue.rawValue }
   }
-  
+
   var artistSortOrder: LibrarySortOrder {
     get { LibrarySortOrder(rawValue: artistSortOrderRaw) ?? .titleAscending }
     set { artistSortOrderRaw = newValue.rawValue }
   }
-  
+
   var playlistSortOrder: LibrarySortOrder {
     get { LibrarySortOrder(rawValue: playlistSortOrderRaw) ?? .dateAddedDescending }
     set { playlistSortOrderRaw = newValue.rawValue }

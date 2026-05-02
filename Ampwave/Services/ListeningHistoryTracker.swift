@@ -33,7 +33,7 @@ final class ListeningHistoryTracker {
     if let previousSong = currentSong {
       let sessionDuration = currentPlayStartTime.map { Date().timeIntervalSince($0) } ?? 0
       let totalDuration = currentPlayDuration + sessionDuration
-      
+
       // Record the previous song with its known source
       let usedSource = PlaySource(rawValue: currentSourceRaw ?? source.rawValue) ?? .library
       recordPlay(

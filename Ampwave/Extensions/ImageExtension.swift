@@ -77,13 +77,13 @@ internal import SwiftUI
       // Resize to 1x1 for average color sampling
       let size = NSSize(width: 1, height: 1)
       let resizedImage = NSImage(
-          size: size,
-          flipped: false,
-          drawingHandler: { rect in
-            self.draw(in: rect)
-            return true
-          }
-        )
+        size: size,
+        flipped: false,
+        drawingHandler: { rect in
+          self.draw(in: rect)
+          return true
+        }
+      )
 
       guard let resizedTiff = resizedImage.tiffRepresentation,
         let resizedBitmap = NSBitmapImageRep(data: resizedTiff)
@@ -96,14 +96,14 @@ internal import SwiftUI
       guard let color = resizedBitmap.colorAt(x: 0, y: 0) else {
         return nil
       }
-      
+
       let rgbColor: NSColor
       if color.colorSpaceName != .deviceRGB && color.colorSpaceName != .calibratedRGB {
-          rgbColor = color.usingColorSpace(.deviceRGB) ?? color
+        rgbColor = color.usingColorSpace(.deviceRGB) ?? color
       } else {
-          rgbColor = color
+        rgbColor = color
       }
-      
+
       rgbColor.getRed(&r, green: &g, blue: &b, alpha: &a)
 
       return Color(red: r, green: g, blue: b)

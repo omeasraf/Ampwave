@@ -7,7 +7,6 @@
 
 internal import SwiftUI
 
-
 struct PlaylistArtworkView: View {
   let playlist: Playlist
   let size: CGFloat
