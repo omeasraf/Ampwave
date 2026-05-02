@@ -21,9 +21,16 @@ final class Artist: Identifiable, Hashable {
   var origin: String?
   var activeYears: String?
   var fanartURL: String?
+  var fanartPath: String?
   var artworkPath: String?
   var isDedicatedArtwork: Bool = false
   var remoteArtworkURL: String?
+  
+  // New caching fields
+  var cachedBiography: String?
+  var cachedOrigin: String?
+  var cachedActiveYears: String?
+  var cachedGenres: [String]?
 
   // MARK: - External IDs
   var musicBrainzId: String?

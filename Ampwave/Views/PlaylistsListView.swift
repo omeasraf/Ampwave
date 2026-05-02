@@ -10,6 +10,7 @@ internal import SwiftUI
 
 struct PlaylistsListView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(ThemeManager.self) private var themeManager
     @Query private var settings: [AppSettings]
     @State private var showingCreateSheet = false
     @State private var showUnpinAlert = false
@@ -85,7 +86,7 @@ struct PlaylistsListView: View {
                 Label("New Playlist", systemImage: "plus.circle.fill")
                     .font(.system(size: 16, weight: .semibold))
             }
-            .listRowBackground(Color.clear)
+            .listRowBackground(themeManager.backgroundColor)
             .sheet(isPresented: $showingCreateSheet) {
                 CreatePlaylistSheet()
             }
@@ -120,6 +121,7 @@ struct PlaylistsListView: View {
                         }
                     }
                 }
+                .listRowBackground(themeManager.backgroundColor)
                 .swipeActions(edge: .trailing) {
                     if playlist.playlistType != .likedSongs {
                         if playlist.playlistType == .custom
@@ -156,6 +158,8 @@ struct PlaylistsListView: View {
             }
         }
         .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(themeManager.backgroundColor)
         .overlay {
             if playlistManager.playlists.isEmpty {
                 ContentUnavailableView(

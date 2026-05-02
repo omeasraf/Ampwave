@@ -11,6 +11,8 @@ import SwiftData
 struct MacOSMainView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(ThemeManager.self) private var themeManager
     @State private var selection: SidebarItem? = .home
     @State private var servicesInitialized = false
     
@@ -40,6 +42,7 @@ struct MacOSMainView: View {
             SidebarView(selection: $selection)
         } detail: {
             DetailView(selection: $selection)
+                .background(themeManager.backgroundColor)
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
@@ -62,7 +65,11 @@ struct MacOSMainView: View {
             }
         }
         .onAppear {
+            ThemeManager.shared.ampwaveColorScheme = colorScheme
             setupServices()
+        }
+        .onChange(of: colorScheme) { _, newValue in
+            ThemeManager.shared.ampwaveColorScheme = newValue
         }
     }
     

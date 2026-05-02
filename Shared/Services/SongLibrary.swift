@@ -286,51 +286,36 @@ final class SongLibrary {
     }
 
     indexingStatus = .indexing("Scanning…")
-    defer {
-      print("[DEBUG] indexOnStartup completed")
+    
+    // 1. Scan disk in background
+    let songsDir = self.songsDirectory
+    let audioURLs = await Task.detached(priority: .userInitiated) {
+      self.findAudioFiles(in: songsDir)
+    }.value
+    
+    print("[DEBUG] Found \(audioURLs.count) audio files on disk")
+
+    // 2. Fetch existing songs from database (MainActor)
+    let descriptor = FetchDescriptor<LibrarySong>()
+    let existingSongs = (try? modelContext.fetch(descriptor)) ?? []
+    print("[DEBUG] Found \(existingSongs.count) existing songs in database")
+    
+    if existingSongs.isEmpty && !self.songs.isEmpty {
+      print("[DEBUG] DB returned empty but cache is not. Aborting index.")
       indexingStatus = .complete
       isIndexing = false
-    }
-
-    print("[DEBUG] Getting AppSettings")
-    let settings = AppSettings.getOrCreate(in: modelContext)
-
-    try? fileManager.createDirectory(at: songsDirectory, withIntermediateDirectories: true)
-
-    print("[DEBUG] Fetching existing songs from database")
-    let descriptor = FetchDescriptor<LibrarySong>()
-    var existingSongs: [LibrarySong]
-    do {
-      existingSongs = try modelContext.fetch(descriptor)
-      print("[DEBUG] Found \(existingSongs.count) existing songs in database")
-      
-      // Safety: if DB is empty but memory has songs, avoid mass deletion
-      if existingSongs.isEmpty && !self.songs.isEmpty {
-        print("[DEBUG] DB returned empty but cache is not. Aborting index.")
-        return
-      }
-    } catch {
-      print("[DEBUG] Failed to fetch songs, calling loadSongs: \(error)")
-      await loadSongs()
       return
     }
 
-    print("[DEBUG] Finding audio files on disk")
-    // Find audio files on disk
-    let audioURLs = findAudioFiles(in: songsDirectory)
-    print("[DEBUG] Found \(audioURLs.count) audio files on disk")
-
-    // Use standardized path strings for more reliable matching
+    // 3. Process changes
     let audioPathSet = Set(audioURLs.map { $0.standardizedFileURL.path })
     var fileNameToURLs: [String: [URL]] = [:]
     for url in audioURLs {
       fileNameToURLs[url.lastPathComponent, default: []].append(url)
     }
 
-    print("[DEBUG] Checking for moved or deleted files")
     var accountedForPaths = Set<String>()
-    var deletedCount = 0
-    var movedCount = 0
+    var deletedSongs: [LibrarySong] = []
     
     for song in existingSongs {
       let expectedURL = getFileURL(for: song).standardizedFileURL
@@ -342,100 +327,84 @@ final class SongLibrary {
       }
 
       // File is NOT at expected location. Check if it moved.
-      print("[DEBUG] Song \(song.title) not at expected path: \(expectedPath)")
       var foundMoved = false
       if let possibleURLs = fileNameToURLs[song.fileName] {
         for possibleURL in possibleURLs {
           if await self.fileHash(at: possibleURL) == song.fileHash {
-            print("[DEBUG] Found moved song at: \(possibleURL.path), moving back to: \(expectedPath)")
-            // Move it back to the expected location
+            // Move it back
             try? fileManager.createDirectory(at: expectedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             do {
               try fileManager.moveItem(at: possibleURL, to: expectedURL)
               accountedForPaths.insert(expectedPath)
               foundMoved = true
-              movedCount += 1
-            } catch {
-              print("[DEBUG] Failed to move file: \(error)")
-            }
+            } catch {}
             break
           }
         }
       }
 
       if !foundMoved {
-        print("[DEBUG] Deleting song from database (not found on disk): \(song.fileName) [\(song.title)]")
-        modelContext.delete(song)
-        deletedCount += 1
+        deletedSongs.append(song)
       }
     }
     
-    if deletedCount > 0 || movedCount > 0 {
-      print("[DEBUG] indexOnStartup results: \(movedCount) moved, \(deletedCount) deleted")
+    // Batch delete
+    for song in deletedSongs {
+      modelContext.delete(song)
     }
-
-    print("[DEBUG] Importing new files")
-    // Get existing hashes once for efficient lookup
+    
+    // 4. Import new files
     modelContext.processPendingChanges()
-    let finalExistingSongs = (try? modelContext.fetch(FetchDescriptor<LibrarySong>())) ?? []
-    let finalExistingHashes = Set(finalExistingSongs.map(\.fileHash))
+    let finalExistingHashes = Set(((try? modelContext.fetch(FetchDescriptor<LibrarySong>())) ?? []).map(\.fileHash))
 
-    // Use the accountedForPaths set to avoid processing files we already matched
-    var importCount = 0
+    var newFiles: [URL] = []
     for url in audioURLs {
       let standardizedPath = url.standardizedFileURL.path
       if accountedForPaths.contains(standardizedPath) { continue }
-
-      // Check by hash for truly unknown files
-      guard let hash = await self.fileHash(at: url) else { continue }
-      
-      // Double check if this hash somehow exists in DB
-      if finalExistingHashes.contains(hash) {
-        continue
-      }
-
-      print("[DEBUG] Importing new file found on disk: \(url.lastPathComponent)")
-      _ = await importFileInPlace(at: url, modelContext: modelContext)
-      importCount += 1
+      newFiles.append(url)
     }
     
-    if importCount > 0 {
-      print("[DEBUG] indexOnStartup imported \(importCount) new songs")
+    if !newFiles.isEmpty {
+      indexingStatus = .indexing("Importing \(newFiles.count) new songs…")
+      for url in newFiles {
+        guard let hash = await self.fileHash(at: url) else { continue }
+        if !finalExistingHashes.contains(hash) {
+          _ = await importFileInPlace(at: url, modelContext: modelContext)
+        }
+      }
     }
 
-    print("[DEBUG] Saving context")
     saveContext()
-
-    print("[DEBUG] Reindexing missing technical metadata")
     await reindexMissingTechnicalMetadata()
-
-    print("[DEBUG] Loading songs")
     await loadSongs()
+    
+    indexingStatus = .complete
+    isIndexing = false
   }
 
-  private func findAudioFiles(in directory: URL, currentDepth: Int = 0) -> [URL] {
+  nonisolated private func findAudioFiles(in directory: URL, currentDepth: Int = 0) -> [URL] {
     var audioFiles: [URL] = []
-    let maxDepth = 3 // Limit depth to avoid scanning outside the music folders if somehow linked
+    let maxDepth = 5
 
-    guard currentDepth <= maxDepth,
-      let contents = try? fileManager.contentsOfDirectory(
+    guard currentDepth <= maxDepth else { return [] }
+    
+    let fm = FileManager.default
+    guard let contents = try? fm.contentsOfDirectory(
         at: directory,
         includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
         options: .skipsHiddenFiles
-      )
-    else {
-      return audioFiles
-    }
+      ) else { return [] }
 
     for url in contents {
-      let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-
-      if isDir {
-        audioFiles.append(contentsOf: findAudioFiles(in: url, currentDepth: currentDepth + 1))
-      } else {
-        let ext = url.pathExtension.lowercased()
-        if Self.audioExtensions.contains(ext) {
-          audioFiles.append(url)
+      var isDir: ObjCBool = false
+      if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
+        if isDir.boolValue {
+          audioFiles.append(contentsOf: findAudioFiles(in: url, currentDepth: currentDepth + 1))
+        } else {
+          let ext = url.pathExtension.lowercased()
+          if SongLibrary.audioExtensions.contains(ext) {
+            audioFiles.append(url)
+          }
         }
       }
     }

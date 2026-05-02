@@ -64,6 +64,7 @@ struct LibrarySortMenu: View {
 
 struct LibraryView: View {
   @Environment(\.modelContext) private var modelContext
+  @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
   @State private var selectedTab: LibraryTab = .songs
   @State private var searchText = ""
@@ -99,6 +100,7 @@ struct LibraryView: View {
         }
       }
       .pickerStyle(.segmented)
+      .tint(themeManager.accentColor)
       .padding(.horizontal, 20)
       .padding(.vertical, 12)
 
@@ -114,6 +116,8 @@ struct LibraryView: View {
         }
       }
     }
+    .background(themeManager.backgroundColor)
+    .tint(themeManager.accentColor)
     .navigationTitle("Library")
     .toolbar {
       LibrarySortMenu(selectedTab: selectedTab, appSettings: appSettings)
@@ -130,6 +134,7 @@ struct LibraryView: View {
 struct SongsListView: View {
   let searchText: String
   @Environment(\.modelContext) private var modelContext
+  @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
 
   private var library: SongLibrary { SongLibrary.shared }
@@ -188,7 +193,7 @@ struct SongsListView: View {
           Label("Play All", systemImage: "play.circle.fill")
             .font(.system(size: 16, weight: .semibold))
         }
-        .listRowBackground(Color.clear)
+        .listRowBackground(themeManager.backgroundColor)
       }
 
       ForEach(filteredSongs) { song in
@@ -205,6 +210,7 @@ struct SongsListView: View {
             }) ?? 0
           )
         }
+        .listRowBackground(themeManager.backgroundColor)
         .swipeActions(edge: .trailing) {
           Button {
             playlistManager.toggleLike(song: song)
@@ -214,7 +220,7 @@ struct SongsListView: View {
                 ? "heart.slash" : "heart"
             )
           }
-          .tint(playlistManager.isLiked(song: song) ? .gray : .pink)
+          .tint(playlistManager.isLiked(song: song) ? .gray : themeManager.accentColor)
         }
         .swipeActions(edge: .leading) {
           Button {
@@ -227,6 +233,8 @@ struct SongsListView: View {
       }
     }
     .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .background(themeManager.backgroundColor)
     .overlay {
       if library.songs.isEmpty {
         ContentUnavailableView(
@@ -252,6 +260,7 @@ struct SongsListView: View {
 struct AlbumsGridView: View {
   let searchText: String
   @Environment(\.modelContext) private var modelContext
+  @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
 
   private var library: SongLibrary { SongLibrary.shared }
@@ -328,6 +337,7 @@ struct AlbumsGridView: View {
         .padding(.top, 12)
       }
     }
+    .background(themeManager.backgroundColor)
   }
 }
 
@@ -340,6 +350,7 @@ struct AlbumsGridView: View {
 struct ArtistsListView: View {
   let searchText: String
   @Environment(\.modelContext) private var modelContext
+  @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
   @State private var artists: [Artist] = []
 
@@ -399,9 +410,12 @@ struct ArtistsListView: View {
             }
           }
         }
+        .listRowBackground(themeManager.backgroundColor)
       }
     }
     .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .background(themeManager.backgroundColor)
     .overlay {
       if artists.isEmpty {
         ContentUnavailableView(

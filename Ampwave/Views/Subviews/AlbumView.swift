@@ -19,6 +19,8 @@ struct AlbumView: View {
     album.songs.sorted { ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0) }
   }
 
+  @Environment(ThemeManager.self) private var themeManager
+
   var body: some View {
     List {
       Section {
@@ -53,10 +55,10 @@ struct AlbumView: View {
                 Image(
                   systemName: playlistManager.isLiked(
                     song: song
-                  ) ? "heart.slash" : "heart"
+                  ) ? "heart.fill" : "heart"
                 )
               }
-              .tint(.pink)
+              .tint(themeManager.accentColor)
 
               Button {
                 playback.playNext(song)
@@ -71,6 +73,8 @@ struct AlbumView: View {
         }
       }
     }
+    .background(themeManager.backgroundColor)
+    .scrollContentBackground(.hidden)
     .navigationTitle(album.name)
     .listStyle(platformListStyle)
 #if os(iOS)
@@ -103,6 +107,7 @@ struct AlbumView: View {
           }
         } label: {
           Image(systemName: "ellipsis.circle")
+            .foregroundStyle(themeManager.accentColor)
         }
       }
     }
@@ -120,18 +125,21 @@ struct AlbumView: View {
     VStack(spacing: 16) {
       AlbumArtworkView(
         artworkPath: album.artworkPath,
-        size: 200
+        size: 220
       )
+      .clipShape(RoundedRectangle(cornerRadius: 16))
+      .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
 
       VStack(spacing: 4) {
         Text(album.name)
-          .font(.system(size: 24, weight: .bold))
+          .font(.system(size: 28, weight: .bold))
           .multilineTextAlignment(.center)
+          .foregroundStyle(.primary)
 
         if let artist = album.artist {
           Text(artist)
-            .font(.system(size: 18))
-            .foregroundStyle(.pink)
+            .font(.system(size: 20, weight: .medium))
+            .foregroundStyle(themeManager.accentColor)
         }
 
         HStack(spacing: 8) {
@@ -166,12 +174,13 @@ struct AlbumView: View {
           Image(systemName: "play.fill")
           Text("Play")
         }
-        .font(.system(size: 16, weight: .semibold))
+        .font(.system(size: 16, weight: .bold))
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(Color.pink)
-        .clipShape(Capsule())
+        .padding(.vertical, 14)
+        .background(themeManager.accentColor)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: themeManager.accentColor.opacity(0.3), radius: 5, y: 3)
       }
 
       Button {
@@ -182,14 +191,19 @@ struct AlbumView: View {
           Image(systemName: "shuffle")
           Text("Shuffle")
         }
-        .font(.system(size: 16, weight: .semibold))
+        .font(.system(size: 16, weight: .bold))
         .foregroundStyle(.primary)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
-        .clipShape(Capsule())
+        .padding(.vertical, 14)
+        .background(themeManager.cardBackgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+        )
       }
     }
+    .padding(.horizontal)
   }
 }
 

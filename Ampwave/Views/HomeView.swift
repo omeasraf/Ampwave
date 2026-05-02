@@ -12,6 +12,7 @@ internal import SwiftUI
 struct HomeView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(ThemeManager.self) private var themeManager
 
     private var library: SongLibrary { SongLibrary.shared }
     private var playback: PlaybackController { PlaybackController.shared }
@@ -129,6 +130,7 @@ struct HomeView: View {
             }
             .padding(.vertical, 20)
         }
+        .background(themeManager.backgroundColor)
         .navigationTitle("Home")
         .task {
             // Only load data once on initial appearance
@@ -294,7 +296,8 @@ struct HomeView: View {
 struct HorizontalSongSection: View {
     let title: String
     let songs: [LibrarySong]
-    let onSongPlayed: () -> Void
+    var onSongPlayed: (() -> Void)? = nil
+    @Environment(ThemeManager.self) private var themeManager
 
     private var playback: PlaybackController { PlaybackController.shared }
 
@@ -319,13 +322,15 @@ struct HorizontalSongSection: View {
                                         $0.id == song.id
                                     }) ?? 0
                                 )
-                                onSongPlayed()
+                                onSongPlayed?()
                             }
                     }
                 }
                 .padding(.horizontal, 20)
             }
         }
+        .padding(.vertical, 8)
+        .background(themeManager.backgroundColor)
     }
 }
 

@@ -54,22 +54,31 @@ struct AmpwaveApp: App {
       WatchSyncService.shared.setModelContext(context)
       #endif
       
+      // Setup preferences and theme
+      _ = UserPreferences.getOrCreate(in: context)
+      
     } catch {
       fatalError("Could not initialize ModelContainer: \(error)")
     }
 
   }
 
+  @State private var themeManager = ThemeManager.shared
+
   var body: some Scene {
     WindowGroup {
       #if os(macOS)
       MacOSMainView()
         .environment(\.modelContext, modelContainer.mainContext)
-        .tint(Color("AccentColor"))
+        .environment(themeManager)
+        .tint(themeManager.accentColor)
+        .preferredColorScheme(themeManager.colorScheme)
       #else
       ContentView()
         .environment(\.modelContext, modelContainer.mainContext)
-        .tint(Color("AccentColor"))
+        .environment(themeManager)
+        .tint(themeManager.accentColor)
+        .preferredColorScheme(themeManager.colorScheme)
         .onAppear {
           print("[DEBUG] App completely loaded and onAppear")
         }
@@ -81,6 +90,8 @@ struct AmpwaveApp: App {
     Window("Lyrics", id: "lyrics") {
       MacOSLyricsWindowView()
         .environment(\.modelContext, modelContainer.mainContext)
+        .environment(themeManager)
+        .preferredColorScheme(themeManager.colorScheme)
     }
     .windowStyle(.hiddenTitleBar)
     .windowResizability(.automatic)

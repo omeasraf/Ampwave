@@ -3,6 +3,7 @@
 //  Ampwave
 //
 
+import SwiftData
 internal import SwiftUI
 
 #if os(iOS)
@@ -13,6 +14,7 @@ internal import SwiftUI
 
 struct OpenPlayerView: View {
   @Environment(\.dismiss) private var dismiss
+  @Environment(ThemeManager.self) private var themeManager
   @State private var selectedTab: PlayerTab = .lyrics
   @State private var showingQueue = false
   @State private var isLyricsExpanded = false
@@ -32,37 +34,54 @@ struct OpenPlayerView: View {
     case queue = "Queue"
   }
 
+  @Query private var preferencesList: [UserPreferences]
+  private var userPreferences: UserPreferences? { preferencesList.first }
+
+  init() {}
+
   var body: some View {
     NavigationStack {
-      ScrollView {
-        VStack(spacing: 28) {
-          // Large Artwork
-          LargeFixedArtworkView(
-            artworkPath: playback.currentItem?.artworkPath
-          )
+      ZStack {
+        themeManager.backgroundColor.ignoresSafeArea()
 
-          // Track info
-          trackInfoSection
+        ScrollView {
+          VStack(spacing: 0) {
+            if userPreferences?.fullArtworkBackground ?? false {
+              FullArtworkBackgroundView(artworkPath: playback.currentItem?.artworkPath)
+                .frame(height: 500)
+            } else {
+              // Large Artwork
+              LargeFixedArtworkView(
+                artworkPath: playback.currentItem?.artworkPath
+              )
+              .padding(.top, 20)
+              .padding(.horizontal, 24)
+            }
 
-          // Progress
-          PlayerProgressView()
+            VStack(spacing: 28) {
+              // Track info
+              trackInfoSection
 
-          // Playback controls
-          PlayerPlaybackControlsView()
+              // Progress
+              PlayerProgressView()
 
-          // Extra controls
-          extraControls
+              // Playback controls
+              PlayerPlaybackControlsView()
 
-          // Lyrics/Queue tabs
-          tabSection
+              // Extra controls
+              extraControls
+
+              // Lyrics/Queue tabs
+              tabSection
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, (userPreferences?.fullArtworkBackground ?? false) ? 20 : 0)
+            .padding(.bottom, 30)
+          }
         }
-        .frame(maxWidth: 600)
-        .padding(.horizontal, 24)
-        .padding(.top, 20)
-        .padding(.bottom, 10)
-        .frame(maxWidth: .infinity)
+        .scrollContentBackground(.hidden)
+        .ignoresSafeArea(edges: .top)
       }
-      //      .background(.ultraThinMaterial)
       .navigationTitle("Now Playing")
       #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
@@ -74,17 +93,12 @@ struct OpenPlayerView: View {
           } label: {
             Image(systemName: "chevron.down")
               .font(.system(size: 18, weight: .semibold))
+              .shadow(radius: 2)
           }
         }
 
         ToolbarItem(placement: .primaryAction) {
           Menu {
-            //            Button {
-            //              // Share
-            //            } label: {
-            //              Label("Share", systemImage: "square.and.arrow.up")
-            //            }
-
             Button {
               isEditingShown = true
             } label: {
@@ -99,22 +113,15 @@ struct OpenPlayerView: View {
                 systemImage: "text.badge.plus"
               )
             }
-
-            Divider()
-
-            //            Button {
-            //              Task {
-            //                await playback.refreshLyrics()
-            //              }
-            //            } label: {
-            //              Label("Refresh Lyrics", systemImage: "arrow.clockwise")
-            //            }
           } label: {
             Image(systemName: "ellipsis")
               .font(.system(size: 18, weight: .semibold))
+              .shadow(radius: 2)
           }
         }
-      }.confirmationDialog(
+      }
+      .toolbarBackground(.hidden, for: .navigationBar)
+      .confirmationDialog(
         "Add Song to Playlist",
         isPresented: $showingAddToPlaylist
       ) {
@@ -123,7 +130,6 @@ struct OpenPlayerView: View {
             if let song = playback.currentItem {
               playlistManager.addSong(song, to: playlist)
             }
-
           }
         }
       } message: {
@@ -160,6 +166,7 @@ struct OpenPlayerView: View {
           Text(playback.currentItem?.title ?? "Not Playing")
             .font(.system(size: 22, weight: .bold))
             .lineLimit(1)
+            .foregroundStyle(.primary)
 
           if let song = playback.currentItem, let artist = SongLibrary.shared.getArtist(named: song.artist) {
             NavigationLink(destination: ArtistView(artist: artist)) {
@@ -191,7 +198,7 @@ struct OpenPlayerView: View {
             .font(.system(size: 24))
             .foregroundStyle(
               PlaylistManager.shared.isLiked(song: song)
-                ? .pink : .primary
+                ? themeManager.accentColor : .primary
             )
           }
           .contentTransition(.symbolEffect(.replace))
@@ -256,7 +263,7 @@ struct OpenPlayerView: View {
           Image(systemName: "shuffle")
             .font(.system(size: 22))
             .foregroundStyle(
-              playback.shuffleMode != .off ? .pink : .secondary
+              playback.shuffleMode != .off ? themeManager.accentColor : .secondary
             )
         }
 
@@ -290,7 +297,7 @@ struct OpenPlayerView: View {
   }
 
   private var repeatColor: Color {
-    playback.repeatMode == .off ? .secondary : .pink
+    playback.repeatMode == .off ? .secondary : themeManager.accentColor
   }
 
   private var tabSection: some View {

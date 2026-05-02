@@ -6,6 +6,9 @@
 //
 
 internal import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct ExpandedLyricsView: View {
     @Binding var isExpanded: Bool
@@ -13,166 +16,160 @@ struct ExpandedLyricsView: View {
     @State private var isProgrammaticScroll = false
     @State private var scrollTimeout: Timer?
     @State private var sliderHideTimer: Timer?
-
-    var playback = PlaybackController.shared
-
-    var body: some View {
-        @Bindable var playback = playback
-        #if os(macOS)
-        content
-        #else
-        NavigationStack {
-            content
-        }
-        #endif
-    }
+    @Environment(ThemeManager.self) private var themeManager
     
-    @ViewBuilder
-    private var content: some View {
-        ZStack {
-            // Background blur with artwork
-            if let artworkPath = playback.currentItem?.artworkPath {
-                ArtworkBackgroundView(artworkPath: artworkPath)
-            } else {
-                Color.clear.ignoresSafeArea()
-            }
-            
-            // Lyrics content
-            Group {
-                if let lyrics = playback.currentLyrics, lyrics.hasLyrics {
-                    ScrollViewReader { proxy in
-                        ScrollView(.vertical, showsIndicators: false) {
-                            VStack(spacing: 20) {
-                                // Top spacer for centering first line
-                                Color.clear
-                                    .frame(height: 200)
-                                
-                                ForEach(
-                                    Array(lyrics.lines.enumerated()),
-                                    id: \.element.timestamp
-                                ) { index, line in
-                                    LyricLineView(
-                                        line: line,
-                                        index: index,
-                                        isCurrent: isCurrentLine(index),
-                                        playback: playback
-                                    )
+    @Bindable private var playback = PlaybackController.shared
+    
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                // Background blur with artwork
+                if let artworkPath = playback.currentItem?.artworkPath {
+                    ArtworkBackgroundView(artworkPath: artworkPath)
+                } else {
+                    themeManager.backgroundColor.ignoresSafeArea()
+                }
+                
+                // Lyrics content
+                Group {
+                    if let lyrics = playback.currentLyrics, lyrics.hasLyrics {
+                        ScrollViewReader { proxy in
+                            ScrollView(.vertical, showsIndicators: false) {
+                                VStack(spacing: 20) {
+                                    // Top spacer for centering first line
+                                    Color.clear
+                                        .frame(height: 200)
+                                    
+                                    ForEach(
+                                        Array(lyrics.lines.enumerated()),
+                                        id: \.element.timestamp
+                                    ) { index, line in
+                                        LyricLineView(
+                                            line: line,
+                                            index: index,
+                                            isCurrent: isCurrentLine(index),
+                                            playback: playback
+                                        )
+                                    }
+                                    
+                                    // Bottom spacer for centering last line
+                                    Color.clear
+                                        .frame(height: 200)
                                 }
+#if os(iOS)
+                                .frame(width: UIScreen.main.bounds.width)
+#else
+                                .frame(maxWidth: .infinity)
+#endif
+                            }
+                            .id(playback.currentItem?.id)
+                            .onChange(of: playback.currentLyricIndex) { _, newIndex in
+                                guard let idx = newIndex, !isUserScrolling else {
+                                    return
+                                }
+                                isProgrammaticScroll = true
+                                withAnimation(.easeInOut(duration: 0.35)) {
+                                    proxy.scrollTo(idx, anchor: .center)
+                                }
+                            }
+                            .onScrollPhaseChange { _, newPhase in
+                                switch newPhase {
+                                case .idle:
+                                    if isProgrammaticScroll {
+                                        isProgrammaticScroll = false
+                                        return
+                                    }
+                                    scrollTimeout?.invalidate()
+                                    scrollTimeout = Timer.scheduledTimer(
+                                        withTimeInterval: 1.5,
+                                        repeats: false
+                                    ) { _ in
+                                        isUserScrolling = false
+                                        if let currentIndex = playback.currentLyricIndex {
+                                            isProgrammaticScroll = true
+                                            withAnimation(.easeInOut(duration: 0.35)) {
+                                                proxy.scrollTo(
+                                                    currentIndex,
+                                                    anchor: .center
+                                                )
+                                            }
+                                        }
+                                    }
+                                default:
+                                    if !isProgrammaticScroll {
+                                        isUserScrolling = true
+                                        scrollTimeout?.invalidate()
+                                    }
+                                }
+                            }
+                        }
+                    } else if let plainLyrics = playback.currentItem?.lyrics,
+                              !plainLyrics.isEmpty
+                    {
+                        // Plain text fallback
+                        ScrollView(.vertical, showsIndicators: false) {
+                            VStack(spacing: 30) {
+                                Color.clear.frame(height: 120)
                                 
-                                // Bottom spacer for centering last line
-                                Color.clear
-                                    .frame(height: 200)
+                                Text(plainLyrics.cleanedLRC)
+                                    .font(.system(size: 24, weight: .medium))
+                                    .foregroundStyle(.white)
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .lineSpacing(12)
+                                    .padding(.horizontal, 40)
+                                    .padding(.bottom, 60)
+                                
+                                Color.clear.frame(height: 120)
                             }
                             .frame(maxWidth: .infinity)
                         }
-                        .id(playback.currentItem?.id)
-                        .onChange(of: playback.currentLyricIndex) { _, newIndex in
-                            guard let idx = newIndex, !isUserScrolling else {
-                                return
-                            }
-                            isProgrammaticScroll = true
-                            withAnimation(.easeInOut(duration: 0.35)) {
-                                proxy.scrollTo(idx, anchor: .center)
-                            }
-                        }
-                        .onScrollPhaseChange { _, newPhase in
-                            switch newPhase {
-                            case .idle:
-                                if isProgrammaticScroll {
-                                    isProgrammaticScroll = false
-                                    return
-                                }
-                                scrollTimeout?.invalidate()
-                                scrollTimeout = Timer.scheduledTimer(
-                                    withTimeInterval: 1.5,
-                                    repeats: false
-                                ) { _ in
-                                    isUserScrolling = false
-                                    if let currentIndex = playback.currentLyricIndex {
-                                        isProgrammaticScroll = true
-                                        withAnimation(.easeInOut(duration: 0.35)) {
-                                            proxy.scrollTo(
-                                                currentIndex,
-                                                anchor: .center
-                                            )
-                                        }
-                                    }
-                                }
-                            default:
-                                if !isProgrammaticScroll {
-                                    isUserScrolling = true
-                                    scrollTimeout?.invalidate()
-                                }
-                            }
-                        }
-                    }
-                } else if let plainLyrics = playback.currentItem?.lyrics,
-                          !plainLyrics.isEmpty
-                {
-                    // Plain text fallback
-                    ScrollView(.vertical, showsIndicators: false) {
+                    } else if playback.isLoading {
+                        ProgressView()
+                            .controlSize(.large)
+                            .tint(.white)
+                    } else {
                         VStack(spacing: 20) {
-                            Color.clear.frame(height: 100)
+                            Image(systemName: "text.quote")
+                                .font(.system(size: 80))
+                                .foregroundStyle(.secondary)
                             
-                            Text(plainLyrics.cleanedLRC)
-                                .font(.system(size: 22, weight: .medium))
+                            Text("No Lyrics Available")
+                                .font(.title2.bold())
                                 .foregroundStyle(.white)
-                                .multilineTextAlignment(.center)
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .lineSpacing(10)
-                                .padding(.horizontal, 32)
-                            
-                            Color.clear.frame(height: 100)
                         }
-                        .frame(maxWidth: .infinity)
                     }
-                } else if playback.isLoading {
-                    ProgressView()
-                        .controlSize(.large)
-                        .tint(.white)
-                } else {
-                    VStack(spacing: 20) {
-                        Image(systemName: "text.quote")
-                            .font(.system(size: 80))
-                            .foregroundStyle(.secondary)
-                        
-                        Text("No Lyrics Available")
-                            .font(.title2.bold())
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle(playback.currentItem?.title ?? "")
+#if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+#endif
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        isExpanded = false
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(.white)
                     }
                 }
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle(playback.currentItem?.title ?? "")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .toolbar {
-            #if os(iOS)
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    isExpanded = false
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
+            .onAppear {
+#if os(iOS)
+                UIApplication.shared.isIdleTimerDisabled = true
+#endif
             }
-            #endif
-        }
-        .preferredColorScheme(.dark)
-        .onAppear {
+            .onDisappear {
 #if os(iOS)
-            UIApplication.shared.isIdleTimerDisabled = true
+                UIApplication.shared.isIdleTimerDisabled = false
 #endif
+            }
         }
-        .onDisappear {
-#if os(iOS)
-            UIApplication.shared.isIdleTimerDisabled = false
-#endif
-        }
+        // Overlay is now outside NavigationStack so it floats freely over the full screen
         .overlay(vocalControlOverlay, alignment: .bottomTrailing)
     }
     
@@ -180,14 +177,12 @@ struct ExpandedLyricsView: View {
         playback.currentLyricIndex == index
     }
     
-    @ViewBuilder
     private var vocalControlOverlay: some View {
-        #if os(iOS)
         let hasSyncedLyrics = playback.currentLyrics?.hasLyrics == true
         let isVocalReduced = hasSyncedLyrics && playback.vocalLevel < 0.99
         let showSlider = hasSyncedLyrics && playback.showVocalSlider
         
-        VStack(spacing: 20) {
+        return VStack(spacing: 20) {
             if showSlider {
                 VocalSlider(value: $playback.vocalLevel)
                     .transition(
@@ -232,11 +227,8 @@ struct ExpandedLyricsView: View {
         .padding(.trailing, 28)
         .padding(.bottom, 44)
         .zIndex(100)
-        #else
-        EmptyView()
-        #endif
     }
-
+    
     private func resetSliderTimer() {
         sliderHideTimer?.invalidate()
         sliderHideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
@@ -275,11 +267,10 @@ struct CompactLyricsView: View {
     @State private var isUserScrolling = false
     @State private var isProgrammaticScroll = false
     @State private var scrollTimeout: Timer?
-
-    var playback = PlaybackController.shared
-
+    
+    @Bindable private var playback = PlaybackController.shared
+    
     var body: some View {
-        @Bindable var playback = playback
         VStack {
             if let lyrics = playback.currentLyrics, lyrics.hasLyrics {
                 ScrollViewReader { proxy in
@@ -398,12 +389,25 @@ struct CompactLyricsView: View {
                     VStack(spacing: 12) {
                         Color.clear.frame(height: 40)
                         Text(plainLyrics.cleanedLRC)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.primary)
+                            .font(
+                                .system(
+                                    size: 15,
+                                    weight: .regular
+                                )
+                            )
+                            .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .lineLimit(nil)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, 20)
+                            .fixedSize(
+                                horizontal: false,
+                                vertical: true
+                            )
+                            .padding(.horizontal, 16)
+                            .frame(
+                                minWidth: 0,
+                                maxWidth: .infinity,
+                                alignment: .center
+                            )
                         Color.clear.frame(height: 40)
                     }
                     .frame(maxWidth: .infinity)
@@ -480,17 +484,16 @@ struct CompactLyricsView: View {
         )
     }()
     
-    ExpandedLyricsView(isExpanded: .constant(true))
+    return ExpandedLyricsView(isExpanded: .constant(true))
 }
 
 struct LyricLineView: View {
     let line: LyricLine
     let index: Int
     let isCurrent: Bool
-    var playback: PlaybackController
-
+    @Bindable var playback: PlaybackController
+    
     var body: some View {
-        @Bindable var playback = playback
         Text(line.text)
             .font(
                 .system(
@@ -506,7 +509,11 @@ struct LyricLineView: View {
             .fixedSize(horizontal: false, vertical: true)
             .lineSpacing(4)
             .padding(.horizontal, 32)
-            .frame(maxWidth: .infinity, alignment: .center)
+#if os(iOS)
+            .frame(maxWidth: UIScreen.main.bounds.width - 64)
+#else
+            .frame(maxWidth: .infinity)
+#endif
             .scaleEffect(
                 isCurrent ? 1.05 : 1.0,
                 anchor: .center
@@ -524,4 +531,3 @@ struct LyricLineView: View {
             )
     }
 }
-

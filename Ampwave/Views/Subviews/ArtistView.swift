@@ -12,9 +12,11 @@ import AppKit
 #endif
 
 internal import SwiftUI
+import SwiftData
 
 struct ArtistView: View {
   let artist: Artist
+  @Environment(ThemeManager.self) private var themeManager
   @State private var viewModel: ArtistDetailViewModel
 
   init(artist: Artist) {
@@ -38,6 +40,7 @@ struct ArtistView: View {
         }
       }
     }
+    .background(themeManager.backgroundColor)
     .navigationTitle(artist.name)
 #if os(iOS)
     .navigationBarTitleDisplayMode(.inline)
@@ -123,7 +126,17 @@ struct ArtistView: View {
       ZStack {
         // Background Image
         Group {
-          if let fanart = artist.fanartURL, let url = URL(string: fanart) {
+          if let fanartPath = artist.fanartPath, let url = PathManager.resolve(fanartPath) {
+             #if os(iOS)
+             if let image = UIImage(contentsOfFile: url.path) {
+                Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
+             }
+             #else
+             if let image = NSImage(contentsOfFile: url.path) {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+             }
+             #endif
+          } else if let fanart = artist.fanartURL, let url = URL(string: fanart) {
             AsyncImage(url: url) { phase in
               if let image = phase.image {
                 image.resizable().aspectRatio(contentMode: .fill)
@@ -142,19 +155,11 @@ struct ArtistView: View {
           .fill(.ultraThinMaterial)
           .opacity(0.8)
         
-        #if os(macOS)
         LinearGradient(
-          colors: [.clear, Color(NSColor.windowBackgroundColor)],
+          colors: [.clear, themeManager.backgroundColor],
           startPoint: .center,
           endPoint: .bottom
         )
-        #else
-        LinearGradient(
-          colors: [.clear, Color(UIColor.systemBackground)],
-          startPoint: .center,
-          endPoint: .bottom
-        )
-        #endif
       }
       .ignoresSafeArea(edges: .top)
     }
@@ -176,7 +181,7 @@ struct ArtistView: View {
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
-        .background(Color.pink)
+        .background(themeManager.accentColor)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
       }
 
@@ -212,7 +217,7 @@ struct ArtistView: View {
           } label: {
             Image(systemName: playlistManager.isLiked(song: song) ? "heart.slash" : "heart")
           }
-          .tint(.pink)
+          .tint(themeManager.accentColor)
         }
       }
     }
@@ -303,6 +308,7 @@ struct ArtistView: View {
   }
 
   private var hasArtistInfo: Bool {
+    (artist.cachedBiography != nil && !artist.cachedBiography!.isEmpty) ||
     (artist.biography != nil && !artist.biography!.isEmpty) ||
     (artist.origin != nil && !artist.origin!.isEmpty) ||
     (artist.activeYears != nil && !artist.activeYears!.isEmpty)
@@ -319,7 +325,7 @@ struct ArtistView: View {
       } label: {
         Text("Fetch Information")
           .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(.pink)
+          .foregroundStyle(themeManager.accentColor)
       }
     }
     .padding(.vertical, 20)
@@ -332,21 +338,22 @@ struct ArtistView: View {
 struct ArtistInfoSection: View {
   let artist: Artist
   @State private var isExpanded = false
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       SectionHeader(title: "About")
       
       VStack(alignment: .leading, spacing: 12) {
-        if let origin = artist.origin, !origin.isEmpty {
+        if let origin = artist.cachedOrigin ?? artist.origin, !origin.isEmpty {
           InfoRow(label: "Origin", value: origin)
         }
         
-        if let activeYears = artist.activeYears, !activeYears.isEmpty {
+        if let activeYears = artist.cachedActiveYears ?? artist.activeYears, !activeYears.isEmpty {
           InfoRow(label: "Active", value: activeYears)
         }
         
-        if let biography = artist.biography, !biography.isEmpty {
+        if let biography = artist.cachedBiography ?? artist.biography, !biography.isEmpty {
           Text(biography)
             .font(.system(size: 15))
             .foregroundStyle(.secondary)
@@ -360,7 +367,7 @@ struct ArtistInfoSection: View {
               }
             }
             .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.pink)
+            .foregroundStyle(themeManager.accentColor)
           }
         }
       }
@@ -463,6 +470,12 @@ class ArtistDetailViewModel {
       artist.fanartURL = metadata.fanartURL?.absoluteString
       artist.musicBrainzId = metadata.musicBrainzId
       
+      // Cache text data
+      artist.cachedBiography = metadata.biography
+      artist.cachedOrigin = metadata.origin
+      artist.cachedActiveYears = metadata.activeYears
+      artist.cachedGenres = metadata.genres
+      
       if let artworkURL = metadata.artworkURL {
         if let path = await metadataService.downloadArtwork(from: artworkURL) {
           artist.artworkPath = path
@@ -470,7 +483,14 @@ class ArtistDetailViewModel {
         }
       }
       
+      if let fanartURL = metadata.fanartURL {
+        if let path = await metadataService.downloadArtwork(from: fanartURL) {
+          artist.fanartPath = path
+        }
+      }
+      
       artist.lastUpdatedDate = Date()
+      try? artist.modelContext?.save()
     }
   }
 

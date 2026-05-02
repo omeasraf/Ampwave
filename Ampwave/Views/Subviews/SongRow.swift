@@ -14,6 +14,8 @@ struct SongRow: View {
 
   private var playback: PlaybackController { PlaybackController.shared }
 
+  @Environment(ThemeManager.self) private var themeManager
+
   var body: some View {
     HStack(spacing: 12) {
       if showArtwork {
@@ -42,7 +44,7 @@ struct SongRow: View {
       if isCurrent {
         Image(systemName: "waveform")
           .font(.system(size: 14))
-          .foregroundStyle(.pink)
+          .foregroundStyle(themeManager.accentColor)
           .symbolEffect(.pulse, options: .repeating)
       }
     }
@@ -56,6 +58,7 @@ struct SongRow: View {
 struct CompactSongRow: View {
   let song: LibrarySong
   let isCurrent: Bool
+  @Environment(ThemeManager.self) private var themeManager
 
   private var playback: PlaybackController { PlaybackController.shared }
 
@@ -79,7 +82,7 @@ struct CompactSongRow: View {
       if isCurrent {
         Image(systemName: "waveform")
           .font(.system(size: 12))
-          .foregroundStyle(.pink)
+          .foregroundStyle(themeManager.accentColor)
           .symbolEffect(.pulse, options: .repeating)
       }
     }
@@ -94,6 +97,7 @@ struct NumberedSongRow: View {
   let number: Int
   let song: LibrarySong
   let isCurrent: Bool
+  @Environment(ThemeManager.self) private var themeManager
 
   private var playback: PlaybackController { PlaybackController.shared }
 
@@ -103,7 +107,7 @@ struct NumberedSongRow: View {
       if isCurrent {
         Image(systemName: "waveform")
           .font(.system(size: 12))
-          .foregroundStyle(.pink)
+          .foregroundStyle(themeManager.accentColor)
           .symbolEffect(.pulse, options: .repeating)
           .frame(width: 28, alignment: .center)
       } else {

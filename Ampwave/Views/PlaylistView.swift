@@ -15,6 +15,7 @@ struct PlaylistView: View {
   @State private var showingEditSheet = false
   @State private var showingAddSongsSheet = false
   @State private var showingDeleteConfirmation = false
+  @Environment(ThemeManager.self) private var themeManager
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -58,6 +59,8 @@ struct PlaylistView: View {
       }
     }
     .listStyle(platformListStyle)
+    .background(themeManager.backgroundColor)
+    .scrollContentBackground(.hidden)
     .navigationTitle(playlist.name)
     #if os(iOS)
     .navigationBarTitleDisplayMode(.large)
@@ -208,7 +211,7 @@ struct PlaylistView: View {
             .foregroundStyle(.white)
             .frame(width: 120)
             .padding(.vertical, 12)
-            .background(Color.pink)
+            .background(themeManager.accentColor)
             .clipShape(Capsule())
           }
 
@@ -230,8 +233,12 @@ struct PlaylistView: View {
             .foregroundStyle(.primary)
             .frame(width: 120)
             .padding(.vertical, 12)
-            .background(.ultraThinMaterial)
+            .background(themeManager.cardBackgroundColor)
             .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+            )
           }
         }
       }

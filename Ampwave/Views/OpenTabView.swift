@@ -11,6 +11,7 @@ internal import SwiftUI
 
 struct OpenTabView: View {
   @Environment(\.modelContext) private var modelContext
+  @Environment(ThemeManager.self) private var themeManager
   @Binding var isPlayerExpanded: Bool
   @State private var selectedTab: AppTab = .home
   @State private var servicesInitialized = false
@@ -53,6 +54,7 @@ struct OpenTabView: View {
         NavigationStack {
           HomeView()
         }
+        .background(themeManager.backgroundColor)
       }
 
       // Library
@@ -64,6 +66,7 @@ struct OpenTabView: View {
         NavigationStack {
           LibraryView()
         }
+        .background(themeManager.backgroundColor)
       }
         
         // Playlists
@@ -75,6 +78,7 @@ struct OpenTabView: View {
             NavigationStack {
                 PlaylistsListView()
             }
+            .background(themeManager.backgroundColor)
         }
 
       // Settings
@@ -86,6 +90,7 @@ struct OpenTabView: View {
         NavigationStack {
           SettingsView()
         }
+        .background(themeManager.backgroundColor)
       }
 
       // Search tab (special role)
@@ -99,6 +104,7 @@ struct OpenTabView: View {
     #if os(iOS)
     .tabViewBottomAccessory {
       MiniPlayerView(isExpanded: $isPlayerExpanded)
+        .background(themeManager.backgroundColor)
     }
     #else
     .safeAreaInset(edge: .bottom) {

@@ -231,15 +231,37 @@ extension Color {
     return String(format: "#%06x", rgb)
   }
 
-  /// Initializes Color from a hex string.
+  /// Initializes Color from a hex string. Supports 3, 6, and 8 character hex codes.
   init(hex: String) {
-    var hex = hex
-    if hex.hasPrefix("#") { hex.removeFirst() }
-    var int = UInt64()
+    let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+    var int: UInt64 = 0
     Scanner(string: hex).scanHexInt64(&int)
-    let r = Double((int >> 16) & 0xFF) / 255.0
-    let g = Double((int >> 8) & 0xFF) / 255.0
-    let b = Double(int & 0xFF) / 255.0
-    self = Color(red: r, green: g, blue: b)
+    let a, r, g, b: UInt64
+    switch hex.count {
+    case 3: (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+    case 6: (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+    case 8: (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+    default: (a, r, g, b) = (1, 1, 1, 0)
+    }
+    self.init(.sRGB, red: Double(r)/255, green: Double(g)/255, blue: Double(b)/255, opacity: Double(a)/255)
+  }
+
+  func toHex() -> String? {
+    #if os(macOS)
+    let platformColor = NSColor(self)
+    guard let rgbColor = platformColor.usingColorSpace(.deviceRGB) else { return nil }
+    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    rgbColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+    if a != 1.0 { return String(format: "%02lX%02lX%02lX%02lX", lroundf(Float(a)*255), lroundf(Float(r)*255), lroundf(Float(g)*255), lroundf(Float(b)*255)) }
+    return String(format: "%02lX%02lX%02lX", lroundf(Float(r)*255), lroundf(Float(g)*255), lroundf(Float(b)*255))
+    #else
+    let uic = UIColor(self)
+    guard let components = uic.cgColor.components, components.count >= 3 else { return nil }
+    let r = Float(components[0]), g = Float(components[1]), b = Float(components[2])
+    var a = Float(1.0)
+    if components.count >= 4 { a = Float(components[3]) }
+    if a != 1.0 { return String(format: "%02lX%02lX%02lX%02lX", lroundf(a*255), lroundf(r*255), lroundf(g*255), lroundf(b*255)) }
+    return String(format: "%02lX%02lX%02lX", lroundf(r*255), lroundf(g*255), lroundf(b*255))
+    #endif
   }
 }

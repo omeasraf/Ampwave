@@ -8,6 +8,7 @@
 internal import SwiftUI
 
 struct SearchView: View {
+  @Environment(ThemeManager.self) private var themeManager
   @State private var searchText: String = ""
   @State private var selectedFilter: SearchFilter = .all
 
@@ -37,6 +38,7 @@ struct SearchView: View {
           )
         }
       }
+      .background(themeManager.backgroundColor)
       .navigationTitle("Search")
       .searchable(
         text: $searchText,
@@ -77,6 +79,7 @@ struct FilterChip: View {
   let title: String
   let isSelected: Bool
   let action: () -> Void
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     Button(action: action) {
@@ -85,7 +88,7 @@ struct FilterChip: View {
         .foregroundStyle(isSelected ? .white : .primary)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(isSelected ? Color.pink : Color.gray.opacity(0.2))
+        .background(isSelected ? themeManager.accentColor : themeManager.cardBackgroundColor)
         .clipShape(Capsule())
     }
     .buttonStyle(.plain)
@@ -96,6 +99,7 @@ struct FilterChip: View {
 
 struct SearchEmptyState: View {
   @State private var recentSearches: [String] = []
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     ScrollView {
@@ -112,7 +116,7 @@ struct SearchEmptyState: View {
                 recentSearches.removeAll()
               }
               .font(.system(size: 14))
-              .foregroundStyle(.pink)
+              .foregroundStyle(themeManager.accentColor)
             }
 
             FlowLayout(spacing: 8) {
@@ -135,7 +139,7 @@ struct SearchEmptyState: View {
               GridItem(.flexible()),
             ], spacing: 12
           ) {
-            BrowseCategoryCard(title: "Songs", color: .red)
+            BrowseCategoryCard(title: "Songs", color: themeManager.accentColor)
             BrowseCategoryCard(title: "Albums", color: .orange)
             BrowseCategoryCard(title: "Artists", color: .green)
             BrowseCategoryCard(title: "Playlists", color: .blue)
@@ -145,6 +149,7 @@ struct SearchEmptyState: View {
       }
       .padding(.vertical, 20)
     }
+    .background(themeManager.backgroundColor)
   }
 }
 
@@ -200,6 +205,7 @@ struct BrowseCategoryCard: View {
 struct SearchResultsView: View {
   let searchText: String
   let filter: SearchView.SearchFilter
+  @Environment(ThemeManager.self) private var themeManager
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -248,6 +254,8 @@ struct SearchResultsView: View {
       }
     }
     .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .background(themeManager.backgroundColor)
   }
 
   private var allResultsSection: some View {
@@ -385,6 +393,7 @@ struct SearchResultsView: View {
 
 struct TopResultCard: View {
   let song: LibrarySong
+  @Environment(ThemeManager.self) private var themeManager
 
   private var playback: PlaybackController { PlaybackController.shared }
 
@@ -415,11 +424,15 @@ struct TopResultCard: View {
 
         Image(systemName: "play.circle.fill")
           .font(.system(size: 40))
-          .foregroundStyle(.pink)
+          .foregroundStyle(themeManager.accentColor)
       }
       .padding()
-      .background(.ultraThinMaterial)
+      .background(themeManager.cardBackgroundColor)
       .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(Color.secondary.opacity(0.1), lineWidth: 1)
+      )
     }
     .buttonStyle(.plain)
   }
