@@ -83,7 +83,7 @@ struct AmpwaveApp: App {
         .environment(\.modelContext, modelContainer.mainContext)
     }
     .windowStyle(.hiddenTitleBar)
-    .windowResizability(.contentSize)
+    .windowResizability(.automatic)
     .defaultSize(width: 400, height: 600)
     #endif
   }

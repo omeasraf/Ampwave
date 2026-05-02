@@ -56,9 +56,11 @@ struct OpenPlayerView: View {
           // Lyrics/Queue tabs
           tabSection
         }
+        .frame(maxWidth: 600)
         .padding(.horizontal, 24)
         .padding(.top, 20)
         .padding(.bottom, 10)
+        .frame(maxWidth: .infinity)
       }
       //      .background(.ultraThinMaterial)
       .navigationTitle("Now Playing")

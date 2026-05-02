@@ -116,38 +116,37 @@ struct MacOSMainView: View {
     }
     
     private var nowPlayingInfo: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 4) {
             if let item = playback.currentItem {
-                HStack(spacing: 8) {
-                    FixedArtworkThumbnail(artworkPath: item.artworkPath, size: 24)
-                        .cornerRadius(4)
+                HStack(spacing: 10) {
+                    FixedArtworkThumbnail(artworkPath: item.artworkPath, size: 28)
+                        .cornerRadius(6)
                     
-                    VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 1) {
                         Text(item.title)
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: 12, weight: .bold))
                             .lineLimit(1)
                         Text(item.artist)
-                            .font(.system(size: 10))
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }
-                .frame(width: 160)
+                .frame(width: 280)
                 
                 progressView
             } else {
                 Text("Not Playing")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 160)
+                    .frame(width: 280)
+                    .frame(height: 44)
             }
         }
-        .frame(width: 180)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(Color.primary.opacity(0.06))
-        .cornerRadius(6)
+        .frame(width: 300)
+        .padding(.horizontal, 12)
+        .frame(maxHeight: .infinity)
     }
     
     private var progressView: some View {
@@ -164,11 +163,11 @@ struct MacOSMainView: View {
             in: 0...1
         )
         .controlSize(.mini)
-        .frame(width: 160)
+        .frame(width: 280)
     }
     
     private var volumeControl: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Image(systemName: "speaker.fill")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
@@ -182,7 +181,8 @@ struct MacOSMainView: View {
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
         }
-        .frame(width: 100)
+        .padding(.horizontal, 8)
+        .frame(height: 32)
     }
 }
 
