@@ -9,8 +9,9 @@ internal import SwiftUI
 struct FullArtworkBackgroundView: View {
   let artworkPath: String?
   @State private var image: PlatformImage?
-  private var theme: ThemeManager { ThemeManager.shared }
+  @Environment(ThemeManager.self) private var themeManager
   @Query private var preferencesList: [UserPreferences]
+
   private var userPreferences: UserPreferences? { preferencesList.first }
 
   init(artworkPath: String?) {
@@ -44,18 +45,19 @@ struct FullArtworkBackgroundView: View {
             )
         }
 
-        if theme.showFullArtworkGradient {
-          // The "bottom" gradient to blend with background
+        if userPreferences?.showFullArtworkGradient ?? true {
+          // Bottom feathering: accent wash then blend into app background
           LinearGradient(
             stops: [
               .init(color: .clear, location: 0),
-              .init(color: .clear, location: 0.4),  // Start higher to cover more artwork
-              .init(color: theme.backgroundColor.opacity(0.1), location: 0.55),
-              .init(color: theme.backgroundColor.opacity(0.3), location: 0.7),
-              .init(color: theme.backgroundColor.opacity(0.6), location: 0.85),
-              .init(color: theme.backgroundColor.opacity(0.85), location: 0.93),
-              .init(color: theme.backgroundColor.opacity(0.95), location: 0.98),
-              .init(color: theme.backgroundColor, location: 1.0),
+              .init(color: .clear, location: 0.2),
+              .init(color: themeManager.accentColor.opacity(0.03), location: 0.4),
+              .init(color: themeManager.accentColor.opacity(0.1), location: 0.6),
+              .init(color: themeManager.backgroundColor.opacity(0.3), location: 0.75),
+              .init(color: themeManager.backgroundColor.opacity(0.6), location: 0.85),
+              .init(color: themeManager.backgroundColor.opacity(0.85), location: 0.93),
+              .init(color: themeManager.backgroundColor.opacity(0.95), location: 0.97),
+              .init(color: themeManager.backgroundColor, location: 1.0),
             ],
             startPoint: .top,
             endPoint: .bottom
@@ -63,6 +65,7 @@ struct FullArtworkBackgroundView: View {
         }
       }
     }
+    .frame(height: 520)
     .task(id: artworkPath) {
       await loadImage()
     }

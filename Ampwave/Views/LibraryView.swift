@@ -66,7 +66,7 @@ struct LibraryView: View {
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
-  @State private var selectedTab: LibraryTab = .songs
+  @State private var selectedTab: LibraryTab
   @State private var searchText = ""
 
   private var library: SongLibrary { SongLibrary.shared }
@@ -74,6 +74,10 @@ struct LibraryView: View {
 
   private var appSettings: AppSettings {
     settings.first ?? AppSettings.getOrCreate(in: modelContext)
+  }
+
+  init(initialTab: LibraryTab = .songs) {
+    _selectedTab = State(initialValue: initialTab)
   }
 
   enum LibraryTab: String, CaseIterable {

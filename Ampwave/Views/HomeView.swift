@@ -663,31 +663,30 @@ struct QuickAccessButton: View {
 
 struct BrowseSection: View {
   var body: some View {
-    print("[DEBUG] BrowseSection.body rendering")
-    return VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 12) {
       Text("Browse")
         .font(.system(size: 22, weight: .bold))
         .padding(.horizontal, 20)
-      Text("Coming soon")
-        .font(.system(size: 15, weight: .light))
+
+      Text("Jump to albums, artists, playlists, or genres")
+        .font(.system(size: 14))
+        .foregroundStyle(.secondary)
         .padding(.horizontal, 20)
 
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHStack(spacing: 12) {
-          BrowseCard(
-            title: "Albums",
-            icon: "square.stack",
-            color: .purple
-          ).disabled(true)
-          BrowseCard(title: "Artists", icon: "person.2", color: .pink)
-            .disabled(true)
-          BrowseCard(
-            title: "Playlists",
-            icon: "list.bullet",
-            color: .cyan
-          ).disabled(true)
-          BrowseCard(title: "Genres", icon: "tag", color: .indigo)
-            .disabled(true)
+          BrowseCard(title: "Albums", icon: "square.stack", color: .purple) {
+            LibraryView(initialTab: .albums)
+          }
+          BrowseCard(title: "Artists", icon: "person.2", color: .pink) {
+            LibraryView(initialTab: .artists)
+          }
+          BrowseCard(title: "Playlists", icon: "list.bullet", color: .cyan) {
+            PlaylistsListView()
+          }
+          BrowseCard(title: "Genres", icon: "tag", color: .indigo) {
+            GenresBrowseView()
+          }
         }
         .padding(.horizontal, 20)
       }
@@ -697,13 +696,14 @@ struct BrowseSection: View {
 
 // MARK: - Browse Card
 
-struct BrowseCard: View {
+struct BrowseCard<Destination: View>: View {
   let title: String
   let icon: String
   let color: Color
+  @ViewBuilder var destination: () -> Destination
 
   var body: some View {
-    NavigationLink(destination: LibraryView()) {
+    NavigationLink(destination: destination()) {
       VStack(spacing: 8) {
         Image(systemName: icon)
           .font(.system(size: 28))
@@ -711,12 +711,139 @@ struct BrowseCard: View {
 
         Text(title)
           .font(.system(size: 14, weight: .semibold))
+          .multilineTextAlignment(.center)
       }
       .frame(width: 100, height: 100)
       .background(color.opacity(0.12))
       .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
     .buttonStyle(.plain)
+  }
+}
+
+// MARK: - Genres Browse
+
+struct GenresBrowseView: View {
+  @Environment(ThemeManager.self) private var themeManager
+  private var library: SongLibrary { SongLibrary.shared }
+
+  private var genres: [String] {
+    var unique = Set<String>()
+    for song in library.songs {
+      guard let raw = song.genre?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty
+      else { continue }
+      for part in raw.split(separator: "/") {
+        let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { unique.insert(trimmed) }
+      }
+    }
+    return unique.sorted {
+      $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+    }
+  }
+
+  var body: some View {
+    Group {
+      if genres.isEmpty {
+        ContentUnavailableView(
+          "No Genres Yet",
+          systemImage: "tag",
+          description: Text(
+            "Genres appear when your tracks have genre metadata. Try editing a song or enabling metadata fetch in Settings."
+          )
+        )
+      } else {
+        List {
+          ForEach(genres, id: \.self) { genre in
+            NavigationLink(destination: GenreSongsView(genre: genre)) {
+              HStack {
+                Image(systemName: "tag.fill")
+                  .foregroundStyle(themeManager.accentColor)
+                  .frame(width: 28)
+                Text(genre)
+                  .font(.system(size: 16, weight: .medium))
+              }
+            }
+            .listRowBackground(themeManager.backgroundColor)
+          }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+      }
+    }
+    .background(themeManager.backgroundColor)
+    .navigationTitle("Genres")
+    #if os(iOS)
+      .navigationBarTitleDisplayMode(.inline)
+    #endif
+  }
+}
+
+struct GenreSongsView: View {
+  let genre: String
+  @Environment(ThemeManager.self) private var themeManager
+  private var library: SongLibrary { SongLibrary.shared }
+  private var playback: PlaybackController { PlaybackController.shared }
+  private var playlistManager: PlaylistManager { PlaylistManager.shared }
+
+  private var songs: [LibrarySong] {
+    library.songs.filter { songMatchesGenre($0) }
+      .sorted {
+        $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+      }
+  }
+
+  private func songMatchesGenre(_ song: LibrarySong) -> Bool {
+    guard let g = song.genre, !g.isEmpty else { return false }
+    let needle = genre.lowercased()
+    let parts = g.split(separator: "/").map {
+      $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+    if parts.contains(needle) { return true }
+    return g.lowercased().contains(needle)
+  }
+
+  var body: some View {
+    List {
+      ForEach(songs) { song in
+        SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
+          .contentShape(Rectangle())
+          .onTapGesture {
+            playback.playQueue(
+              songs,
+              startingAt: songs.firstIndex(where: { $0.id == song.id }) ?? 0
+            )
+          }
+          .listRowBackground(themeManager.backgroundColor)
+          .swipeActions(edge: .trailing) {
+            Button {
+              playlistManager.toggleLike(song: song)
+            } label: {
+              Image(
+                systemName: playlistManager.isLiked(song: song)
+                  ? "heart.slash" : "heart"
+              )
+            }
+            .tint(playlistManager.isLiked(song: song) ? .gray : themeManager.accentColor)
+          }
+      }
+    }
+    .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .background(themeManager.backgroundColor)
+    .navigationTitle(genre)
+    #if os(iOS)
+      .navigationBarTitleDisplayMode(.inline)
+    #endif
+    .overlay {
+      if songs.isEmpty {
+        ContentUnavailableView(
+          "No Songs",
+          systemImage: "music.note",
+          description: Text("No tracks match this genre label.")
+        )
+      }
+    }
   }
 }
 

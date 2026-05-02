@@ -48,7 +48,6 @@ struct OpenPlayerView: View {
           VStack(spacing: 0) {
             if userPreferences?.fullArtworkBackground ?? false {
               FullArtworkBackgroundView(artworkPath: playback.currentItem?.artworkPath)
-                .frame(height: 500)
             } else {
               // Large Artwork
               LargeFixedArtworkView(

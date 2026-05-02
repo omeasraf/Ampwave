@@ -139,10 +139,10 @@ struct SearchEmptyState: View {
               GridItem(.flexible()),
             ], spacing: 12
           ) {
-            BrowseCategoryCard(title: "Songs", color: themeManager.accentColor)
-            BrowseCategoryCard(title: "Albums", color: .orange)
-            BrowseCategoryCard(title: "Artists", color: .green)
-            BrowseCategoryCard(title: "Playlists", color: .blue)
+            BrowseCategoryCard(title: "Songs", color: themeManager.accentColor, libraryTab: .songs)
+            BrowseCategoryCard(title: "Albums", color: .orange, libraryTab: .albums)
+            BrowseCategoryCard(title: "Artists", color: .green, libraryTab: .artists)
+            BrowseCategoryCard(title: "Playlists", color: .blue, isPlaylists: true)
           }
           .padding(.horizontal, 20)
         }
@@ -182,9 +182,11 @@ struct RecentSearchChip: View {
 struct BrowseCategoryCard: View {
   let title: String
   let color: Color
+  var libraryTab: LibraryView.LibraryTab = .songs
+  var isPlaylists: Bool = false
 
   var body: some View {
-    NavigationLink(destination: LibraryView()) {
+    NavigationLink(destination: destination) {
       ZStack(alignment: .topLeading) {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
           .fill(color)
@@ -197,6 +199,15 @@ struct BrowseCategoryCard: View {
       .frame(height: 100)
     }
     .buttonStyle(.plain)
+  }
+
+  @ViewBuilder
+  private var destination: some View {
+    if isPlaylists {
+      PlaylistsListView()
+    } else {
+      LibraryView(initialTab: libraryTab)
+    }
   }
 }
 

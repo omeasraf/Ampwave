@@ -8,6 +8,11 @@
 import Foundation
 import SwiftData
 internal import SwiftUI
+#if os(macOS)
+  import AppKit
+#elseif canImport(UIKit)
+  import UIKit
+#endif
 
 // MARK: - Theme Models
 
@@ -26,7 +31,6 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
   case dark
   case oled
   case roseGold
-  case midnightBlue
   case catppuccinLatte
   case catppuccinFrappe
   case catppuccinMacchiato
@@ -36,6 +40,13 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
 
   var id: String { rawValue }
 
+  /// Maps removed theme raw values and unknown keys to a sensible default.
+  static func resolved(fromStoredRaw raw: String?) -> AppTheme {
+    guard let raw, !raw.isEmpty else { return .ampwave }
+    if raw == "midnightBlue" { return .dark }
+    return AppTheme(rawValue: raw) ?? .ampwave
+  }
+
   var displayName: String {
     switch self {
     case .ampwave: return "Ampwave"
@@ -43,7 +54,6 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     case .dark: return "Dark"
     case .oled: return "OLED"
     case .roseGold: return "Rose Gold"
-    case .midnightBlue: return "Midnight Blue"
     case .catppuccinLatte: return "Catppuccin Latte"
     case .catppuccinFrappe: return "Catppuccin Frappé"
     case .catppuccinMacchiato: return "Catppuccin Macchiato"
@@ -61,8 +71,7 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     switch self {
     case .ampwave: actualIsDark = isDark
     case .light, .catppuccinLatte, .roseGold: actualIsDark = false
-    case .dark, .oled, .midnightBlue, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha,
-      .dracula:
+    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula:
       actualIsDark = true
     case .custom: actualIsDark = isDark
     }
@@ -73,33 +82,46 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
 
     switch self {
     case .ampwave:
-      bg = actualIsDark ? Color(white: 0.05) : Color(white: 0.95)
-      accent = Color.pink
-      card = nil
+      // System semantic colors so the UI follows the platform appearance (materials, tint, etc.).
+      #if os(macOS)
+        bg = Color(nsColor: .windowBackgroundColor)
+        card = Color(nsColor: .controlBackgroundColor)
+      #elseif os(iOS)
+        bg = Color(uiColor: .systemBackground)
+        card = Color(uiColor: .secondarySystemGroupedBackground)
+      #elseif os(tvOS)
+        bg = Color(uiColor: .systemBackground)
+        card = Color(uiColor: .secondarySystemBackground)
+      #elseif os(watchOS)
+        // watchOS UIKit lacks grouped/semantic background colors used on iOS.
+        bg = Color(white: 0.05)
+        card = Color(white: 0.14)
+      #else
+        bg = Color.white
+        card = Color(white: 0.92)
+      #endif
+      accent = Color.accentColor
     case .light:
-      bg = .white
-      accent = Color.pink
-      card = Color(white: 0.95)
+      bg = Color(red: 250 / 255.0, green: 250 / 255.0, blue: 252 / 255.0)
+      accent = Color(red: 236 / 255.0, green: 72 / 255.0, blue: 153 / 255.0)
+      card = Color(red: 244 / 255.0, green: 244 / 255.0, blue: 247 / 255.0)
     case .dark:
-      bg = Color(white: 0.1)
-      accent = Color.pink
-      card = Color(white: 0.15)
+      bg = Color(red: 18 / 255.0, green: 18 / 255.0, blue: 20 / 255.0)
+      accent = Color(red: 236 / 255.0, green: 72 / 255.0, blue: 153 / 255.0)
+      card = Color(red: 30 / 255.0, green: 30 / 255.0, blue: 33 / 255.0)
     case .oled:
       bg = .black
-      accent = Color.pink
-      card = Color(white: 0.1)
+      accent = Color(red: 236 / 255.0, green: 72 / 255.0, blue: 153 / 255.0)
+      card = Color(red: 22 / 255.0, green: 22 / 255.0, blue: 24 / 255.0)
     case .roseGold:
       bg = Color(red: 0.98, green: 0.92, blue: 0.94)
-      accent = .pink
+      accent = Color(red: 190 / 255.0, green: 120 / 255.0, blue: 135 / 255.0)
       card = Color(red: 1.0, green: 0.96, blue: 0.97)
-    case .midnightBlue:
-      bg = Color(red: 8 / 255.0, green: 17 / 255.0, blue: 59 / 255.0)
-      accent = .blue
-      card = Color(red: 15 / 255.0, green: 25 / 255.0, blue: 80 / 255.0)
+    // Catppuccin: https://github.com/catppuccin/palette — Base, Surface0, Mauve, Text, Subtext1
     case .catppuccinLatte:
       bg = Color(red: 239 / 255.0, green: 241 / 255.0, blue: 245 / 255.0)
       accent = Color(red: 136 / 255.0, green: 57 / 255.0, blue: 239 / 255.0)
-      card = Color(red: 230 / 255.0, green: 233 / 255.0, blue: 239 / 255.0)
+      card = Color(red: 204 / 255.0, green: 208 / 255.0, blue: 218 / 255.0)
     case .catppuccinFrappe:
       bg = Color(red: 48 / 255.0, green: 52 / 255.0, blue: 70 / 255.0)
       accent = Color(red: 202 / 255.0, green: 158 / 255.0, blue: 230 / 255.0)
@@ -123,8 +145,28 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     }
 
     let actualCard = card ?? (actualIsDark ? bg.lighter(by: 0.05) : bg.darker(by: 0.05))
-    let primaryText = actualIsDark ? Color.white : Color.black
-    let secondaryText = actualIsDark ? Color.white.opacity(0.7) : Color.black.opacity(0.7)
+    let primaryText: Color
+    let secondaryText: Color
+    switch self {
+    case .ampwave:
+      primaryText = Color.primary
+      secondaryText = Color.secondary
+    case .catppuccinLatte:
+      primaryText = Color(red: 76 / 255.0, green: 79 / 255.0, blue: 105 / 255.0)
+      secondaryText = Color(red: 92 / 255.0, green: 95 / 255.0, blue: 119 / 255.0)
+    case .catppuccinFrappe:
+      primaryText = Color(red: 198 / 255.0, green: 208 / 255.0, blue: 245 / 255.0)
+      secondaryText = Color(red: 181 / 255.0, green: 191 / 255.0, blue: 226 / 255.0)
+    case .catppuccinMacchiato:
+      primaryText = Color(red: 202 / 255.0, green: 211 / 255.0, blue: 245 / 255.0)
+      secondaryText = Color(red: 184 / 255.0, green: 192 / 255.0, blue: 224 / 255.0)
+    case .catppuccinMocha:
+      primaryText = Color(red: 205 / 255.0, green: 214 / 255.0, blue: 244 / 255.0)
+      secondaryText = Color(red: 186 / 255.0, green: 194 / 255.0, blue: 222 / 255.0)
+    default:
+      primaryText = actualIsDark ? Color.white : Color.black
+      secondaryText = actualIsDark ? Color.white.opacity(0.72) : Color.black.opacity(0.62)
+    }
 
     return ThemeConfig(
       background: bg,
@@ -147,7 +189,7 @@ final class ThemeManager {
   var currentTheme: AppTheme {
     if let prefs = userPreferences { return prefs.selectedTheme }
     let raw = UserDefaults.standard.string(forKey: "com.ampwave.selectedTheme")
-    return AppTheme(rawValue: raw ?? "") ?? .ampwave
+    return AppTheme.resolved(fromStoredRaw: raw)
   }
 
   var themeConfig: ThemeConfig {
@@ -176,8 +218,7 @@ final class ThemeManager {
     }
     switch currentTheme {
     case .light, .catppuccinLatte, .roseGold: return .light
-    case .dark, .oled, .midnightBlue, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha,
-      .dracula:
+    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula:
       return .dark
     default: return nil
     }
@@ -360,7 +401,7 @@ final class UserPreferences: Identifiable {
   }
 
   var selectedTheme: AppTheme {
-    get { AppTheme(rawValue: selectedThemeRaw ?? AppTheme.ampwave.rawValue) ?? .ampwave }
+    get { AppTheme.resolved(fromStoredRaw: selectedThemeRaw ?? AppTheme.ampwave.rawValue) }
     set {
       selectedThemeRaw = newValue.rawValue
       save()
@@ -434,6 +475,12 @@ final class UserPreferences: Identifiable {
       descriptor.fetchLimit = 1
       if let existing = try modelContext.fetch(descriptor).first {
         // Ensure new fields have defaults if they were migrated as nil
+        if existing.selectedThemeRaw == "midnightBlue"
+          || UserDefaults.standard.string(forKey: "com.ampwave.selectedTheme") == "midnightBlue"
+        {
+          existing.selectedThemeRaw = AppTheme.dark.rawValue
+          UserDefaults.standard.set(AppTheme.dark.rawValue, forKey: "com.ampwave.selectedTheme")
+        }
         if existing.selectedThemeRaw == nil {
           existing.selectedThemeRaw = AppTheme.ampwave.rawValue
         }
@@ -458,6 +505,9 @@ final class UserPreferences: Identifiable {
 
 // MARK: - ThemeManager Extensions
 extension ThemeManager {
+  /// Uses platform semantic colors and does not force a custom global accent (Liquid Glass / system chrome).
+  var usesSystemAppearance: Bool { currentTheme == .ampwave }
+
   var fullArtworkBackground: Bool { userPreferences?.fullArtworkBackground ?? false }
   var showFullArtworkGradient: Bool { userPreferences?.showFullArtworkGradient ?? true }
   var miniPlayerFloating: Bool { userPreferences?.miniPlayerFloating ?? false }

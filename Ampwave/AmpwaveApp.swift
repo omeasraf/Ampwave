@@ -8,6 +8,22 @@
 import SwiftData
 internal import SwiftUI
 
+/// Applies tint and color scheme from `ThemeManager` in the environment (observation-safe; avoids @State + singleton issues).
+private struct AppThemeChrome: ViewModifier {
+  @Environment(ThemeManager.self) private var themeManager
+
+  func body(content: Content) -> some View {
+    Group {
+      if themeManager.usesSystemAppearance {
+        content
+      } else {
+        content.tint(themeManager.accentColor)
+      }
+    }
+    .preferredColorScheme(themeManager.colorScheme)
+  }
+}
+
 @main
 struct AmpwaveApp: App {
   // Shared model container for SwiftData
@@ -63,35 +79,36 @@ struct AmpwaveApp: App {
 
   }
 
-  @State private var themeManager = ThemeManager.shared
-
   var body: some Scene {
     WindowGroup {
-      #if os(macOS)
-        MacOSMainView()
-          .environment(\.modelContext, modelContainer.mainContext)
-          .environment(themeManager)
-          .tint(themeManager.accentColor)
-          .preferredColorScheme(themeManager.colorScheme)
-      #else
-        ContentView()
-          .environment(\.modelContext, modelContainer.mainContext)
-          .environment(themeManager)
-          .tint(themeManager.accentColor)
-          .preferredColorScheme(themeManager.colorScheme)
-          .onAppear {
-            print("[DEBUG] App completely loaded and onAppear")
-          }
-      #endif
+      // `ThemeManager` must be on an ancestor of `AppThemeChrome` — environment only flows down,
+      // so it cannot be read from a ViewModifier applied after `.environment(...)` on the same leaf.
+      Group {
+        #if os(macOS)
+          MacOSMainView()
+            .environment(\.modelContext, modelContainer.mainContext)
+            .modifier(AppThemeChrome())
+        #else
+          ContentView()
+            .environment(\.modelContext, modelContainer.mainContext)
+            .modifier(AppThemeChrome())
+            .onAppear {
+              print("[DEBUG] App completely loaded and onAppear")
+            }
+        #endif
+      }
+      .environment(ThemeManager.shared)
     }
     .modelContainer(modelContainer)
 
     #if os(macOS)
       Window("Lyrics", id: "lyrics") {
-        MacOSLyricsWindowView()
-          .environment(\.modelContext, modelContainer.mainContext)
-          .environment(themeManager)
-          .preferredColorScheme(themeManager.colorScheme)
+        Group {
+          MacOSLyricsWindowView()
+            .environment(\.modelContext, modelContainer.mainContext)
+            .modifier(AppThemeChrome())
+        }
+        .environment(ThemeManager.shared)
       }
       .windowStyle(.hiddenTitleBar)
       .windowResizability(.automatic)
