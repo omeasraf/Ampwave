@@ -7,11 +7,15 @@ import SwiftData
 internal import SwiftUI
 import UniformTypeIdentifiers
 
+enum ImportType {
+  case file
+  case folder
+  case playlist
+}
+
 struct SettingsView: View {
   @Environment(\.modelContext) private var modelContext
-  @State private var isPresentingImporter = false
-  @State private var isPresentingPlaylistImport = false
-  @State private var isImportingFolder = false
+  @State private var importType: ImportType?
   @State private var importError: String?
   @State private var isImporting = false
   @State private var importProgress: Double = 0
@@ -42,6 +46,19 @@ struct SettingsView: View {
 
   @Environment(ThemeManager.self) private var themeManager
 
+  private var allowedContentTypesForImport: [UTType] {
+    switch importType {
+    case .file:
+      return [.audio]
+    case .folder:
+      return [.folder]
+    case .playlist:
+      return PlaylistImportExport.importableContentTypes
+    case .none:
+      return [.audio]
+    }
+  }
+
   var body: some View {
     List {
       importSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -66,25 +83,25 @@ struct SettingsView: View {
     .tint(themeManager.accentColor)
     .navigationTitle("Settings")
     .fileImporter(
-      isPresented: $isPresentingImporter,
-      allowedContentTypes: isImportingFolder ? [.folder] : [.audio],
-      allowsMultipleSelection: !isImportingFolder
+      isPresented: Binding(
+        get: { importType != nil },
+        set: { if !$0 { importType = nil } }
+      ),
+      allowedContentTypes: allowedContentTypesForImport,
+      allowsMultipleSelection: importType != .folder && importType != .playlist
     ) { result in
       Task { @MainActor in
-        if isImportingFolder {
-          await handleFolderImport(result)
-        } else {
+        switch importType {
+        case .file:
           await handleFileImport(result)
+        case .folder:
+          await handleFolderImport(result)
+        case .playlist:
+          await handlePlaylistImport(result)
+        case .none:
+          break
         }
-      }
-    }
-    .fileImporter(
-      isPresented: $isPresentingPlaylistImport,
-      allowedContentTypes: [PlaylistImportExport.playlistUTType, .plainText],
-      allowsMultipleSelection: false
-    ) { result in
-      Task { @MainActor in
-        await handlePlaylistImport(result)
+        importType = nil
       }
     }
     .alert("Clear Cache?", isPresented: $showingClearCacheConfirmation) {
@@ -226,23 +243,21 @@ struct SettingsView: View {
   private var importSection: some View {
     Section {
       Button {
-        isImportingFolder = false
-        isPresentingImporter = true
+        importType = .file
       } label: {
         Label("Import Songs", systemImage: "square.and.arrow.down")
       }
       .disabled(isImporting)
 
       Button {
-        isImportingFolder = true
-        isPresentingImporter = true
+        importType = .folder
       } label: {
         Label("Import Folder", systemImage: "folder.badge.plus")
       }
       .disabled(isImporting)
 
       Button {
-        isPresentingPlaylistImport = true
+        importType = .playlist
       } label: {
         Label("Import Playlist (M3U)", systemImage: "music.note.list")
       }
@@ -724,8 +739,12 @@ struct SettingsView: View {
         if library.modelContext == nil {
           library.setModelContext(modelContext)
         }
-        _ = try PlaylistImportExport.importM3U(
-          data: data, into: modelContext, library: library)
+        _ = try PlaylistImportExport.importPlaylist(
+          data: data,
+          sourceURL: url,
+          into: modelContext,
+          library: library
+        )
         try modelContext.save()
       } catch {
         importError = error.localizedDescription

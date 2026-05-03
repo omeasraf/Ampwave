@@ -343,6 +343,8 @@ struct SearchResultsView: View {
   let filter: SearchView.SearchFilter
   @Environment(ThemeManager.self) private var themeManager
   @State private var results = SearchResultsBundle.empty
+  @State private var index = SearchLibraryIndex.empty
+  @State private var searchTask: Task<Void, Never>?
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -366,7 +368,8 @@ struct SearchResultsView: View {
     .scrollContentBackground(.hidden)
     .background(themeManager.backgroundColor)
     .task(id: searchID) {
-      await refreshResults()
+      await rebuildIndexIfNeeded()
+      refreshResults()
     }
   }
 
@@ -503,23 +506,45 @@ struct SearchResultsView: View {
     }
   }
 
-  private func refreshResults() async {
+  private func refreshResults() {
+    searchTask?.cancel()
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
       results = .empty
       return
     }
 
-    await Task.yield()
-    results = buildResults(for: trimmed)
+    searchTask = Task {
+      await Task.yield()
+      guard !Task.isCancelled else { return }
+      let computed = buildResults(for: trimmed)
+      guard !Task.isCancelled else { return }
+      results = computed
+    }
+  }
+
+  private func rebuildIndexIfNeeded() async {
+    let candidate = SearchLibraryIndex(
+      songs: library.songs,
+      albums: library.albums,
+      artists: library.artists.isEmpty
+        ? Array(Set(library.songs.map(\.artist))).map { Artist(name: $0) }
+        : library.artists,
+      playlists: playlistManager.playlists
+    )
+
+    if candidate.signature != index.signature {
+      index = candidate
+    }
   }
 
   private func buildResults(for query: String) -> SearchResultsBundle {
-    let normalizedQuery = normalize(query)
-    let songRanks = rankedSongs(for: normalizedQuery)
-    let albumRanks = rankedAlbums(for: normalizedQuery)
-    let artistRanks = rankedArtists(for: normalizedQuery)
-    let playlistRanks = rankedPlaylists(for: normalizedQuery)
+    let normalizedQuery = SearchFuzzyEngine.normalize(query)
+    let queryTokens = SearchFuzzyEngine.tokens(from: normalizedQuery)
+    let songRanks = rankedSongs(for: normalizedQuery, queryTokens: queryTokens)
+    let albumRanks = rankedAlbums(for: normalizedQuery, queryTokens: queryTokens)
+    let artistRanks = rankedArtists(for: normalizedQuery, queryTokens: queryTokens)
+    let playlistRanks = rankedPlaylists(for: normalizedQuery, queryTokens: queryTokens)
 
     return SearchResultsBundle(
       songs: songRanks.map(\.item),
@@ -530,31 +555,53 @@ struct SearchResultsView: View {
     )
   }
 
-  private func rankedSongs(for normalizedQuery: String) -> [Ranked<LibrarySong>] {
-    library.songs.compactMap { song in
-      let titleScore = matchScore(haystack: normalize(song.title), needle: normalizedQuery, weight: 4.0)
-      let artistScore = matchScore(haystack: normalize(song.artist), needle: normalizedQuery, weight: 3.0)
-      let albumScore = matchScore(haystack: normalize(song.album ?? ""), needle: normalizedQuery, weight: 2.0)
-      let genreScore = matchScore(haystack: normalize(song.genre ?? ""), needle: normalizedQuery, weight: 1.2)
+  private func rankedSongs(for normalizedQuery: String, queryTokens: [String]) -> [Ranked<LibrarySong>] {
+    index.songs.compactMap { entry in
+      let titleScore = SearchFuzzyEngine.score(
+        needle: normalizedQuery,
+        needleTokens: queryTokens,
+        haystack: entry.normalizedTitle,
+        haystackTokens: entry.titleTokens,
+        weight: 4.6
+      )
+      let artistScore = SearchFuzzyEngine.score(
+        needle: normalizedQuery,
+        needleTokens: queryTokens,
+        haystack: entry.normalizedArtist,
+        haystackTokens: entry.artistTokens,
+        weight: 3.2
+      )
+      let albumScore = SearchFuzzyEngine.score(
+        needle: normalizedQuery,
+        needleTokens: queryTokens,
+        haystack: entry.normalizedAlbum,
+        haystackTokens: entry.albumTokens,
+        weight: 2.1
+      )
+      let genreScore = SearchFuzzyEngine.score(
+        needle: normalizedQuery,
+        needleTokens: queryTokens,
+        haystack: entry.normalizedGenre,
+        haystackTokens: entry.genreTokens,
+        weight: 1.2
+      )
 
       var score = titleScore + artistScore + albumScore + genreScore
 
-      if normalizedQuery.count >= 3, score < 4.5 {
-        if normalize(song.lyrics ?? "").contains(normalizedQuery) {
-          score += 1.4
-        } else if normalizedQuery.count >= 4,
-          let syncedLyrics = LyricsService.shared.getCachedLyrics(for: song),
-          syncedLyrics.lines.contains(where: { normalize($0.text).contains(normalizedQuery) })
-        {
-          score += 1.0
-        }
+      if queryTokens.count >= 2 || normalizedQuery.count >= 5 {
+        score += SearchFuzzyEngine.scoreLyrics(
+          needle: normalizedQuery,
+          needleTokens: queryTokens,
+          haystackTokens: entry.lyricsTokens,
+          haystackText: entry.normalizedLyrics
+        )
       }
 
-      if score <= 0 { return nil }
-      if song.artworkPath != nil { score += 0.2 }
-      if song.genre != nil { score += 0.1 }
+      if score <= 0.35 { return nil }
+      if entry.song.artworkPath != nil { score += 0.25 }
+      if entry.song.genre != nil { score += 0.1 }
 
-      return Ranked(item: song, score: score)
+      return Ranked(item: entry.song, score: score)
     }
     .sorted { lhs, rhs in
       if lhs.score == rhs.score {
@@ -564,64 +611,57 @@ struct SearchResultsView: View {
     }
   }
 
-  private func rankedAlbums(for normalizedQuery: String) -> [Ranked<Album>] {
-    library.albums.compactMap { album in
+  private func rankedAlbums(for normalizedQuery: String, queryTokens: [String]) -> [Ranked<Album>] {
+    index.albums.compactMap { entry in
       let score =
-        matchScore(haystack: normalize(album.name), needle: normalizedQuery, weight: 3.5)
-        + matchScore(haystack: normalize(album.artist ?? ""), needle: normalizedQuery, weight: 2.2)
-
+        SearchFuzzyEngine.score(
+          needle: normalizedQuery,
+          needleTokens: queryTokens,
+          haystack: entry.normalizedName,
+          haystackTokens: entry.nameTokens,
+          weight: 3.6
+        )
+        + SearchFuzzyEngine.score(
+          needle: normalizedQuery,
+          needleTokens: queryTokens,
+          haystack: entry.normalizedArtist,
+          haystackTokens: entry.artistTokens,
+          weight: 2.4
+        )
       guard score > 0 else { return nil }
-      return Ranked(item: album, score: score)
+      return Ranked(item: entry.album, score: score)
     }
     .sorted { $0.score > $1.score }
   }
 
-  private func rankedArtists(for normalizedQuery: String) -> [Ranked<Artist>] {
-    let artists = library.artists.isEmpty
-      ? Array(Set(library.songs.map(\.artist))).map { Artist(name: $0) }
-      : library.artists
-
-    return artists.compactMap { artist in
-      let score = matchScore(haystack: normalize(artist.name), needle: normalizedQuery, weight: 3.2)
-      guard score > 0 else { return nil }
-      return Ranked(item: artist, score: score)
-    }
-    .sorted { $0.score > $1.score }
-  }
-
-  private func rankedPlaylists(for normalizedQuery: String) -> [Ranked<Playlist>] {
-    playlistManager.playlists.compactMap { playlist in
-      let score = matchScore(haystack: normalize(playlist.name), needle: normalizedQuery, weight: 3.0)
-      guard score > 0 else { return nil }
-      return Ranked(item: playlist, score: score)
-    }
-    .sorted { $0.score > $1.score }
-  }
-
-  private func normalize(_ value: String) -> String {
-    value
-      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-      .replacingOccurrences(
-        of: "[^a-z0-9 ]",
-        with: " ",
-        options: .regularExpression
+  private func rankedArtists(for normalizedQuery: String, queryTokens: [String]) -> [Ranked<Artist>] {
+    index.artists.compactMap { entry in
+      let score = SearchFuzzyEngine.score(
+        needle: normalizedQuery,
+        needleTokens: queryTokens,
+        haystack: entry.normalizedName,
+        haystackTokens: entry.nameTokens,
+        weight: 3.3
       )
-      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .lowercased()
+      guard score > 0 else { return nil }
+      return Ranked(item: entry.artist, score: score)
+    }
+    .sorted { $0.score > $1.score }
   }
 
-  private func matchScore(haystack: String, needle: String, weight: Double) -> Double {
-    guard !haystack.isEmpty, !needle.isEmpty else { return 0 }
-    if haystack == needle { return weight * 1.2 }
-    if haystack.hasPrefix(needle) { return weight }
-    if haystack.contains(needle) { return weight * 0.75 }
-
-    let haystackTokens = Set(haystack.split(separator: " ").map(String.init))
-    let needleTokens = needle.split(separator: " ").map(String.init)
-    let overlap = needleTokens.filter(haystackTokens.contains).count
-    guard overlap > 0 else { return 0 }
-    return weight * (Double(overlap) / Double(max(needleTokens.count, 1))) * 0.65
+  private func rankedPlaylists(for normalizedQuery: String, queryTokens: [String]) -> [Ranked<Playlist>] {
+    index.playlists.compactMap { entry in
+      let score = SearchFuzzyEngine.score(
+        needle: normalizedQuery,
+        needleTokens: queryTokens,
+        haystack: entry.normalizedName,
+        haystackTokens: entry.nameTokens,
+        weight: 3.0
+      )
+      guard score > 0 else { return nil }
+      return Ranked(item: entry.playlist, score: score)
+    }
+    .sorted { $0.score > $1.score }
   }
 }
 
@@ -756,6 +796,234 @@ private struct SearchResultsBundle {
 private struct Ranked<Item> {
   let item: Item
   let score: Double
+}
+
+private struct SearchLibraryIndex {
+  let songs: [SongEntry]
+  let albums: [AlbumEntry]
+  let artists: [ArtistEntry]
+  let playlists: [PlaylistEntry]
+  let signature: String
+
+  init(songs: [LibrarySong], albums: [Album], artists: [Artist], playlists: [Playlist]) {
+    self.songs = songs.map(SongEntry.init)
+    self.albums = albums.map(AlbumEntry.init)
+    self.artists = artists.map(ArtistEntry.init)
+    self.playlists = playlists.map(PlaylistEntry.init)
+    self.signature = [
+      songs.map { "\($0.id.uuidString)-\($0.title)-\($0.artist)-\($0.artworkPath ?? "")" }.joined(separator: "|"),
+      albums.map { "\($0.id.uuidString)-\($0.name)-\($0.artist ?? "")-\($0.artworkPath ?? "")" }.joined(separator: "|"),
+      artists.map { "\($0.id.uuidString)-\($0.name)-\($0.artworkPath ?? "")" }.joined(separator: "|"),
+      playlists.map { "\($0.id.uuidString)-\($0.name)-\($0.songCount)-\($0.artworkPath ?? "")" }.joined(separator: "|"),
+    ].joined(separator: "#")
+  }
+
+  static let empty = SearchLibraryIndex(songs: [], albums: [], artists: [], playlists: [])
+
+  struct SongEntry {
+    let song: LibrarySong
+    let normalizedTitle: String
+    let normalizedArtist: String
+    let normalizedAlbum: String
+    let normalizedGenre: String
+    let normalizedLyrics: String
+    let titleTokens: [String]
+    let artistTokens: [String]
+    let albumTokens: [String]
+    let genreTokens: [String]
+    let lyricsTokens: [String]
+
+    init(song: LibrarySong) {
+      self.song = song
+      self.normalizedTitle = SearchFuzzyEngine.normalize(song.title)
+      self.normalizedArtist = SearchFuzzyEngine.normalize(song.artist)
+      self.normalizedAlbum = SearchFuzzyEngine.normalize(song.album ?? "")
+      self.normalizedGenre = SearchFuzzyEngine.normalize(song.genre ?? "")
+      let syncedLyrics = LyricsService.shared.getCachedLyrics(for: song)?.plainText ?? ""
+      self.normalizedLyrics = SearchFuzzyEngine.normalize([song.lyrics ?? "", syncedLyrics].joined(separator: " "))
+      self.titleTokens = SearchFuzzyEngine.tokens(from: normalizedTitle)
+      self.artistTokens = SearchFuzzyEngine.tokens(from: normalizedArtist)
+      self.albumTokens = SearchFuzzyEngine.tokens(from: normalizedAlbum)
+      self.genreTokens = SearchFuzzyEngine.tokens(from: normalizedGenre)
+      self.lyricsTokens = SearchFuzzyEngine.tokens(from: normalizedLyrics)
+    }
+  }
+
+  struct AlbumEntry {
+    let album: Album
+    let normalizedName: String
+    let normalizedArtist: String
+    let nameTokens: [String]
+    let artistTokens: [String]
+
+    init(album: Album) {
+      self.album = album
+      self.normalizedName = SearchFuzzyEngine.normalize(album.name)
+      self.normalizedArtist = SearchFuzzyEngine.normalize(album.artist ?? "")
+      self.nameTokens = SearchFuzzyEngine.tokens(from: normalizedName)
+      self.artistTokens = SearchFuzzyEngine.tokens(from: normalizedArtist)
+    }
+  }
+
+  struct ArtistEntry {
+    let artist: Artist
+    let normalizedName: String
+    let nameTokens: [String]
+
+    init(artist: Artist) {
+      self.artist = artist
+      self.normalizedName = SearchFuzzyEngine.normalize(artist.name)
+      self.nameTokens = SearchFuzzyEngine.tokens(from: normalizedName)
+    }
+  }
+
+  struct PlaylistEntry {
+    let playlist: Playlist
+    let normalizedName: String
+    let nameTokens: [String]
+
+    init(playlist: Playlist) {
+      self.playlist = playlist
+      self.normalizedName = SearchFuzzyEngine.normalize(playlist.name)
+      self.nameTokens = SearchFuzzyEngine.tokens(from: normalizedName)
+    }
+  }
+}
+
+private enum SearchFuzzyEngine {
+  static func normalize(_ value: String) -> String {
+    value
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+  }
+
+  static func tokens(from value: String) -> [String] {
+    value.split(separator: " ").map(String.init)
+  }
+
+  static func score(
+    needle: String,
+    needleTokens: [String],
+    haystack: String,
+    haystackTokens: [String],
+    weight: Double
+  ) -> Double {
+    guard !needle.isEmpty, !haystack.isEmpty else { return 0 }
+    if haystack == needle { return weight * 1.3 }
+    if haystack.hasPrefix(needle) { return weight * 1.08 }
+    if haystack.contains(needle) { return weight * 0.88 }
+
+    let ordered = orderedTokenScore(needleTokens: needleTokens, haystackTokens: haystackTokens)
+    let overlap = tokenOverlapScore(needleTokens: needleTokens, haystackTokens: haystackTokens)
+    let phrase = phraseSimilarityScore(needleTokens: needleTokens, haystackTokens: haystackTokens)
+    let best = max(ordered, overlap, phrase)
+
+    guard best > 0 else { return 0 }
+    return weight * best
+  }
+
+  static func scoreLyrics(
+    needle: String,
+    needleTokens: [String],
+    haystackTokens: [String],
+    haystackText: String
+  ) -> Double {
+    guard !needle.isEmpty, !haystackText.isEmpty else { return 0 }
+    if haystackText.contains(needle) { return 2.2 }
+
+    let ordered = orderedTokenScore(needleTokens: needleTokens, haystackTokens: haystackTokens)
+    let phrase = phraseSimilarityScore(needleTokens: needleTokens, haystackTokens: haystackTokens)
+    return max(ordered * 1.9, phrase * 2.0)
+  }
+
+  private static func orderedTokenScore(needleTokens: [String], haystackTokens: [String]) -> Double {
+    guard !needleTokens.isEmpty, !haystackTokens.isEmpty else { return 0 }
+    var matched = 0
+    var haystackIndex = 0
+
+    for needleToken in needleTokens {
+      while haystackIndex < haystackTokens.count {
+        if fuzzyTokenMatch(needleToken, haystackTokens[haystackIndex]) {
+          matched += 1
+          haystackIndex += 1
+          break
+        }
+        haystackIndex += 1
+      }
+    }
+
+    return Double(matched) / Double(needleTokens.count)
+  }
+
+  private static func tokenOverlapScore(needleTokens: [String], haystackTokens: [String]) -> Double {
+    guard !needleTokens.isEmpty, !haystackTokens.isEmpty else { return 0 }
+    let matches = needleTokens.filter { token in
+      haystackTokens.contains(where: { fuzzyTokenMatch(token, $0) })
+    }.count
+    return Double(matches) / Double(needleTokens.count)
+  }
+
+  private static func phraseSimilarityScore(needleTokens: [String], haystackTokens: [String]) -> Double {
+    guard !needleTokens.isEmpty, haystackTokens.count >= needleTokens.count else { return 0 }
+    let windowSizeRange = needleTokens.count...min(haystackTokens.count, needleTokens.count + 3)
+    var best = 0.0
+
+    for windowSize in windowSizeRange {
+      guard haystackTokens.count >= windowSize else { continue }
+      for start in 0...(haystackTokens.count - windowSize) {
+        let window = Array(haystackTokens[start..<(start + windowSize)])
+        let distance = levenshteinDistance(
+          needleTokens.joined(separator: " "),
+          window.joined(separator: " ")
+        )
+        let maxLength = max(needleTokens.joined(separator: " ").count, window.joined(separator: " ").count)
+        guard maxLength > 0 else { continue }
+        let similarity = 1.0 - (Double(distance) / Double(maxLength))
+        best = max(best, similarity)
+      }
+    }
+
+    return max(0, best)
+  }
+
+  private static func fuzzyTokenMatch(_ lhs: String, _ rhs: String) -> Bool {
+    if lhs == rhs { return true }
+    if lhs.count >= 4 || rhs.count >= 4 {
+      return levenshteinDistance(lhs, rhs) <= 1
+    }
+    return false
+  }
+
+  private static func levenshteinDistance(_ lhs: String, _ rhs: String) -> Int {
+    let lhsChars = Array(lhs)
+    let rhsChars = Array(rhs)
+    guard !lhsChars.isEmpty else { return rhsChars.count }
+    guard !rhsChars.isEmpty else { return lhsChars.count }
+
+    var previous = Array(0...rhsChars.count)
+    for (lhsIndex, lhsChar) in lhsChars.enumerated() {
+      var current = [lhsIndex + 1]
+      current.reserveCapacity(rhsChars.count + 1)
+
+      for (rhsIndex, rhsChar) in rhsChars.enumerated() {
+        let cost = lhsChar == rhsChar ? 0 : 1
+        current.append(
+          min(
+            current[rhsIndex] + 1,
+            previous[rhsIndex + 1] + 1,
+            previous[rhsIndex] + cost
+          )
+        )
+      }
+
+      previous = current
+    }
+
+    return previous[rhsChars.count]
+  }
 }
 
 private enum SearchPersistence {

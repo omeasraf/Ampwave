@@ -19,6 +19,7 @@ struct OpenPlayerView: View {
   @State private var isLyricsExpanded = false
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
+  @State private var showingTechnicalInfo = false
   @State private var artworkColor: Color = .clear
 
   private var playback: PlaybackController { PlaybackController.shared }
@@ -64,7 +65,20 @@ struct OpenPlayerView: View {
             .padding(24)
             .background(
               RoundedRectangle(cornerRadius: 32, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(
+                  LinearGradient(
+                    gradient: Gradient(colors: [
+                      themeManager.cardBackgroundColor.opacity(0.7),
+                      themeManager.cardBackgroundColor.opacity(0.5),
+                    ]),
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                  )
+                )
+                .overlay {
+                  RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                }
                 .overlay {
                   RoundedRectangle(cornerRadius: 32, style: .continuous)
                     .stroke(.white.opacity(0.08), lineWidth: 1)
@@ -73,6 +87,7 @@ struct OpenPlayerView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 30)
           }
+          .background(themeManager.backgroundColor)
         }
         .scrollContentBackground(.hidden)
         .ignoresSafeArea(edges: .top)
@@ -194,6 +209,10 @@ struct OpenPlayerView: View {
               .foregroundStyle(.secondary)
               .lineLimit(1)
           }
+
+          if let song = playback.currentItem {
+            technicalBadge(for: song)
+          }
         }
 
         Spacer()
@@ -213,7 +232,8 @@ struct OpenPlayerView: View {
                 ? themeManager.accentColor : .primary
             )
             .frame(width: 46, height: 46)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(
+              .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
           }
           .contentTransition(.symbolEffect(.replace))
         }
@@ -221,8 +241,56 @@ struct OpenPlayerView: View {
     }
   }
 
+  private func technicalBadge(for song: LibrarySong) -> some View {
+    Button {
+      showingTechnicalInfo = true
+    } label: {
+      HStack(spacing: 4) {
+        if let format = song.format {
+          Text(format)
+            .font(.system(size: 10, weight: .bold))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(.secondary.opacity(0.2))
+            .cornerRadius(4)
+        }
+
+        if let sampleRate = song.sampleRate {
+          Text(formatSampleRate(sampleRate))
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+        }
+
+        if let bitDepth = song.bitDepth, bitDepth > 0 {
+          Text("\(bitDepth)bit")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+        }
+      }
+    }
+    .buttonStyle(.plain)
+    .sheet(isPresented: $showingTechnicalInfo) {
+      TechnicalInfoSheet(song: song)
+    }
+  }
+
+  private func formatSampleRate(_ rate: Double) -> String {
+    if rate >= 1000 {
+      return String(format: "%.1f kHz", rate / 1000)
+    } else {
+      return String(format: "%.0f Hz", rate)
+    }
+  }
+
   private var extraControls: some View {
     HStack(spacing: 12) {
+      playerUtilityButton(
+        icon: "text.quote",
+        isActive: isLyricsExpanded
+      ) {
+        isLyricsExpanded = true
+      }
+
       playerUtilityButton(
         icon: "shuffle",
         isActive: playback.shuffleMode != .off

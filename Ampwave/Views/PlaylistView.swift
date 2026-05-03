@@ -15,7 +15,8 @@ struct PlaylistView: View {
   @State private var showingEditSheet = false
   @State private var showingAddSongsSheet = false
   @State private var showingDeleteConfirmation = false
-  @State private var playlistShareURL: URL?
+  @State private var playlistJSONShareURL: URL?
+  @State private var playlistM3UShareURL: URL?
   @Environment(ThemeManager.self) private var themeManager
 
   private var playback: PlaybackController { PlaybackController.shared }
@@ -90,19 +91,35 @@ struct PlaylistView: View {
             Label("Add Songs", systemImage: "plus")
           }
 
-          if !playlist.songs.isEmpty, let url = playlistShareURL {
+          if !playlist.songs.isEmpty, let url = playlistJSONShareURL {
             ShareLink(
               item: url,
               subject: Text(playlist.name),
               message: Text(
-                "M3U playlist from Ampwave. Recipients need the same audio files or paths to play every track."
+                "Portable playlist export from Ampwave with stable track identifiers and metadata."
               ),
               preview: SharePreview(
                 playlist.name,
                 icon: Image(systemName: "music.note.list")
               )
             ) {
-              Label("Share Playlist…", systemImage: "square.and.arrow.up")
+              Label("Share JSON Playlist…", systemImage: "square.and.arrow.up")
+            }
+          }
+
+          if !playlist.songs.isEmpty, let url = playlistM3UShareURL {
+            ShareLink(
+              item: url,
+              subject: Text(playlist.name),
+              message: Text(
+                "Extended M3U playlist from Ampwave with metadata-based track resolution."
+              ),
+              preview: SharePreview(
+                playlist.name,
+                icon: Image(systemName: "music.note.list")
+              )
+            ) {
+              Label("Share M3U Playlist…", systemImage: "music.note.list")
             }
           }
 
@@ -177,11 +194,18 @@ struct PlaylistView: View {
     }
     .task(id: playlistExportStamp) {
       guard !playlist.songs.isEmpty else {
-        playlistShareURL = nil
+        playlistJSONShareURL = nil
+        playlistM3UShareURL = nil
         return
       }
-      playlistShareURL = try? PlaylistImportExport.writeM3UToTemp(
-        playlist: playlist, library: library)
+      playlistJSONShareURL = try? PlaylistImportExport.writeJSONToTemp(
+        playlist: playlist,
+        library: library
+      )
+      playlistM3UShareURL = try? PlaylistImportExport.writeM3UToTemp(
+        playlist: playlist,
+        library: library
+      )
     }
   }
 

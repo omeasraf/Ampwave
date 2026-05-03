@@ -272,7 +272,8 @@ final class PlaybackController {
   /// Retries state restoration after library has finished loading songs
   func restoreStateAfterLoading() {
     print("[DEBUG] PlaybackController.restoreStateAfterLoading called")
-    if currentItem == nil {
+    let restoredSongId = persistentState?.lastSongId
+    if currentItem == nil || currentItem?.id != restoredSongId {
       restoreState()
     }
   }
@@ -1179,6 +1180,13 @@ final class PlaybackController {
       "[DEBUG] PlaybackController.restoreState: Found lastSongId \(songId). Queue count in state: \(state.lastQueueIds.count)"
     )
 
+    guard let restoredSong = library.songs.first(where: { $0.id == songId }) else {
+      print(
+        "[DEBUG] PlaybackController.restoreState: FAILED - lastSongId \(songId) not found in library"
+      )
+      return
+    }
+
     // Fetch the songs for the queue
     let songIds = state.lastQueueIds
     var restoredQueue: [LibrarySong] = []
@@ -1188,6 +1196,16 @@ final class PlaybackController {
         restoredQueue.append(song)
       }
     }
+
+    if restoredQueue.isEmpty {
+      restoredQueue = [restoredSong]
+    } else if !restoredQueue.contains(where: { $0.id == restoredSong.id }) {
+      restoredQueue.insert(restoredSong, at: min(max(state.lastQueueIndex, 0), restoredQueue.count))
+    }
+
+    let resolvedQueueIndex =
+      restoredQueue.firstIndex(where: { $0.id == restoredSong.id })
+      ?? min(max(state.lastQueueIndex, 0), max(restoredQueue.count - 1, 0))
 
     if !restoredQueue.isEmpty {
       Task { @MainActor in
@@ -1200,7 +1218,7 @@ final class PlaybackController {
 
         self.queue = restoredQueue
         self.originalQueue = restoredQueue
-        self.currentQueueIndex = state.lastQueueIndex
+        self.currentQueueIndex = resolvedQueueIndex
         self.currentSource =
           PlaySource(rawValue: state.lastSourceRaw ?? "library")
           ?? .library

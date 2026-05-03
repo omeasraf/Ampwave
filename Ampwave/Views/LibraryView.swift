@@ -323,22 +323,29 @@ struct LibraryView: View {
               Image(systemName: tab.icon)
                 .font(.system(size: 16, weight: .semibold))
               Text(tab.rawValue)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
             }
             .foregroundStyle(selectedTab == tab ? .white : .primary)
             .padding(.vertical, 12)
             .padding(.horizontal, 16)
             .background(
-              selectedTab == tab
-                ? themeManager.accentColor
-                : themeManager.cardBackgroundColor
+              RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                  selectedTab == tab
+                    ? AnyShapeStyle(themeManager.accentColor.gradient)
+                    : AnyShapeStyle(.ultraThinMaterial)
+                )
+                .overlay {
+                  RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(.white.opacity(selectedTab == tab ? 0.08 : 0.06), lineWidth: 1)
+                }
             )
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
           }
           .buttonStyle(.plain)
         }
       }
       .padding(.horizontal, 20)
+      .padding(.vertical, 10)
     }
   }
 }
@@ -407,16 +414,14 @@ struct AlbumsGridView: View {
         )
         .padding(.top, 100)
       } else {
-        LazyVGrid(columns: columns, spacing: 16) {
+        LazyVGrid(columns: columns, spacing: 18) {
           ForEach(filteredAlbums) { album in
-            NavigationLink(destination: AlbumView(album: album)) {
-              AlbumCard(album: album)
-            }
-            .buttonStyle(.plain)
+            AlbumCard(album: album)
           }
         }
         .padding(.horizontal, 20)
-        .padding(.top, 12)
+        .padding(.top, 16)
+        .padding(.bottom, 24)
       }
     }
     .background(themeManager.backgroundColor)

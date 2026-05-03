@@ -375,6 +375,7 @@ struct HorizontalSongSection: View {
 
 struct SongCard: View {
   let song: LibrarySong
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -396,7 +397,7 @@ struct SongCard: View {
     .padding(10)
     .background(
       RoundedRectangle(cornerRadius: 22, style: .continuous)
-        .fill(.ultraThinMaterial)
+        .fill(songCardBackground)
         .overlay {
           RoundedRectangle(cornerRadius: 22, style: .continuous)
             .stroke(.white.opacity(0.06), lineWidth: 1)
@@ -406,6 +407,17 @@ struct SongCard: View {
     .accessibilityLabel("\(song.title), \(song.artist)")
     .accessibilityHint("Plays this song")
     .songContextMenu(song: song)
+  }
+
+  private var songCardBackground: some ShapeStyle {
+    LinearGradient(
+      colors: [
+        themeManager.cardBackgroundColor.opacity(0.94),
+        themeManager.backgroundColor.opacity(0.82),
+      ],
+      startPoint: .topLeading,
+      endPoint: .bottomTrailing
+    )
   }
 }
 
