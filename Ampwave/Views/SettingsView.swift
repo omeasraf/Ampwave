@@ -378,22 +378,12 @@ struct SettingsView: View {
           }
         }
 
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Preamp")
-            .font(.subheadline)
-          Slider(value: audioPreampBinding, in: 0.5...2.0, step: 0.05)
-        }
-
-        Picker("EQ style", selection: audioEQPresetBinding) {
-          Text("Flat").tag("flat")
-          Text("Voice boost").tag("voice")
-        }
       }
     } header: {
       Text("Playback")
     } footer: {
       Text(
-        "Preamp and Voice boost use the built-in player. ReplayGain from file tags is not applied; Normalize volume approximates loudness across tracks."
+        "Playback stays intentionally simple here: focus is on gapless listening, volume consistency, and reliable queue behavior."
       )
     }
   }
@@ -743,32 +733,6 @@ struct SettingsView: View {
     case .failure(let error):
       importError = error.localizedDescription
     }
-  }
-
-  private var audioPreampBinding: Binding<Double> {
-    Binding(
-      get: {
-        let v = UserDefaults.standard.double(forKey: "com.ampwave.audioPreamp")
-        if v >= 0.25 && v <= 4.0 { return v }
-        return 1.0
-      },
-      set: {
-        UserDefaults.standard.set($0, forKey: "com.ampwave.audioPreamp")
-        PlaybackController.shared.refreshAudioEnhancementsFromSettings()
-      }
-    )
-  }
-
-  private var audioEQPresetBinding: Binding<String> {
-    Binding(
-      get: {
-        UserDefaults.standard.string(forKey: "com.ampwave.audioEQPreset") ?? "flat"
-      },
-      set: {
-        UserDefaults.standard.set($0, forKey: "com.ampwave.audioEQPreset")
-        PlaybackController.shared.refreshAudioEnhancementsFromSettings()
-      }
-    )
   }
 
   private func fetchMetadataForNewSongs() async {

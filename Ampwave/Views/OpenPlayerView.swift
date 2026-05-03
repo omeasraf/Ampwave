@@ -15,7 +15,6 @@ internal import SwiftUI
 struct OpenPlayerView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(ThemeManager.self) private var themeManager
-  @State private var selectedTab: PlayerTab = .lyrics
   @State private var showingQueue = false
   @State private var isLyricsExpanded = false
   @State private var showingAddToPlaylist = false
@@ -29,11 +28,6 @@ struct OpenPlayerView: View {
     playlistManager.playlists.filter { $0.playlistType != .likedSongs }
   }
 
-  enum PlayerTab: String, CaseIterable {
-    case lyrics = "Lyrics"
-    case queue = "Queue"
-  }
-
   @Query private var preferencesList: [UserPreferences]
   private var userPreferences: UserPreferences? { preferencesList.first }
 
@@ -42,39 +36,41 @@ struct OpenPlayerView: View {
   var body: some View {
     NavigationStack {
       ZStack {
-        themeManager.backgroundColor.ignoresSafeArea()
+        playerBackground
 
         ScrollView {
           VStack(spacing: 0) {
             if userPreferences?.fullArtworkBackground ?? false {
               FullArtworkBackgroundView(artworkPath: playback.currentItem?.artworkPath)
             } else {
-              // Large Artwork
               LargeFixedArtworkView(
                 artworkPath: playback.currentItem?.artworkPath
               )
-              .padding(.top, 20)
+              .padding(.top, 8)
               .padding(.horizontal, 24)
             }
 
-            VStack(spacing: 28) {
-              // Track info
+            VStack(spacing: 24) {
               trackInfoSection
 
-              // Progress
               PlayerProgressView()
 
-              // Playback controls
               PlayerPlaybackControlsView()
 
-              // Extra controls
               extraControls
 
-              // Lyrics/Queue tabs
               tabSection
             }
-            .padding(.horizontal, 24)
-            .padding(.top, (userPreferences?.fullArtworkBackground ?? false) ? 20 : 0)
+            .padding(24)
+            .background(
+              RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                  RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .stroke(.white.opacity(0.08), lineWidth: 1)
+                }
+            )
+            .padding(.horizontal, 16)
             .padding(.bottom, 30)
           }
         }
@@ -158,13 +154,28 @@ struct OpenPlayerView: View {
     }
   }
 
+  private var playerBackground: some View {
+    ZStack {
+      LinearGradient(
+        colors: [
+          artworkColor.opacity(0.95),
+          themeManager.backgroundColor,
+          themeManager.backgroundColor.opacity(0.96),
+        ],
+        startPoint: .top,
+        endPoint: .bottom
+      )
+      .ignoresSafeArea()
+    }
+  }
+
   private var trackInfoSection: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 14) {
       HStack {
         VStack(alignment: .leading, spacing: 6) {
           Text(playback.currentItem?.title ?? "Not Playing")
-            .font(.system(size: 22, weight: .bold))
-            .lineLimit(1)
+            .font(.system(size: 28, weight: .bold, design: .rounded))
+            .lineLimit(2)
             .foregroundStyle(.primary)
 
           if let song = playback.currentItem,
@@ -172,14 +183,14 @@ struct OpenPlayerView: View {
           {
             NavigationLink(destination: ArtistView(artist: artist)) {
               Text(song.artist)
-                .font(.system(size: 18))
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             }
             .buttonStyle(.plain)
           } else {
             Text(playback.currentItem?.artist ?? "")
-              .font(.system(size: 18))
+              .font(.system(size: 18, weight: .medium))
               .foregroundStyle(.secondary)
               .lineLimit(1)
           }
@@ -201,90 +212,36 @@ struct OpenPlayerView: View {
               PlaylistManager.shared.isLiked(song: song)
                 ? themeManager.accentColor : .primary
             )
+            .frame(width: 46, height: 46)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
           }
           .contentTransition(.symbolEffect(.replace))
         }
       }
-
-      if let song = playback.currentItem {
-        technicalBadge(for: song)
-      }
-    }
-  }
-
-  @State private var showingTechnicalInfo = false
-
-  private func technicalBadge(for song: LibrarySong) -> some View {
-    Button {
-      showingTechnicalInfo = true
-    } label: {
-      HStack(spacing: 4) {
-        if let format = song.format {
-          Text(format)
-            .font(.system(size: 10, weight: .bold))
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            .background(.secondary.opacity(0.2))
-            .cornerRadius(4)
-        }
-
-        if let sampleRate = song.sampleRate {
-          Text(formatSampleRate(sampleRate))
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.secondary)
-        }
-
-        if let bitDepth = song.bitDepth, bitDepth > 0 {
-          Text("\(bitDepth)bit")
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.secondary)
-        }
-      }
-    }
-    .buttonStyle(.plain)
-    .sheet(isPresented: $showingTechnicalInfo) {
-      TechnicalInfoSheet(song: song)
-    }
-  }
-
-  private func formatSampleRate(_ rate: Double) -> String {
-    if rate >= 1000 {
-      return String(format: "%.1fkHz", rate / 1000)
-    } else {
-      return String(format: "%.0fHz", rate)
     }
   }
 
   private var extraControls: some View {
-    VStack(spacing: 24) {
-      HStack(spacing: 48) {
-        Button {
-          playback.toggleShuffle()
-        } label: {
-          Image(systemName: "shuffle")
-            .font(.system(size: 22))
-            .foregroundStyle(
-              playback.shuffleMode != .off ? themeManager.accentColor : .secondary
-            )
-        }
+    HStack(spacing: 12) {
+      playerUtilityButton(
+        icon: "shuffle",
+        isActive: playback.shuffleMode != .off
+      ) {
+        playback.toggleShuffle()
+      }
 
-        Button {
-          playback.cycleRepeatMode()
-        } label: {
-          Image(systemName: repeatIcon)
-            .font(.system(size: 22))
-            .foregroundStyle(repeatColor)
-        }
+      playerUtilityButton(
+        icon: repeatIcon,
+        isActive: playback.repeatMode != .off
+      ) {
+        playback.cycleRepeatMode()
+      }
 
-        Button {
-          showingQueue = true
-        } label: {
-          Image(systemName: "list.bullet")
-            .font(.system(size: 22))
-        }
-        .sheet(isPresented: $showingQueue) {
-          QueueSheetView()
-        }
+      playerUtilityButton(icon: "list.bullet", isActive: false) {
+        showingQueue = true
+      }
+      .sheet(isPresented: $showingQueue) {
+        QueueSheetView()
       }
     }
   }
@@ -310,6 +267,25 @@ struct OpenPlayerView: View {
         }
       )
     }
+  }
+
+  private func playerUtilityButton(
+    icon: String,
+    isActive: Bool,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: icon)
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(isActive ? themeManager.accentColor : .primary)
+        .frame(maxWidth: .infinity)
+        .frame(height: 50)
+        .background(
+          RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(.thinMaterial)
+        )
+    }
+    .buttonStyle(.plain)
   }
 
   private func updateArtworkColor() async {
@@ -361,6 +337,7 @@ private struct PlayerProgressView: View {
         in: 0...1
       )
       .tint(.primary)
+      .padding(.top, 2)
 
       HStack {
         Text(formatTime(playback.currentTime))
@@ -394,6 +371,8 @@ private struct PlayerPlaybackControlsView: View {
       } label: {
         Image(systemName: "backward.fill")
           .font(.system(size: 28))
+          .frame(width: 52, height: 52)
+          .background(.thinMaterial, in: Circle())
       }
 
       Button {
@@ -405,6 +384,7 @@ private struct PlayerPlaybackControlsView: View {
         )
         .font(.system(size: 72))
       }
+      .foregroundStyle(.primary)
       .contentTransition(.symbolEffect(.replace))
 
       Button {
@@ -412,9 +392,10 @@ private struct PlayerPlaybackControlsView: View {
       } label: {
         Image(systemName: "forward.fill")
           .font(.system(size: 28))
+          .frame(width: 52, height: 52)
+          .background(.thinMaterial, in: Circle())
       }
     }
-    .foregroundStyle(.primary)
   }
 }
 

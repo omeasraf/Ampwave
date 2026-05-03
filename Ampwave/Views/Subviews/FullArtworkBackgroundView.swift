@@ -77,7 +77,7 @@ struct FullArtworkBackgroundView: View {
         }
       }
     }
-    .frame(height: 500)
+    .frame(height: 505)
     .task(id: artworkPath) {
       await loadImage()
     }

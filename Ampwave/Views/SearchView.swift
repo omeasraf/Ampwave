@@ -2,18 +2,18 @@
 //  SearchView.swift
 //  Ampwave
 //
-//  Enhanced search view for local library with filters and results.
+//  Modernized search with debounced queries, smarter ranking, and lighter rendering.
 //
 
 internal import SwiftUI
 
 struct SearchView: View {
   @Environment(ThemeManager.self) private var themeManager
-  @State private var searchText: String = ""
+  @State private var searchText = ""
+  @State private var debouncedQuery = ""
   @State private var selectedFilter: SearchFilter = .all
-
-  private var library: SongLibrary { SongLibrary.shared }
-  private var playback: PlaybackController { PlaybackController.shared }
+  @State private var recentSearches = SearchPersistence.loadRecentSearches()
+  @State private var debounceTask: Task<Void, Never>?
 
   enum SearchFilter: String, CaseIterable {
     case all = "All"
@@ -23,6 +23,10 @@ struct SearchView: View {
     case playlists = "Playlists"
   }
 
+  private var isDebouncing: Bool {
+    !searchText.isEmpty && searchText != debouncedQuery
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       if !searchText.isEmpty {
@@ -30,12 +34,24 @@ struct SearchView: View {
       }
 
       if searchText.isEmpty {
-        SearchEmptyState()
-      } else {
-        SearchResultsView(
-          searchText: searchText,
-          filter: selectedFilter
+        SearchEmptyState(
+          recentSearches: recentSearches,
+          onSelectRecent: selectRecentSearch,
+          onClearRecent: clearRecentSearches
         )
+      } else {
+        ZStack(alignment: .top) {
+          SearchResultsView(
+            query: debouncedQuery,
+            filter: selectedFilter
+          )
+
+          if isDebouncing {
+            ProgressView()
+              .controlSize(.small)
+              .padding(.top, 12)
+          }
+        }
       }
     }
     .background(themeManager.backgroundColor)
@@ -45,6 +61,12 @@ struct SearchView: View {
       placement: platformSearchPlacement,
       prompt: "Songs, artists, albums, lyrics..."
     )
+    .onChange(of: searchText) { _, newValue in
+      scheduleDebouncedSearch(for: newValue)
+    }
+    .onSubmit(of: .search) {
+      persistSearchIfNeeded(searchText)
+    }
   }
 
   private var platformSearchPlacement: SearchFieldPlacement {
@@ -57,23 +79,56 @@ struct SearchView: View {
 
   private var filterPicker: some View {
     ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 8) {
+      HStack(spacing: 10) {
         ForEach(SearchFilter.allCases, id: \.self) { filter in
           FilterChip(
             title: filter.rawValue,
             isSelected: selectedFilter == filter
           ) {
-            selectedFilter = filter
+            withAnimation(.snappy(duration: 0.2)) {
+              selectedFilter = filter
+            }
           }
         }
       }
       .padding(.horizontal, 20)
-      .padding(.vertical, 8)
+      .padding(.vertical, 12)
     }
   }
-}
 
-// MARK: - Filter Chip
+  private func scheduleDebouncedSearch(for value: String) {
+    debounceTask?.cancel()
+
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      debouncedQuery = ""
+      return
+    }
+
+    debounceTask = Task {
+      try? await Task.sleep(nanoseconds: 250_000_000)
+      guard !Task.isCancelled else { return }
+      debouncedQuery = trimmed
+      persistSearchIfNeeded(trimmed)
+    }
+  }
+
+  private func persistSearchIfNeeded(_ value: String) {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.count >= 2 else { return }
+    recentSearches = SearchPersistence.saveRecentSearch(trimmed)
+  }
+
+  private func selectRecentSearch(_ value: String) {
+    searchText = value
+    debouncedQuery = value
+  }
+
+  private func clearRecentSearches() {
+    recentSearches = []
+    SearchPersistence.clear()
+  }
+}
 
 struct FilterChip: View {
   let title: String
@@ -81,68 +136,106 @@ struct FilterChip: View {
   let action: () -> Void
   @Environment(ThemeManager.self) private var themeManager
 
+  private var chipFillStyle: AnyShapeStyle {
+    if isSelected {
+      return AnyShapeStyle(.ultraThinMaterial)
+    } else {
+      return AnyShapeStyle(themeManager.cardBackgroundColor.opacity(0.72))
+    }
+  }
+
   var body: some View {
     Button(action: action) {
       Text(title)
-        .font(.system(size: 14, weight: isSelected ? .semibold : .medium))
-        .foregroundStyle(isSelected ? .white : .primary)
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(isSelected ? .primary : .secondary)
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(isSelected ? themeManager.accentColor : themeManager.cardBackgroundColor)
-        .clipShape(Capsule())
+        .padding(.vertical, 10)
+        .background {
+          Capsule()
+            .fill(chipFillStyle)
+            .overlay {
+              Capsule()
+                .stroke(
+                  isSelected ? themeManager.accentColor.opacity(0.35) : .white.opacity(0.08),
+                  lineWidth: 1
+                )
+            }
+        }
     }
     .buttonStyle(.plain)
   }
 }
 
-// MARK: - Search Empty State
-
 struct SearchEmptyState: View {
-  @State private var recentSearches: [String] = []
+  let recentSearches: [String]
+  let onSelectRecent: (String) -> Void
+  let onClearRecent: () -> Void
   @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 24) {
+        SearchHeroCard()
+          .padding(.horizontal, 20)
+
         if !recentSearches.isEmpty {
           VStack(alignment: .leading, spacing: 12) {
             HStack {
               Text("Recent Searches")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.title3.weight(.semibold))
 
               Spacer()
 
-              Button("Clear") {
-                recentSearches.removeAll()
-              }
-              .font(.system(size: 14))
-              .foregroundStyle(themeManager.accentColor)
+              Button("Clear", action: onClearRecent)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(themeManager.accentColor)
             }
 
             FlowLayout(spacing: 8) {
               ForEach(recentSearches, id: \.self) { search in
-                RecentSearchChip(search: search) {}
+                RecentSearchChip(search: search) {
+                  onSelectRecent(search)
+                }
               }
             }
           }
           .padding(.horizontal, 20)
         }
 
-        VStack(alignment: .leading, spacing: 12) {
-          Text("Browse All")
-            .font(.system(size: 18, weight: .semibold))
+        VStack(alignment: .leading, spacing: 14) {
+          Text("Browse")
+            .font(.title3.weight(.semibold))
             .padding(.horizontal, 20)
 
           LazyVGrid(
-            columns: [
-              GridItem(.flexible()),
-              GridItem(.flexible()),
-            ], spacing: 12
+            columns: [GridItem(.flexible()), GridItem(.flexible())],
+            spacing: 12
           ) {
-            BrowseCategoryCard(title: "Songs", color: themeManager.accentColor, libraryTab: .songs)
-            BrowseCategoryCard(title: "Albums", color: .orange, libraryTab: .albums)
-            BrowseCategoryCard(title: "Artists", color: .green, libraryTab: .artists)
-            BrowseCategoryCard(title: "Playlists", color: .blue, isPlaylists: true)
+            BrowseCategoryCard(
+              title: "Songs",
+              subtitle: "Every track",
+              color: themeManager.accentColor,
+              libraryTab: .songs
+            )
+            BrowseCategoryCard(
+              title: "Albums",
+              subtitle: "Artwork first",
+              color: .orange,
+              libraryTab: .albums
+            )
+            BrowseCategoryCard(
+              title: "Artists",
+              subtitle: "By vibe",
+              color: .green,
+              libraryTab: .artists
+            )
+            BrowseCategoryCard(
+              title: "Playlists",
+              subtitle: "Your collections",
+              color: .blue,
+              isPlaylists: true
+            )
           }
           .padding(.horizontal, 20)
         }
@@ -153,7 +246,32 @@ struct SearchEmptyState: View {
   }
 }
 
-// MARK: - Recent Search Chip
+private struct SearchHeroCard: View {
+  var body: some View {
+    ZStack(alignment: .bottomLeading) {
+      RoundedRectangle(cornerRadius: 28, style: .continuous)
+        .fill(.ultraThinMaterial)
+        .overlay(alignment: .topTrailing) {
+          Circle()
+            .fill(.white.opacity(0.18))
+            .frame(width: 120, height: 120)
+            .blur(radius: 20)
+            .offset(x: 24, y: -26)
+        }
+
+      VStack(alignment: .leading, spacing: 10) {
+        Text("Find the right track faster")
+          .font(.system(size: 28, weight: .bold, design: .rounded))
+
+        Text("Results now rank title, artist, album, and lyrics with smarter matching.")
+          .font(.system(size: 15))
+          .foregroundStyle(.secondary)
+      }
+      .padding(22)
+    }
+    .frame(height: 164)
+  }
+}
 
 struct RecentSearchChip: View {
   let search: String
@@ -161,42 +279,51 @@ struct RecentSearchChip: View {
 
   var body: some View {
     Button(action: action) {
-      HStack(spacing: 4) {
+      HStack(spacing: 6) {
         Image(systemName: "clock.arrow.circlepath")
           .font(.system(size: 12))
         Text(search)
-          .font(.system(size: 14))
+          .font(.system(size: 14, weight: .medium))
       }
       .foregroundStyle(.primary)
       .padding(.horizontal, 12)
-      .padding(.vertical, 6)
-      .background(.gray.opacity(0.15))
-      .clipShape(Capsule())
+      .padding(.vertical, 8)
+      .background(.ultraThinMaterial, in: Capsule())
     }
     .buttonStyle(.plain)
   }
 }
 
-// MARK: - Browse Category Card
-
 struct BrowseCategoryCard: View {
   let title: String
+  let subtitle: String
   let color: Color
   var libraryTab: LibraryView.LibraryTab = .songs
-  var isPlaylists: Bool = false
+  var isPlaylists = false
 
   var body: some View {
     NavigationLink(destination: destination) {
-      ZStack(alignment: .topLeading) {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .fill(color)
+      ZStack(alignment: .bottomLeading) {
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+          .fill(
+            LinearGradient(
+              colors: [color.opacity(0.95), color.opacity(0.45)],
+              startPoint: .topLeading,
+              endPoint: .bottomTrailing
+            )
+          )
 
-        Text(title)
-          .font(.system(size: 18, weight: .bold))
-          .foregroundStyle(.white)
-          .padding()
+        VStack(alignment: .leading, spacing: 4) {
+          Text(title)
+            .font(.system(size: 20, weight: .bold))
+          Text(subtitle)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.white.opacity(0.82))
+        }
+        .foregroundStyle(.white)
+        .padding(16)
       }
-      .frame(height: 100)
+      .frame(height: 118)
     }
     .buttonStyle(.plain)
   }
@@ -211,60 +338,14 @@ struct BrowseCategoryCard: View {
   }
 }
 
-// MARK: - Search Results View
-
 struct SearchResultsView: View {
-  let searchText: String
+  let query: String
   let filter: SearchView.SearchFilter
   @Environment(ThemeManager.self) private var themeManager
+  @State private var results = SearchResultsBundle.empty
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
-
-  var matchingSongs: [LibrarySong] {
-    library.songs.filter { song in
-      // Check basic fields
-      let basicMatch =
-        song.title.localizedCaseInsensitiveContains(searchText)
-        || song.artist.localizedCaseInsensitiveContains(searchText)
-        || (song.album?.localizedCaseInsensitiveContains(searchText) ?? false)
-
-      // Only check lyrics for longer search terms to avoid performance issues
-      if searchText.count >= 3 {
-        // Check plain lyrics
-        let lyricsMatch = song.lyrics?.localizedCaseInsensitiveContains(searchText) ?? false
-
-        // Check synced lyrics
-        let syncedLyricsMatch =
-          LyricsService.shared.getCachedLyrics(for: song)?
-          .lines.contains { $0.text.localizedCaseInsensitiveContains(searchText) } ?? false
-
-        return basicMatch || lyricsMatch || syncedLyricsMatch
-      } else {
-        return basicMatch
-      }
-    }
-  }
-
-  var matchingAlbums: [Album] {
-    library.albums.filter {
-      $0.name.localizedCaseInsensitiveContains(searchText)
-        || ($0.artist?.localizedCaseInsensitiveContains(searchText) ?? false)
-    }
-  }
-
-  var matchingArtists: [Artist] {
-    let artistNames = Set(library.songs.map { $0.artist })
-    return artistNames.filter {
-      $0.localizedCaseInsensitiveContains(searchText)
-    }.map { Artist(name: $0) }
-  }
-
-  var matchingPlaylists: [Playlist] {
-    playlistManager.playlists.filter {
-      $0.name.localizedCaseInsensitiveContains(searchText)
-    }
-  }
 
   var body: some View {
     List {
@@ -272,59 +353,64 @@ struct SearchResultsView: View {
       case .all:
         allResultsSection
       case .songs:
-        songsSection(matchingSongs)
+        songsSection(results.songs)
       case .albums:
-        albumsSection(matchingAlbums)
+        albumsSection(results.albums)
       case .artists:
-        artistsSection(matchingArtists)
+        artistsSection(results.artists)
       case .playlists:
-        playlistsSection(matchingPlaylists)
+        playlistsSection(results.playlists)
       }
     }
     .listStyle(.plain)
     .scrollContentBackground(.hidden)
     .background(themeManager.backgroundColor)
+    .task(id: searchID) {
+      await refreshResults()
+    }
+  }
+
+  private var searchID: String {
+    "\(query.lowercased())|\(filter.rawValue)|\(library.songs.count)|\(library.albums.count)|\(playlistManager.playlists.count)"
   }
 
   private var allResultsSection: some View {
     Group {
-      if let topSong = matchingSongs.first {
+      if let topSong = results.topSong {
         Section {
-          TopResultCard(song: topSong)
+          TopResultCard(song: topSong, query: query)
         } header: {
           Text("Top Result")
-            .font(.system(size: 18, weight: .semibold))
+            .font(.title3.weight(.semibold))
         }
-        .listRowBackground(themeManager.cardBackgroundColor)
+        .listRowBackground(themeManager.backgroundColor)
       }
 
-      if !matchingSongs.isEmpty {
-        songsSection(Array(matchingSongs.prefix(5)))
+      if !results.songs.isEmpty {
+        songsSection(Array(results.songs.prefix(8)))
       }
 
-      if !matchingAlbums.isEmpty {
-        albumsSection(Array(matchingAlbums.prefix(5)))
+      if !results.albums.isEmpty {
+        albumsSection(Array(results.albums.prefix(6)))
       }
 
-      if !matchingArtists.isEmpty {
-        artistsSection(Array(matchingArtists.prefix(5)))
+      if !results.artists.isEmpty {
+        artistsSection(Array(results.artists.prefix(6)))
       }
 
-      if !matchingPlaylists.isEmpty {
-        playlistsSection(Array(matchingPlaylists.prefix(5)))
+      if !results.playlists.isEmpty {
+        playlistsSection(Array(results.playlists.prefix(6)))
       }
 
-      if matchingSongs.isEmpty && matchingAlbums.isEmpty && matchingArtists.isEmpty
-        && matchingPlaylists.isEmpty
-      {
+      if results.isEmpty {
         Section {
           ContentUnavailableView(
             "No Results",
             systemImage: "magnifyingglass",
-            description: Text("Try a different search term")
+            description: Text("Try a song title, artist, album, or lyric phrase.")
           )
         }
-        .listRowBackground(themeManager.cardBackgroundColor)
+        .listRowBackground(themeManager.backgroundColor)
       }
     }
   }
@@ -337,21 +423,13 @@ struct SearchResultsView: View {
           .onTapGesture {
             PlaybackController.shared.play(song, from: .search)
           }
+          .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+          .listRowBackground(themeManager.backgroundColor)
       }
     } header: {
-      HStack {
-        Text("Songs")
-          .font(.system(size: 18, weight: .semibold))
-        Spacer()
-        if songs.count >= 5 && matchingSongs.count > 5 {
-          NavigationLink("See All") {
-            //                        SongsListView(songs: matchingSongs, title: "Songs")
-          }
-          .font(.system(size: 14))
-        }
-      }
+      Text("Songs")
+        .font(.title3.weight(.semibold))
     }
-    .listRowBackground(themeManager.cardBackgroundColor)
   }
 
   private func albumsSection(_ albums: [Album]) -> some View {
@@ -364,11 +442,12 @@ struct SearchResultsView: View {
         }
         .padding(.horizontal, 20)
       }
+      .listRowInsets(EdgeInsets())
+      .listRowBackground(themeManager.backgroundColor)
     } header: {
       Text("Albums")
-        .font(.system(size: 18, weight: .semibold))
+        .font(.title3.weight(.semibold))
     }
-    .listRowBackground(themeManager.cardBackgroundColor)
   }
 
   private func artistsSection(_ artists: [Artist]) -> some View {
@@ -377,56 +456,178 @@ struct SearchResultsView: View {
         LazyHStack(spacing: 16) {
           ForEach(artists) { artist in
             NavigationLink(destination: ArtistView(artist: artist)) {
-              VStack(spacing: 8) {
-                ArtistImageView(artworkPath: artist.artworkPath, size: 100)
+              VStack(spacing: 10) {
+                ArtistImageView(artworkPath: artist.artworkPath, size: 110)
 
                 Text(artist.name)
-                  .font(.system(size: 14, weight: .medium))
+                  .font(.system(size: 14, weight: .semibold))
                   .lineLimit(1)
               }
-              .frame(width: 100)
+              .frame(width: 112)
             }
             .buttonStyle(.plain)
           }
         }
         .padding(.horizontal, 20)
       }
+      .listRowInsets(EdgeInsets())
+      .listRowBackground(themeManager.backgroundColor)
     } header: {
       Text("Artists")
-        .font(.system(size: 18, weight: .semibold))
+        .font(.title3.weight(.semibold))
     }
-    .listRowBackground(themeManager.cardBackgroundColor)
   }
 
   private func playlistsSection(_ playlists: [Playlist]) -> some View {
     Section {
       ForEach(playlists) { playlist in
         NavigationLink(destination: PlaylistView(playlist: playlist)) {
-          HStack(spacing: 12) {
-            PlaylistArtworkView(playlist: playlist, size: 50)
+          HStack(spacing: 14) {
+            PlaylistArtworkView(playlist: playlist, size: 56)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
               Text(playlist.name)
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 16, weight: .semibold))
               Text("\(playlist.songCount) song\(playlist.songCount == 1 ? "" : "s")")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
             }
           }
         }
+        .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+        .listRowBackground(themeManager.backgroundColor)
       }
     } header: {
       Text("Playlists")
-        .font(.system(size: 18, weight: .semibold))
+        .font(.title3.weight(.semibold))
     }
-    .listRowBackground(themeManager.cardBackgroundColor)
+  }
+
+  private func refreshResults() async {
+    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      results = .empty
+      return
+    }
+
+    await Task.yield()
+    results = buildResults(for: trimmed)
+  }
+
+  private func buildResults(for query: String) -> SearchResultsBundle {
+    let normalizedQuery = normalize(query)
+    let songRanks = rankedSongs(for: normalizedQuery)
+    let albumRanks = rankedAlbums(for: normalizedQuery)
+    let artistRanks = rankedArtists(for: normalizedQuery)
+    let playlistRanks = rankedPlaylists(for: normalizedQuery)
+
+    return SearchResultsBundle(
+      songs: songRanks.map(\.item),
+      albums: albumRanks.map(\.item),
+      artists: artistRanks.map(\.item),
+      playlists: playlistRanks.map(\.item),
+      topSong: songRanks.first?.item
+    )
+  }
+
+  private func rankedSongs(for normalizedQuery: String) -> [Ranked<LibrarySong>] {
+    library.songs.compactMap { song in
+      let titleScore = matchScore(haystack: normalize(song.title), needle: normalizedQuery, weight: 4.0)
+      let artistScore = matchScore(haystack: normalize(song.artist), needle: normalizedQuery, weight: 3.0)
+      let albumScore = matchScore(haystack: normalize(song.album ?? ""), needle: normalizedQuery, weight: 2.0)
+      let genreScore = matchScore(haystack: normalize(song.genre ?? ""), needle: normalizedQuery, weight: 1.2)
+
+      var score = titleScore + artistScore + albumScore + genreScore
+
+      if normalizedQuery.count >= 3, score < 4.5 {
+        if normalize(song.lyrics ?? "").contains(normalizedQuery) {
+          score += 1.4
+        } else if normalizedQuery.count >= 4,
+          let syncedLyrics = LyricsService.shared.getCachedLyrics(for: song),
+          syncedLyrics.lines.contains(where: { normalize($0.text).contains(normalizedQuery) })
+        {
+          score += 1.0
+        }
+      }
+
+      if score <= 0 { return nil }
+      if song.artworkPath != nil { score += 0.2 }
+      if song.genre != nil { score += 0.1 }
+
+      return Ranked(item: song, score: score)
+    }
+    .sorted { lhs, rhs in
+      if lhs.score == rhs.score {
+        return lhs.item.title.localizedCaseInsensitiveCompare(rhs.item.title) == .orderedAscending
+      }
+      return lhs.score > rhs.score
+    }
+  }
+
+  private func rankedAlbums(for normalizedQuery: String) -> [Ranked<Album>] {
+    library.albums.compactMap { album in
+      let score =
+        matchScore(haystack: normalize(album.name), needle: normalizedQuery, weight: 3.5)
+        + matchScore(haystack: normalize(album.artist ?? ""), needle: normalizedQuery, weight: 2.2)
+
+      guard score > 0 else { return nil }
+      return Ranked(item: album, score: score)
+    }
+    .sorted { $0.score > $1.score }
+  }
+
+  private func rankedArtists(for normalizedQuery: String) -> [Ranked<Artist>] {
+    let artists = library.artists.isEmpty
+      ? Array(Set(library.songs.map(\.artist))).map { Artist(name: $0) }
+      : library.artists
+
+    return artists.compactMap { artist in
+      let score = matchScore(haystack: normalize(artist.name), needle: normalizedQuery, weight: 3.2)
+      guard score > 0 else { return nil }
+      return Ranked(item: artist, score: score)
+    }
+    .sorted { $0.score > $1.score }
+  }
+
+  private func rankedPlaylists(for normalizedQuery: String) -> [Ranked<Playlist>] {
+    playlistManager.playlists.compactMap { playlist in
+      let score = matchScore(haystack: normalize(playlist.name), needle: normalizedQuery, weight: 3.0)
+      guard score > 0 else { return nil }
+      return Ranked(item: playlist, score: score)
+    }
+    .sorted { $0.score > $1.score }
+  }
+
+  private func normalize(_ value: String) -> String {
+    value
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(
+        of: "[^a-z0-9 ]",
+        with: " ",
+        options: .regularExpression
+      )
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+  }
+
+  private func matchScore(haystack: String, needle: String, weight: Double) -> Double {
+    guard !haystack.isEmpty, !needle.isEmpty else { return 0 }
+    if haystack == needle { return weight * 1.2 }
+    if haystack.hasPrefix(needle) { return weight }
+    if haystack.contains(needle) { return weight * 0.75 }
+
+    let haystackTokens = Set(haystack.split(separator: " ").map(String.init))
+    let needleTokens = needle.split(separator: " ").map(String.init)
+    let overlap = needleTokens.filter(haystackTokens.contains).count
+    guard overlap > 0 else { return 0 }
+    return weight * (Double(overlap) / Double(max(needleTokens.count, 1))) * 0.65
   }
 }
 
-// MARK: - Top Result Card
-
 struct TopResultCard: View {
   let song: LibrarySong
+  let query: String
   @Environment(ThemeManager.self) private var themeManager
 
   private var playback: PlaybackController { PlaybackController.shared }
@@ -436,43 +637,50 @@ struct TopResultCard: View {
       playback.play(song, from: .search)
     } label: {
       HStack(spacing: 16) {
-        AlbumArtworkView(artworkPath: song.artworkPath, size: 80)
+        AlbumArtworkView(artworkPath: song.artworkPath, size: 86)
 
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
           Text(song.title)
             .font(.system(size: 20, weight: .bold))
             .lineLimit(1)
 
           Text(song.artist)
-            .font(.system(size: 16))
+            .font(.system(size: 15, weight: .medium))
             .foregroundStyle(.secondary)
 
           HStack(spacing: 8) {
-            Label("Song", systemImage: "music.note")
-              .font(.system(size: 12))
-              .foregroundStyle(.secondary)
+            Label("Best match", systemImage: "sparkles")
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(themeManager.accentColor)
+
+            if let album = song.album, !album.isEmpty {
+              Text(album)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
           }
         }
 
         Spacer()
 
         Image(systemName: "play.circle.fill")
-          .font(.system(size: 40))
+          .font(.system(size: 42))
           .foregroundStyle(themeManager.accentColor)
       }
-      .padding()
-      .background(themeManager.cardBackgroundColor)
-      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .stroke(Color.secondary.opacity(0.1), lineWidth: 1)
+      .padding(18)
+      .background(
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+          .fill(.ultraThinMaterial)
+          .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+              .stroke(.white.opacity(0.08), lineWidth: 1)
+          }
       )
     }
     .buttonStyle(.plain)
   }
 }
-
-// MARK: - Flow Layout
 
 struct FlowLayout: Layout {
   var spacing: CGFloat = 8
@@ -490,8 +698,10 @@ struct FlowLayout: Layout {
       subview.place(
         at: CGPoint(
           x: bounds.minX + result.positions[index].x,
-          y: bounds.minY + result.positions[index].y),
-        proposal: .unspecified)
+          y: bounds.minY + result.positions[index].y
+        ),
+        proposal: .unspecified
+      )
     }
   }
 
@@ -523,6 +733,47 @@ struct FlowLayout: Layout {
   }
 }
 
-#Preview {
-  SearchView()
+private struct SearchResultsBundle {
+  let songs: [LibrarySong]
+  let albums: [Album]
+  let artists: [Artist]
+  let playlists: [Playlist]
+  let topSong: LibrarySong?
+
+  var isEmpty: Bool {
+    songs.isEmpty && albums.isEmpty && artists.isEmpty && playlists.isEmpty
+  }
+
+  static let empty = SearchResultsBundle(
+    songs: [],
+    albums: [],
+    artists: [],
+    playlists: [],
+    topSong: nil
+  )
+}
+
+private struct Ranked<Item> {
+  let item: Item
+  let score: Double
+}
+
+private enum SearchPersistence {
+  private static let key = "com.ampwave.recentSearches"
+
+  static func loadRecentSearches() -> [String] {
+    (UserDefaults.standard.array(forKey: key) as? [String]) ?? []
+  }
+
+  static func saveRecentSearch(_ value: String) -> [String] {
+    var items = loadRecentSearches().filter { $0.caseInsensitiveCompare(value) != .orderedSame }
+    items.insert(value, at: 0)
+    let trimmed = Array(items.prefix(8))
+    UserDefaults.standard.set(trimmed, forKey: key)
+    return trimmed
+  }
+
+  static func clear() {
+    UserDefaults.standard.removeObject(forKey: key)
+  }
 }

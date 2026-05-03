@@ -40,9 +40,9 @@ struct HomeView: View {
   private var indexingMessage: String? {
     switch library.indexingStatus {
     case .complete, .idle:
-      return "Loading your library..."
-    @unknown default:
       return nil
+    @unknown default:
+      return "Loading your library..."
     }
   }
 
@@ -194,20 +194,33 @@ struct HomeView: View {
   }
 
   private var welcomeHeader: some View {
-    HStack {
-      VStack(alignment: .leading, spacing: 4) {
-        Text(greeting)
-          .font(.system(size: 28, weight: .bold))
-
-        if !library.songs.isEmpty {
-          Text("\(library.songs.count) songs in your library")
-            .font(.system(size: 15))
-            .foregroundStyle(.secondary)
+    ZStack(alignment: .bottomLeading) {
+      RoundedRectangle(cornerRadius: 30, style: .continuous)
+        .fill(.ultraThinMaterial)
+        .overlay(alignment: .topTrailing) {
+          Circle()
+            .fill(themeManager.accentColor.opacity(0.22))
+            .frame(width: 140, height: 140)
+            .blur(radius: 18)
+            .offset(x: 28, y: -20)
         }
-      }
+        .overlay {
+          RoundedRectangle(cornerRadius: 30, style: .continuous)
+            .stroke(.white.opacity(0.08), lineWidth: 1)
+        }
 
-      Spacer()
+      VStack(alignment: .leading, spacing: 8) {
+        Text(greeting)
+          .font(.system(size: 30, weight: .bold, design: .rounded))
+
+        Text(headerSummary)
+          .font(.system(size: 15, weight: .medium))
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+      .padding(24)
     }
+    .frame(maxWidth: .infinity, minHeight: 164, alignment: .bottomLeading)
     .padding(.horizontal, 20)
   }
 
@@ -218,6 +231,19 @@ struct HomeView: View {
     case 12..<17: return "Good afternoon"
     default: return "Good evening"
     }
+  }
+
+  private var headerSummary: String {
+    if library.songs.isEmpty {
+      return "Import your library to unlock personalized discovery, smart search, and offline playback."
+    }
+
+    let recentCount = recentlyPlayedSongs.count
+    if recentCount > 0 {
+      return "\(library.songs.count) songs ready. \(recentCount) recent favorites are shaping your recommendations."
+    }
+
+    return "\(library.songs.count) songs ready for smarter discovery."
   }
 
   private var emptyState: some View {
@@ -316,7 +342,7 @@ struct HorizontalSongSection: View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
         Text(title)
-          .font(.system(size: 22, weight: .bold))
+          .font(.system(size: 24, weight: .bold, design: .rounded))
 
         Spacer()
       }
@@ -357,16 +383,25 @@ struct SongCard: View {
 
       VStack(alignment: .leading, spacing: 2) {
         Text(song.title)
-          .font(.headline)
+          .font(.system(size: 15, weight: .semibold))
           .lineLimit(1)
 
         Text(song.artist)
-          .font(.subheadline)
+          .font(.system(size: 13, weight: .medium))
           .foregroundStyle(.secondary)
           .lineLimit(1)
       }
       .frame(width: 140, alignment: .leading)
     }
+    .padding(10)
+    .background(
+      RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .fill(.ultraThinMaterial)
+        .overlay {
+          RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .stroke(.white.opacity(0.06), lineWidth: 1)
+        }
+    )
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(song.title), \(song.artist)")
     .accessibilityHint("Plays this song")
@@ -392,49 +427,8 @@ struct RecommendationsSection: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      //      Text("Made For You")
-      //        .font(.system(size: 22, weight: .bold))
-      //        .padding(.horizontal, 20)
-      //
-      //      ScrollView(.horizontal, showsIndicators: false) {
-      //        LazyHStack(spacing: 16) {
-      //          ForEach(recommendations.prefix(10)) { recommendation in
-      //            RecommendationCard(recommendation: recommendation)
-      //              .onTapGesture {
-      //                switch recommendation.item {
-      //                case .song(let song):
-      //                  if let index = recommendationSongs.firstIndex(where: { $0.id == song.id }) {
-      //                    playback.playQueue(
-      //                      recommendationSongs,
-      //                      startingAt: index,
-      //                      from: .recommendation
-      //                    )
-      //                    onSongPlayed()
-      //                  } else {
-      //                    playback.play(song, from: .recommendation)
-      //                    onSongPlayed()
-      //                  }
-      //                case .album(let album):
-      //                  playback.playAlbum(album)
-      //                case .artist(let artist):
-      //                  // Play artist's songs (including featured artists)
-      //                  let artistSongs = SongLibrary.shared.getSongs(byArtist: artist.name)
-      //                  if !artistSongs.isEmpty {
-      //                    playback.playQueue(artistSongs)
-      //                  }
-      //                case .playlist(let playlist):
-      //                  playback.playPlaylist(playlist)
-      //                }
-      //              }
-      //          }
-      //        }
-      //        .padding(.horizontal, 20)
-      //      }
-
-      // MARK: Made for you
-
       Text("Made For You")
-        .font(.system(size: 22, weight: .bold))
+        .font(.system(size: 24, weight: .bold, design: .rounded))
         .padding(.horizontal, 20)
 
       ScrollView(.horizontal, showsIndicators: false) {
@@ -479,8 +473,6 @@ struct RecommendationsSection: View {
         }
         .padding(.horizontal, 20)
       }
-
-      // End Made for you
     }
   }
 }
@@ -545,7 +537,7 @@ struct RecommendationCard: View {
 
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.system(size: 14, weight: .semibold))
+          .font(.system(size: 15, weight: .semibold))
           .lineLimit(1)
 
         Text(recommendation.reason.displayText)
@@ -557,6 +549,15 @@ struct RecommendationCard: View {
       }
       .frame(width: 160, height: 60, alignment: .topLeading)
     }
+    .padding(10)
+    .background(
+      RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .fill(.ultraThinMaterial)
+        .overlay {
+          RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .stroke(.white.opacity(0.06), lineWidth: 1)
+        }
+    )
   }
 }
 
@@ -651,7 +652,7 @@ struct QuickAccessSection: View {
     print("[DEBUG] QuickAccessSection.body rendering")
     return VStack(alignment: .leading, spacing: 12) {
       Text("Quick Access")
-        .font(.system(size: 22, weight: .bold))
+        .font(.system(size: 24, weight: .bold, design: .rounded))
         .padding(.horizontal, 20)
 
       if !isLoadingQuickAccess {
@@ -726,13 +727,11 @@ struct QuickAccessButton: View {
     Button(action: action) {
       HStack(spacing: 12) {
         Image(systemName: icon)
-          .font(.system(size: 20))
-          .foregroundStyle(color)
-          .frame(width: 40, height: 40)
-          .background(color.opacity(0.15))
-          .clipShape(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-          )
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(width: 42, height: 42)
+          .background(color.gradient)
+          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
         VStack(alignment: .leading, spacing: 2) {
           Text(title)
@@ -744,9 +743,15 @@ struct QuickAccessButton: View {
 
         Spacer()
       }
-      .padding()
-      .background(.ultraThinMaterial)
-      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .padding(16)
+      .background(
+        RoundedRectangle(cornerRadius: 20, style: .continuous)
+          .fill(.ultraThinMaterial)
+          .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+              .stroke(.white.opacity(0.06), lineWidth: 1)
+          }
+      )
     }
     .buttonStyle(.plain)
   }
@@ -758,7 +763,7 @@ struct BrowseSection: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Browse")
-        .font(.system(size: 22, weight: .bold))
+        .font(.system(size: 24, weight: .bold, design: .rounded))
         .padding(.horizontal, 20)
 
       Text("Jump to albums, artists, playlists, or genres")
@@ -800,15 +805,23 @@ struct BrowseCard<Destination: View>: View {
       VStack(spacing: 8) {
         Image(systemName: icon)
           .font(.system(size: 28))
-          .foregroundStyle(color)
+          .foregroundStyle(.white)
+          .frame(width: 52, height: 52)
+          .background(color.gradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
         Text(title)
           .font(.system(size: 14, weight: .semibold))
           .multilineTextAlignment(.center)
       }
       .frame(width: 100, height: 100)
-      .background(color.opacity(0.12))
-      .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .background(
+        RoundedRectangle(cornerRadius: 20, style: .continuous)
+          .fill(.ultraThinMaterial)
+          .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+              .stroke(.white.opacity(0.06), lineWidth: 1)
+          }
+      )
     }
     .buttonStyle(.plain)
   }

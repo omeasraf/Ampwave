@@ -16,6 +16,7 @@ struct FetchedMetadata {
   var duration: TimeInterval?
   var musicBrainzId: String?
   var artworkURL: URL?
+  var songDescription: String?
 
   init(
     title: String? = nil,
@@ -27,7 +28,8 @@ struct FetchedMetadata {
     discNumber: Int? = nil,
     duration: TimeInterval? = nil,
     musicBrainzId: String? = nil,
-    artworkURL: URL? = nil
+    artworkURL: URL? = nil,
+    songDescription: String? = nil
   ) {
     self.title = title
     self.artist = artist
@@ -39,5 +41,6 @@ struct FetchedMetadata {
     self.duration = duration
     self.musicBrainzId = musicBrainzId
     self.artworkURL = artworkURL
+    self.songDescription = songDescription
   }
 }

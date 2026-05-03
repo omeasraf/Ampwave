@@ -16,7 +16,6 @@ struct ExpandedLyricsView: View {
   @State private var isUserScrolling = false
   @State private var isProgrammaticScroll = false
   @State private var scrollTimeout: Timer?
-  @State private var sliderHideTimer: Timer?
   @Environment(ThemeManager.self) private var themeManager
 
   @Bindable private var playback = PlaybackController.shared
@@ -171,76 +170,12 @@ struct ExpandedLyricsView: View {
         #endif
       }
     }
-    // Overlay is now outside NavigationStack so it floats freely over the full screen
-    .overlay(vocalControlOverlay, alignment: .bottomTrailing)
   }
 
   private func isCurrentLine(_ index: Int) -> Bool {
     playback.currentLyricIndex == index
   }
 
-  private var vocalControlOverlay: some View {
-    let hasSyncedLyrics = playback.currentLyrics?.hasLyrics == true
-    let isVocalReduced = hasSyncedLyrics && playback.vocalLevel < 0.99
-    let showSlider = hasSyncedLyrics && playback.showVocalSlider
-
-    return VStack(spacing: 20) {
-      if showSlider {
-        VocalSlider(value: $playback.vocalLevel)
-          .transition(
-            .asymmetric(
-              insertion: .move(edge: .bottom).combined(with: .opacity).combined(
-                with: .scale(scale: 0.8, anchor: .bottom)),
-              removal: .move(edge: .bottom).combined(with: .opacity).combined(
-                with: .scale(scale: 0.8, anchor: .bottom))
-            )
-          )
-          .onChange(of: playback.vocalLevel) {
-            resetSliderTimer()
-          }
-      }
-
-      Button {
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-          playback.showVocalSlider.toggle()
-          if playback.showVocalSlider {
-            resetSliderTimer()
-          } else {
-            sliderHideTimer?.invalidate()
-          }
-        }
-      } label: {
-        Image(systemName: isVocalReduced ? "mic.fill" : "mic")
-          .font(.system(size: 24, weight: .semibold))
-          .foregroundStyle(
-            !hasSyncedLyrics
-              ? .white.opacity(0.3)
-              : (isVocalReduced ? .pink : .white)
-          )
-          .padding(16)
-          .background(.ultraThinMaterial)
-          .clipShape(Circle())
-          .overlay(
-            Circle()
-              .stroke(.white.opacity(0.1), lineWidth: 0.5)
-          )
-          .shadow(color: .black.opacity(0.4), radius: 15)
-      }
-      .disabled(!hasSyncedLyrics)
-    }
-    .padding(.trailing, 28)
-    .padding(.bottom, 44)
-    .zIndex(100)
-  }
-
-  private func resetSliderTimer() {
-    sliderHideTimer?.invalidate()
-    sliderHideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
-      withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-        self.playback.showVocalSlider = false
-      }
-    }
-  }
 }
 
 // MARK: - String+LRC

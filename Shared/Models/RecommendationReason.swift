@@ -5,7 +5,7 @@
 
 import Foundation
 
-enum RecommendationReason {
+enum RecommendationReason: Equatable {
   case similarToRecent
   case fromFavoriteArtist
   case basedOnGenres

@@ -123,7 +123,8 @@ final class MetadataService {
       discNumber: nil,
       duration: recording.length.map { TimeInterval($0) / 1000.0 },
       musicBrainzId: recording.id,
-      artworkURL: nil
+      artworkURL: nil,
+      songDescription: song.songDescription
     )
 
     // Fetch artwork if we have a release
@@ -154,7 +155,8 @@ final class MetadataService {
       let detail = try JSONDecoder().decode(MusicBrainzRecordingDetailResponse.self, from: data)
       guard let tags = detail.tags, !tags.isEmpty else { return nil }
       let sorted = tags.sorted { ($0.count ?? 0) > ($1.count ?? 0) }
-      return sorted.prefix(3).map(\.name).joined(separator: " / ")
+      let genres = sorted.prefix(3).compactMap { normalizeGenreName($0.name) }
+      return genres.isEmpty ? nil : genres.joined(separator: " / ")
     } catch {
       print("[DEBUG] MetadataService.fetchGenreTagsForRecording: decode error \(error)")
       return nil
@@ -319,7 +321,7 @@ final class MetadataService {
 
     do {
       let response = try JSONDecoder().decode(MusicBrainzRecordingSearchResponse.self, from: data)
-      return response.recordings?.first
+      return bestRecordingMatch(for: song, in: response.recordings ?? [])
     } catch {
       print("[DEBUG] MetadataService.searchRecording: Decoding error: \(error)")
       return nil
@@ -344,7 +346,7 @@ final class MetadataService {
 
     do {
       let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
-      return response.releases?.first
+      return bestReleaseMatch(for: album, in: response.releases ?? [])
     } catch {
       print("[DEBUG] MetadataService.searchRelease: Decoding error: \(error)")
       return nil
@@ -406,11 +408,14 @@ final class MetadataService {
       let (data, _) = try await URLSession.shared.data(from: url)
       let response = try JSONDecoder().decode(CoverArtArchiveResponse.self, from: data)
 
-      // Find the front cover with the highest resolution
+      // Prefer a reasonably sized front cover thumbnail before falling back to originals.
       let frontImages = response.images.filter { $0.types.contains("Front") }
       let bestImage = frontImages.max { $0.image.width ?? 0 < $1.image.width ?? 0 }
-
-      return bestImage?.image.url ?? response.images.first?.image.url
+      return bestImage?.thumbnails.thumb500
+        ?? bestImage?.thumbnails.large
+        ?? bestImage?.image.url
+        ?? response.images.first?.thumbnails.thumb500
+        ?? response.images.first?.image.url
     } catch {
       print("Failed to fetch artwork: \(error)")
       return nil
@@ -461,7 +466,10 @@ final class MetadataService {
       song.year = year
     }
     if let genre = metadata.genre, !genre.isEmpty {
-      song.genre = genre
+      song.genre = normalizedGenreLabel(from: genre)
+    }
+    if let description = metadata.songDescription, !description.isEmpty {
+      song.songDescription = description
     }
     if let duration = metadata.duration, duration > 0 {
       song.duration = duration
@@ -520,6 +528,132 @@ final class MetadataService {
     }
 
     return nil
+  }
+
+  private func bestRecordingMatch(
+    for song: LibrarySong,
+    in candidates: [MusicBrainzRecording]
+  ) -> MusicBrainzRecording? {
+    let scored = candidates
+      .map { ($0, scoreRecording($0, against: song)) }
+      .sorted { $0.1 > $1.1 }
+
+    guard let best = scored.first, best.1 >= 1.5 else { return nil }
+    return best.0
+  }
+
+  private func bestReleaseMatch(
+    for album: Album,
+    in candidates: [MusicBrainzRelease]
+  ) -> MusicBrainzRelease? {
+    let albumTitle = normalizedSearchText(album.name)
+    let albumArtist = normalizedSearchText(album.artist ?? "")
+
+    let scored = candidates
+      .map { release -> (MusicBrainzRelease, Double) in
+        var score = stringSimilarityScore(normalizedSearchText(release.title), albumTitle)
+        if let releaseArtist = release.artistCredit?.first?.name {
+          score += stringSimilarityScore(normalizedSearchText(releaseArtist), albumArtist)
+        }
+        return (release, score)
+      }
+      .sorted { $0.1 > $1.1 }
+
+    guard let best = scored.first, best.1 >= 1.3 else { return nil }
+    return best.0
+  }
+
+  private func scoreRecording(_ recording: MusicBrainzRecording, against song: LibrarySong) -> Double {
+    let localTitle = normalizedSearchText(song.title)
+    let localArtist = normalizedSearchText(song.artist)
+    let localAlbum = normalizedSearchText(song.album ?? "")
+
+    var score = 0.0
+    score += stringSimilarityScore(normalizedSearchText(recording.title), localTitle) * 1.6
+
+    if let artistName = recording.artistCredit.first?.name {
+      score += stringSimilarityScore(normalizedSearchText(artistName), localArtist) * 1.4
+    }
+
+    if let releaseTitle = recording.releases?.first?.title, !localAlbum.isEmpty {
+      score += stringSimilarityScore(normalizedSearchText(releaseTitle), localAlbum) * 0.9
+    }
+
+    if let remoteDuration = recording.length.map({ TimeInterval($0) / 1000.0 }), song.duration > 0 {
+      let difference = abs(remoteDuration - song.duration)
+      if difference <= 8 {
+        score += 0.8
+      } else if difference <= 20 {
+        score += 0.35
+      } else if difference >= 60 {
+        score -= 0.5
+      }
+    }
+
+    return score
+  }
+
+  private func stringSimilarityScore(_ lhs: String, _ rhs: String) -> Double {
+    guard !lhs.isEmpty, !rhs.isEmpty else { return 0 }
+    if lhs == rhs { return 1.0 }
+    if lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs) { return 0.85 }
+    if lhs.contains(rhs) || rhs.contains(lhs) { return 0.65 }
+
+    let lhsTokens = Set(lhs.split(separator: " ").map(String.init))
+    let rhsTokens = Set(rhs.split(separator: " ").map(String.init))
+    let overlap = lhsTokens.intersection(rhsTokens).count
+    let union = lhsTokens.union(rhsTokens).count
+    guard union > 0 else { return 0 }
+    return Double(overlap) / Double(union)
+  }
+
+  private func normalizedSearchText(_ value: String) -> String {
+    value
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(
+        of: "[^a-z0-9 ]",
+        with: " ",
+        options: .regularExpression
+      )
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+  }
+
+  private func normalizeGenreName(_ value: String) -> String? {
+    let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleaned.isEmpty else { return nil }
+
+    let normalized = cleaned.lowercased()
+    let mapped: String
+    switch normalized {
+    case "hip hop", "hip-hop", "rap":
+      mapped = "Hip-Hop"
+    case "rnb", "r&b":
+      mapped = "R&B"
+    case "alt rock", "alternative rock":
+      mapped = "Alternative"
+    case "electronica":
+      mapped = "Electronic"
+    default:
+      mapped = cleaned
+        .split(separator: " ")
+        .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
+        .joined(separator: " ")
+    }
+
+    return mapped
+  }
+
+  private func normalizedGenreLabel(from label: String) -> String {
+    let parts = label
+      .split(separator: "/")
+      .flatMap { $0.split(separator: ",") }
+      .compactMap { normalizeGenreName(String($0)) }
+
+    var seen = Set<String>()
+    let unique = parts.filter { seen.insert($0).inserted }
+    return unique.joined(separator: " / ")
   }
 }
 
