@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
   @Environment(\.modelContext) private var modelContext
   @State private var isPresentingImporter = false
+  @State private var isPresentingPlaylistImport = false
   @State private var isImportingFolder = false
   @State private var importError: String?
   @State private var isImporting = false
@@ -75,6 +76,15 @@ struct SettingsView: View {
         } else {
           await handleFileImport(result)
         }
+      }
+    }
+    .fileImporter(
+      isPresented: $isPresentingPlaylistImport,
+      allowedContentTypes: [PlaylistImportExport.playlistUTType, .plainText],
+      allowsMultipleSelection: false
+    ) { result in
+      Task { @MainActor in
+        await handlePlaylistImport(result)
       }
     }
     .alert("Clear Cache?", isPresented: $showingClearCacheConfirmation) {
@@ -231,6 +241,13 @@ struct SettingsView: View {
       }
       .disabled(isImporting)
 
+      Button {
+        isPresentingPlaylistImport = true
+      } label: {
+        Label("Import Playlist (M3U)", systemImage: "music.note.list")
+      }
+      .disabled(isImporting)
+
       if case .indexing(let message) = library.indexingStatus {
         VStack(alignment: .leading, spacing: 8) {
           HStack {
@@ -260,7 +277,7 @@ struct SettingsView: View {
       Text("Import")
     } footer: {
       Text(
-        "Import audio files (MP3, FLAC, WAV, etc.) to your library. Files are copied to the app's storage."
+        "Import audio files (MP3, FLAC, WAV, etc.) to your library. Files are copied to the app's storage. M3U playlists only include tracks already in your library or resolvable file paths."
       )
     }
   }
@@ -330,7 +347,10 @@ struct SettingsView: View {
           "Normalize Volume",
           isOn: Binding(
             get: { preferences.normalizeVolume },
-            set: { preferences.normalizeVolume = $0 }
+            set: {
+              preferences.normalizeVolume = $0
+              PlaybackController.shared.refreshAudioEnhancementsFromSettings()
+            }
           )
         )
 
@@ -357,9 +377,24 @@ struct SettingsView: View {
             Text(mode.displayName).tag(mode)
           }
         }
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Preamp")
+            .font(.subheadline)
+          Slider(value: audioPreampBinding, in: 0.5...2.0, step: 0.05)
+        }
+
+        Picker("EQ style", selection: audioEQPresetBinding) {
+          Text("Flat").tag("flat")
+          Text("Voice boost").tag("voice")
+        }
       }
     } header: {
       Text("Playback")
+    } footer: {
+      Text(
+        "Preamp and Voice boost use the built-in player. ReplayGain from file tags is not applied; Normalize volume approximates loudness across tracks."
+      )
     }
   }
 
@@ -681,6 +716,59 @@ struct SettingsView: View {
     }
 
     isImporting = false
+  }
+
+  private func handlePlaylistImport(_ result: Result<[URL], Error>) async {
+    importError = nil
+    switch result {
+    case .success(let urls):
+      guard let url = urls.first else { return }
+      let secured = url.startAccessingSecurityScopedResource()
+      defer {
+        if secured {
+          url.stopAccessingSecurityScopedResource()
+        }
+      }
+      do {
+        let data = try Data(contentsOf: url)
+        if library.modelContext == nil {
+          library.setModelContext(modelContext)
+        }
+        _ = try PlaylistImportExport.importM3U(
+          data: data, into: modelContext, library: library)
+        try modelContext.save()
+      } catch {
+        importError = error.localizedDescription
+      }
+    case .failure(let error):
+      importError = error.localizedDescription
+    }
+  }
+
+  private var audioPreampBinding: Binding<Double> {
+    Binding(
+      get: {
+        let v = UserDefaults.standard.double(forKey: "com.ampwave.audioPreamp")
+        if v >= 0.25 && v <= 4.0 { return v }
+        return 1.0
+      },
+      set: {
+        UserDefaults.standard.set($0, forKey: "com.ampwave.audioPreamp")
+        PlaybackController.shared.refreshAudioEnhancementsFromSettings()
+      }
+    )
+  }
+
+  private var audioEQPresetBinding: Binding<String> {
+    Binding(
+      get: {
+        UserDefaults.standard.string(forKey: "com.ampwave.audioEQPreset") ?? "flat"
+      },
+      set: {
+        UserDefaults.standard.set($0, forKey: "com.ampwave.audioEQPreset")
+        PlaybackController.shared.refreshAudioEnhancementsFromSettings()
+      }
+    )
   }
 
   private func fetchMetadataForNewSongs() async {

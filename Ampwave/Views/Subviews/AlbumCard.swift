@@ -19,16 +19,17 @@ struct AlbumCard: View {
       VStack(alignment: .leading, spacing: 10) {
         AlbumArtworkView(artworkPath: album.artworkPath, size: 140)
           .clipShape(RoundedRectangle(cornerRadius: 10))
+          .accessibilityHidden(true)
 
         VStack(alignment: .leading, spacing: 4) {
           Text(album.name)
-            .font(.system(size: 14, weight: .bold))
+            .font(.headline)
             .lineLimit(1)
             .foregroundStyle(.primary)
 
           if let artist = album.artist {
             Text(artist)
-              .font(.system(size: 12))
+              .font(.subheadline)
               .foregroundStyle(.secondary)
               .lineLimit(1)
           }
@@ -41,11 +42,21 @@ struct AlbumCard: View {
       .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     .buttonStyle(.plain)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(albumAccessibilityLabel)
+    .accessibilityHint("Opens album")
     .albumContextMenu(album: album) {
       isEditingShown = true
     }
     .sheet(isPresented: $isEditingShown) {
       AlbumEditSheet(album: album, isPresented: $isEditingShown)
     }
+  }
+
+  private var albumAccessibilityLabel: String {
+    if let artist = album.artist {
+      return "\(album.name), album by \(artist)"
+    }
+    return album.name
   }
 }

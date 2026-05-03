@@ -43,7 +43,7 @@ struct SearchView: View {
     .searchable(
       text: $searchText,
       placement: platformSearchPlacement,
-      prompt: "Songs, artists, albums..."
+      prompt: "Songs, artists, albums, lyrics..."
     )
   }
 
@@ -222,10 +222,27 @@ struct SearchResultsView: View {
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
 
   var matchingSongs: [LibrarySong] {
-    library.songs.filter {
-      $0.title.localizedCaseInsensitiveContains(searchText)
-        || $0.artist.localizedCaseInsensitiveContains(searchText)
-        || ($0.album?.localizedCaseInsensitiveContains(searchText) ?? false)
+    library.songs.filter { song in
+      // Check basic fields
+      let basicMatch =
+        song.title.localizedCaseInsensitiveContains(searchText)
+        || song.artist.localizedCaseInsensitiveContains(searchText)
+        || (song.album?.localizedCaseInsensitiveContains(searchText) ?? false)
+
+      // Only check lyrics for longer search terms to avoid performance issues
+      if searchText.count >= 3 {
+        // Check plain lyrics
+        let lyricsMatch = song.lyrics?.localizedCaseInsensitiveContains(searchText) ?? false
+        
+        // Check synced lyrics
+        let syncedLyricsMatch =
+          LyricsService.shared.getCachedLyrics(for: song)?
+          .lines.contains { $0.text.localizedCaseInsensitiveContains(searchText) } ?? false
+        
+        return basicMatch || lyricsMatch || syncedLyricsMatch
+      } else {
+        return basicMatch
+      }
     }
   }
 

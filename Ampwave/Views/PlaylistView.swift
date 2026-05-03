@@ -15,10 +15,16 @@ struct PlaylistView: View {
   @State private var showingEditSheet = false
   @State private var showingAddSongsSheet = false
   @State private var showingDeleteConfirmation = false
+  @State private var playlistShareURL: URL?
   @Environment(ThemeManager.self) private var themeManager
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  private var library: SongLibrary { SongLibrary.shared }
+
+  private var playlistExportStamp: String {
+    "\(playlist.id.uuidString)-\(playlist.songCount)"
+  }
 
   var body: some View {
     List {
@@ -82,6 +88,22 @@ struct PlaylistView: View {
             showingAddSongsSheet = true
           } label: {
             Label("Add Songs", systemImage: "plus")
+          }
+
+          if !playlist.songs.isEmpty, let url = playlistShareURL {
+            ShareLink(
+              item: url,
+              subject: Text(playlist.name),
+              message: Text(
+                "M3U playlist from Ampwave. Recipients need the same audio files or paths to play every track."
+              ),
+              preview: SharePreview(
+                playlist.name,
+                icon: Image(systemName: "music.note.list")
+              )
+            ) {
+              Label("Share Playlist…", systemImage: "square.and.arrow.up")
+            }
           }
 
           Button {
@@ -152,6 +174,14 @@ struct PlaylistView: View {
       }
     } message: {
       Text("This action cannot be undone.")
+    }
+    .task(id: playlistExportStamp) {
+      guard !playlist.songs.isEmpty else {
+        playlistShareURL = nil
+        return
+      }
+      playlistShareURL = try? PlaylistImportExport.writeM3UToTemp(
+        playlist: playlist, library: library)
     }
   }
 

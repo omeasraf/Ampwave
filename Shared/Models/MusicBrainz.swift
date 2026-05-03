@@ -127,3 +127,15 @@ struct MusicBrainzArtist: Codable {
 struct MusicBrainzGenre: Codable {
   let name: String
 }
+
+/// Tags returned by `GET /recording/{mbid}?inc=tags&fmt=json`
+struct MusicBrainzCountedTag: Codable {
+  let name: String
+  let count: Int?
+}
+
+struct MusicBrainzRecordingDetailResponse: Codable {
+  let id: String
+  let title: String
+  let tags: [MusicBrainzCountedTag]?
+}

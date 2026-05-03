@@ -141,7 +141,34 @@ final class PlaybackController {
 
   var volume: Float = 1.0 {
     didSet {
-      player?.volume = volume
+      applyPlayerOutputVolume()
+    }
+  }
+
+  /// Applies pre-amp (UserDefaults `com.ampwave.audioPreamp`) and Sound Check-style leveling when enabled.
+  private func applyPlayerOutputVolume() {
+    player?.volume = effectiveOutputVolume
+  }
+
+  private var effectiveOutputVolume: Float {
+    let preamp = Float(UserDefaults.standard.double(forKey: "com.ampwave.audioPreamp"))
+    let gain = (preamp > 0.25 && preamp < 4.0) ? preamp : 1.0
+    let soundCheck: Float = (preferences?.normalizeVolume ?? false) ? 0.94 : 1.0
+    return min(1, volume * gain * soundCheck)
+  }
+
+  func refreshAudioEnhancementsFromSettings() {
+    applyEQPresetForPlayback()
+    applyPlayerOutputVolume()
+  }
+
+  private func applyEQPresetForPlayback() {
+    let preset = UserDefaults.standard.string(forKey: "com.ampwave.audioEQPreset") ?? "flat"
+    switch preset {
+    case "voice":
+      vocalLevel = 0.72
+    default:
+      vocalLevel = 1.0
     }
   }
 
@@ -538,7 +565,8 @@ final class PlaybackController {
 
     if player == nil {
       player = AVQueuePlayer(items: [item])
-      player?.volume = volume
+      applyEQPresetForPlayback()
+      applyPlayerOutputVolume()
       addTimeObserver()
       observePlayerItemChange()
     } else {
@@ -799,6 +827,8 @@ final class PlaybackController {
 
   private func updateUIForNewItem() {
     guard let song = currentItem else { return }
+    applyEQPresetForPlayback()
+    applyPlayerOutputVolume()
     duration = song.duration > 0 ? song.duration : 0
     currentTime = 0
     updateNowPlaying()
@@ -1188,7 +1218,8 @@ final class PlaybackController {
           // Prepare player but don't play
           let item = createPlayerItem(for: song)
           self.player = AVQueuePlayer(items: [item])
-          self.player?.volume = self.volume
+          self.applyEQPresetForPlayback()
+          self.applyPlayerOutputVolume()
           item.seek(
             to: CMTime(
               seconds: state.lastTime,

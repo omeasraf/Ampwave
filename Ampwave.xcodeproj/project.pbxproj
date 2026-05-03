@@ -11,6 +11,8 @@
 		B40A39322F411B23005DD316 /* MobileVLCKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B40A392F2F411B23005DD316 /* MobileVLCKit.xcframework */; platformFilter = ios; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B40A39332F411B23005DD316 /* VLCKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40A39342F411B23005DD316 /* VLCKit.xcframework */; platformFilters = (macos, ); };
 		B40A39352F411B23005DD316 /* VLCKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B40A39342F411B23005DD316 /* VLCKit.xcframework */; platformFilters = (macos, ); settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		B4452A552FA6B2C4001C75CA /* SharedPlaybackInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B46195692F8B3F8D00FF14A5 /* SharedPlaybackInfo.swift */; };
+		B4452A562FA6B2C4001C75CA /* SharedPlaybackInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B46195692F8B3F8D00FF14A5 /* SharedPlaybackInfo.swift */; };
 		B45266262F8B190E007FDE40 /* Ampwave Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = B452661C2F8B190D007FDE40 /* Ampwave Watch App.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B461950C2F8B3A8900FF14A5 /* DataExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B46194DC2F8B3A8900FF14A5 /* DataExtensions.swift */; };
 		B46195542F8B3AAE00FF14A5 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B46195532F8B3AAE00FF14A5 /* WidgetKit.framework */; };
@@ -654,6 +656,7 @@
 				B46195EB2F8B458F00FF14A5 /* PlaybackState.swift in Sources */,
 				B46195EC2F8B458F00FF14A5 /* MusicBrainz.swift in Sources */,
 				B46195ED2F8B458F00FF14A5 /* LibrarySortOrder.swift in Sources */,
+				B4452A552FA6B2C4001C75CA /* SharedPlaybackInfo.swift in Sources */,
 				B46195EE2F8B458F00FF14A5 /* ListeningHistory.swift in Sources */,
 				B46195EF2F8B458F00FF14A5 /* NetworkStatus.swift in Sources */,
 				B46195F02F8B458F00FF14A5 /* ShuffleMode.swift in Sources */,
@@ -667,6 +670,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B4452A562FA6B2C4001C75CA /* SharedPlaybackInfo.swift in Sources */,
 				B46195A02F8B458F00FF14A5 /* LimitSort.swift in Sources */,
 				B46195A12F8B458F00FF14A5 /* FetchedMetadata.swift in Sources */,
 				B46195A22F8B458F00FF14A5 /* RuleOperation.swift in Sources */,

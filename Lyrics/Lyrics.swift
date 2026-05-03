@@ -227,6 +227,8 @@ struct Lyrics: Widget {
     playbackInfo: SharedPlaybackInfo(
       title: "Song Title",
       artist: "Artist Name",
+      album: nil,
+      artworkRelativePath: nil,
       isPlaying: true,
       currentTime: 10,
       lyrics: [

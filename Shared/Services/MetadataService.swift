@@ -132,7 +132,33 @@ final class MetadataService {
       metadata.artworkURL = await fetchArtworkURL(forRelease: releaseId)
     }
 
+    if metadata.genre == nil || metadata.genre?.isEmpty == true {
+      metadata.genre = await fetchGenreTagsForRecording(mbid: recording.id)
+    }
+
     return metadata
+  }
+
+  /// Lightweight genre lookup (MusicBrainz recording tags) for backfill and partial updates.
+  func fetchGenreTags(for song: LibrarySong) async -> String? {
+    await respectRateLimit()
+    guard let recording = await searchRecording(song: song) else { return nil }
+    return await fetchGenreTagsForRecording(mbid: recording.id)
+  }
+
+  private func fetchGenreTagsForRecording(mbid: String) async -> String? {
+    let urlString = "\(musicBrainzDefaultURL)/recording/\(mbid)?inc=tags&fmt=json"
+    guard let url = URL(string: urlString) else { return nil }
+    guard let data = await performRequest(url: url) else { return nil }
+    do {
+      let detail = try JSONDecoder().decode(MusicBrainzRecordingDetailResponse.self, from: data)
+      guard let tags = detail.tags, !tags.isEmpty else { return nil }
+      let sorted = tags.sorted { ($0.count ?? 0) > ($1.count ?? 0) }
+      return sorted.prefix(3).map(\.name).joined(separator: " / ")
+    } catch {
+      print("[DEBUG] MetadataService.fetchGenreTagsForRecording: decode error \(error)")
+      return nil
+    }
   }
 
   /// Fetches metadata for an album

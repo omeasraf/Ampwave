@@ -10,6 +10,7 @@ struct FullArtworkBackgroundView: View {
   let artworkPath: String?
   @State private var image: PlatformImage?
   @Environment(ThemeManager.self) private var themeManager
+  @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
   @Query private var preferencesList: [UserPreferences]
 
   private var userPreferences: UserPreferences? { preferencesList.first }
@@ -46,22 +47,33 @@ struct FullArtworkBackgroundView: View {
         }
 
         if userPreferences?.showFullArtworkGradient ?? true {
-          // Bottom feathering: accent wash then blend into app background
-          LinearGradient(
-            stops: [
-              .init(color: .clear, location: 0),
-              .init(color: .clear, location: 0.2),
-              .init(color: themeManager.accentColor.opacity(0.03), location: 0.4),
-              .init(color: themeManager.accentColor.opacity(0.1), location: 0.6),
-              .init(color: themeManager.backgroundColor.opacity(0.3), location: 0.75),
-              .init(color: themeManager.backgroundColor.opacity(0.6), location: 0.85),
-              .init(color: themeManager.backgroundColor.opacity(0.85), location: 0.93),
-              .init(color: themeManager.backgroundColor.opacity(0.95), location: 0.97),
-              .init(color: themeManager.backgroundColor, location: 1.0),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-          )
+          if accessibilityReduceMotion {
+            LinearGradient(
+              stops: [
+                .init(color: .clear, location: 0),
+                .init(color: themeManager.backgroundColor.opacity(0.88), location: 1),
+              ],
+              startPoint: .top,
+              endPoint: .bottom
+            )
+          } else {
+            // Bottom feathering: accent wash then blend into app background
+            LinearGradient(
+              stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .clear, location: 0.2),
+                .init(color: themeManager.accentColor.opacity(0.03), location: 0.4),
+                .init(color: themeManager.accentColor.opacity(0.1), location: 0.6),
+                .init(color: themeManager.backgroundColor.opacity(0.3), location: 0.75),
+                .init(color: themeManager.backgroundColor.opacity(0.6), location: 0.85),
+                .init(color: themeManager.backgroundColor.opacity(0.85), location: 0.93),
+                .init(color: themeManager.backgroundColor.opacity(0.95), location: 0.97),
+                .init(color: themeManager.backgroundColor, location: 1.0),
+              ],
+              startPoint: .top,
+              endPoint: .bottom
+            )
+          }
         }
       }
     }

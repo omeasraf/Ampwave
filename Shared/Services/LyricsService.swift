@@ -181,10 +181,12 @@ final class LyricsService {
   func getCachedLyrics(for song: LibrarySong) -> SyncedLyric? {
     guard let modelContext = modelContext else { return nil }
 
-    let descriptor = FetchDescriptor<SyncedLyric>()
+    let songId = song.id
+    let descriptor = FetchDescriptor<SyncedLyric>(
+      predicate: #Predicate<SyncedLyric> { $0.songId == songId }
+    )
 
-    guard let allLyrics = try? modelContext.fetch(descriptor) else { return nil }
-    return allLyrics.first(where: { $0.songId == song.id })
+    return try? modelContext.fetch(descriptor).first
   }
 
   @discardableResult

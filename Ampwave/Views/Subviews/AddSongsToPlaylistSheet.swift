@@ -26,9 +26,26 @@ struct AddSongsToPlaylistSheet: View {
       return availableSongs
     }
 
-    return availableSongs.filter {
-      $0.title.localizedCaseInsensitiveContains(searchText)
-        || $0.artist.localizedCaseInsensitiveContains(searchText)
+    return availableSongs.filter { song in
+      // Check basic fields
+      let basicMatch =
+        song.title.localizedCaseInsensitiveContains(searchText)
+        || song.artist.localizedCaseInsensitiveContains(searchText)
+
+      // Only check lyrics for longer search terms to avoid performance issues
+      if searchText.count >= 3 {
+        // Check plain lyrics
+        let lyricsMatch = song.lyrics?.localizedCaseInsensitiveContains(searchText) ?? false
+
+        // Check synced lyrics
+        let syncedLyricsMatch =
+          LyricsService.shared.getCachedLyrics(for: song)?
+          .lines.contains { $0.text.localizedCaseInsensitiveContains(searchText) } ?? false
+
+        return basicMatch || lyricsMatch || syncedLyricsMatch
+      } else {
+        return basicMatch
+      }
     }
   }
 
@@ -73,7 +90,7 @@ struct AddSongsToPlaylistSheet: View {
           }
         }
       }
-      .searchable(text: $searchText, prompt: "Search songs")
+      .searchable(text: $searchText, prompt: "Search songs, artists, lyrics...")
       .navigationTitle("Add Songs")
       #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

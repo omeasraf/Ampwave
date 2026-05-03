@@ -5,10 +5,12 @@
 //  Shows indexing status for library scanning.
 //
 
+import SwiftData
 internal import SwiftUI
 
 struct IndexingStatusView: View {
   private var library: SongLibrary { SongLibrary.shared }
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     Group {
@@ -26,19 +28,19 @@ struct IndexingStatusView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
-        .background(.accent)
-      case .fetchingMetadata(let count):
+        .background(themeManager.accentColor)
+      case .fetchingMetadata(let total):
         HStack(spacing: 10) {
           ProgressView()
             .scaleEffect(0.8)
-          Text("Fetching metadata for \(count) songs…")
+          Text("Fetching metadata for \(total) songs…")
             .font(.system(size: 14))
             .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
-        .background(.accent)
+        .background(themeManager.accentColor)
 
       }
     }

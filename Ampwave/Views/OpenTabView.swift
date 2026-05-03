@@ -15,6 +15,7 @@ struct OpenTabView: View {
   @Binding var isPlayerExpanded: Bool
   @State private var selectedTab: AppTab = .home
   @State private var servicesInitialized = false
+  @State private var showOnboarding = OnboardingState.shouldShow
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -113,8 +114,11 @@ struct OpenTabView: View {
       }
     #endif
     .ignoresSafeArea(.keyboard)
-    .safeAreaInset(edge: .top, spacing: 0) {
-      IndexingStatusView()
+//    .safeAreaInset(edge: .top, spacing: 0) {
+//      IndexingStatusView()
+//    }
+    .overlay(alignment: .top) {
+        IndexingStatusView()
     }
     .onAppear {
       // Only setup once to avoid redundant work
@@ -164,8 +168,16 @@ struct OpenTabView: View {
         print("[DEBUG] Starting indexOnStartup")
         await library.indexOnStartup()
 
+        await library.runGenreBackfillOncePerInstall()
+
         print("[DEBUG] Service initialization complete")
       }
+    }
+    .fullScreenCover(isPresented: $showOnboarding) {
+      Group {
+        OnboardingView()
+      }
+      .environment(ThemeManager.shared)
     }
   }
 }

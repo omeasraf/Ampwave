@@ -25,6 +25,7 @@ struct HomeView: View {
   }
 
   @State private var forYouRecommendations: [Recommendation] = []
+  @State private var genreRecommendations: [Recommendation] = []
   @State private var recentlyPlayedSongs: [LibrarySong] = []
   @State private var mostPlayedSongs: [(song: LibrarySong, count: Int)] = []
   @State private var isLoading = true
@@ -103,6 +104,10 @@ struct HomeView: View {
             )
           }
 
+          if !genreRecommendations.isEmpty {
+            GenrePicksSection(recommendations: genreRecommendations)
+          }
+
           // Most Played section
           if !mostPlayedSongs.isEmpty {
             HorizontalSongSection(
@@ -152,6 +157,8 @@ struct HomeView: View {
         await recommendationEngine.generateAllRecommendations()
         forYouRecommendations =
           recommendationEngine.forYouRecommendations
+        genreRecommendations =
+          recommendationEngine.genreRecommendations
       }
     }
     .refreshable {
@@ -166,6 +173,8 @@ struct HomeView: View {
         await recommendationEngine.generateAllRecommendations()
         forYouRecommendations =
           recommendationEngine.forYouRecommendations
+        genreRecommendations =
+          recommendationEngine.genreRecommendations
       }
     }
     .onChange(of: scenePhase) {
@@ -277,6 +286,7 @@ struct HomeView: View {
         forceRefresh: forceRefresh
       )
       forYouRecommendations = recommendationEngine.forYouRecommendations
+      genreRecommendations = recommendationEngine.genreRecommendations
       refreshHomeSections()
     } catch {
       errorMessage = error.localizedDescription
@@ -343,19 +353,23 @@ struct SongCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       AlbumArtworkView(artworkPath: song.artworkPath, size: 140)
+        .accessibilityHidden(true)
 
       VStack(alignment: .leading, spacing: 2) {
         Text(song.title)
-          .font(.system(size: 14, weight: .semibold))
+          .font(.headline)
           .lineLimit(1)
 
         Text(song.artist)
-          .font(.system(size: 12))
+          .font(.subheadline)
           .foregroundStyle(.secondary)
           .lineLimit(1)
       }
       .frame(width: 140, alignment: .leading)
     }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("\(song.title), \(song.artist)")
+    .accessibilityHint("Plays this song")
     .songContextMenu(song: song)
   }
 }
@@ -546,6 +560,85 @@ struct RecommendationCard: View {
   }
 }
 
+// MARK: - Genre picks (Home)
+
+struct GenrePicksSection: View {
+  let recommendations: [Recommendation]
+  @Environment(ThemeManager.self) private var themeManager
+
+  private var genreRows: [(display: String, key: String)] {
+    var seen = Set<String>()
+    var out: [(String, String)] = []
+    for r in recommendations {
+      if case .basedOnGenre(let g) = r.reason {
+        let key = g.lowercased()
+        if !seen.contains(key) {
+          seen.insert(key)
+          out.append((g, key))
+        }
+      }
+    }
+    return out
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Genre picks for you")
+        .font(.title2.weight(.bold))
+        .padding(.horizontal, 20)
+
+      Text("Based on what you play")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 20)
+        .padding(.top, -6)
+
+      ScrollView(.horizontal, showsIndicators: false) {
+        LazyHStack(spacing: 14) {
+          ForEach(genreRows, id: \.key) { row in
+            NavigationLink {
+              GenreSongsView(genre: row.display)
+            } label: {
+              genreTile(title: row.display)
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .padding(.horizontal, 20)
+      }
+    }
+    .padding(.vertical, 8)
+    .background(themeManager.backgroundColor)
+  }
+
+  private func genreTile(title: String) -> some View {
+    let colors = GenrePalette.gradient(for: title)
+    return ZStack(alignment: .bottomLeading) {
+      LinearGradient(
+        colors: colors,
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+      LinearGradient(
+        colors: [.black.opacity(0.05), .black.opacity(0.38)],
+        startPoint: .top,
+        endPoint: .bottom
+      )
+      Text(title)
+        .font(.title3.weight(.bold))
+        .foregroundStyle(.white)
+        .lineLimit(2)
+        .minimumScaleFactor(0.75)
+        .padding(14)
+    }
+    .frame(width: 168, height: 112)
+    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
+    .accessibilityLabel("\(title), genre")
+    .accessibilityHint("View songs in this genre")
+  }
+}
+
 // MARK: - Quick Access Section
 
 struct QuickAccessSection: View {
@@ -685,7 +778,7 @@ struct BrowseSection: View {
             PlaylistsListView()
           }
           BrowseCard(title: "Genres", icon: "tag", color: .indigo) {
-            GenresBrowseView()
+            LibraryView(initialTab: .genres)
           }
         }
         .padding(.horizontal, 20)
@@ -718,64 +811,6 @@ struct BrowseCard<Destination: View>: View {
       .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
     .buttonStyle(.plain)
-  }
-}
-
-// MARK: - Genres Browse
-
-struct GenresBrowseView: View {
-  @Environment(ThemeManager.self) private var themeManager
-  private var library: SongLibrary { SongLibrary.shared }
-
-  private var genres: [String] {
-    var unique = Set<String>()
-    for song in library.songs {
-      guard let raw = song.genre?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty
-      else { continue }
-      for part in raw.split(separator: "/") {
-        let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { unique.insert(trimmed) }
-      }
-    }
-    return unique.sorted {
-      $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-    }
-  }
-
-  var body: some View {
-    Group {
-      if genres.isEmpty {
-        ContentUnavailableView(
-          "No Genres Yet",
-          systemImage: "tag",
-          description: Text(
-            "Genres appear when your tracks have genre metadata. Try editing a song or enabling metadata fetch in Settings."
-          )
-        )
-      } else {
-        List {
-          ForEach(genres, id: \.self) { genre in
-            NavigationLink(destination: GenreSongsView(genre: genre)) {
-              HStack {
-                Image(systemName: "tag.fill")
-                  .foregroundStyle(themeManager.accentColor)
-                  .frame(width: 28)
-                Text(genre)
-                  .font(.system(size: 16, weight: .medium))
-              }
-            }
-            .listRowBackground(themeManager.backgroundColor)
-          }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-      }
-    }
-    .background(themeManager.backgroundColor)
-    .navigationTitle("Genres")
-    #if os(iOS)
-      .navigationBarTitleDisplayMode(.inline)
-    #endif
   }
 }
 

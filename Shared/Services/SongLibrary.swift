@@ -29,6 +29,8 @@ final class SongLibrary {
       updateIndexingStatusForMetadata()
     }
   }
+  private var totalMetadataFetches: Int = 0
+  private var isGenreBackfillActive: Bool = false
 
   var modelContext: ModelContext? {
     didSet {
@@ -826,16 +828,24 @@ final class SongLibrary {
   }
 
   private func updateIndexingStatusForMetadata() {
+    // Don't update status during genre backfill to avoid interference
+    if isGenreBackfillActive { return }
+
     if pendingMetadataFetches > 0 {
       // Only set to fetchingMetadata if not already indexing something else (like file import)
       switch indexingStatus {
       case .idle, .complete, .fetchingMetadata:
-        indexingStatus = .fetchingMetadata(pendingMetadataFetches)
+        Task { @MainActor in
+          indexingStatus = .fetchingMetadata(total: pendingMetadataFetches)
+        }
       default:
         break
       }
     } else if case .fetchingMetadata = indexingStatus {
-      indexingStatus = .complete
+      Task { @MainActor in
+        indexingStatus = .complete
+      }
+      totalMetadataFetches = 0
     }
   }
 
@@ -849,6 +859,23 @@ final class SongLibrary {
     }
 
     let preferences = UserPreferences.getOrCreate(in: modelContext)
+
+    // 0. Genre tags when full metadata already ran but genre is still empty
+    if preferences.autoFetchMetadata && !preferences.isOfflineMode
+      && song.metadataCheckAttempted
+      && (song.genre == nil || song.genre?.isEmpty == true)
+    {
+      let metadataService = MetadataService.shared
+      if metadataService.modelContext == nil {
+        metadataService.setModelContext(modelContext)
+      }
+      if let genre = await metadataService.fetchGenreTags(for: song), !genre.isEmpty {
+        await MainActor.run {
+          song.genre = genre
+          try? modelContext.save()
+        }
+      }
+    }
 
     // 1. Online Metadata & Artwork
     // Only fetch if metadata is missing/incomplete AND we haven't already tried.
@@ -1293,6 +1320,83 @@ final class SongLibrary {
     } catch {
       print("[DEBUG] SongLibrary.saveContext: Error saving: \(error)")
     }
+  }
+
+  /// One-time MusicBrainz tag pass for songs missing `genre` (runs after library load).
+  func runGenreBackfillOncePerInstall() async {
+    let key = "Ampwave.genreBackfill.v1"
+    guard !UserDefaults.standard.bool(forKey: key) else { return }
+    guard let modelContext = modelContext else { return }
+    let prefs = UserPreferences.getOrCreate(in: modelContext)
+    guard prefs.autoFetchMetadata, !prefs.isOfflineMode else {
+      UserDefaults.standard.set(true, forKey: key)
+      return
+    }
+    defer { UserDefaults.standard.set(true, forKey: key) }
+
+    MetadataService.shared.setModelContext(modelContext)
+    let targets = songs.filter { $0.genre == nil || $0.genre?.isEmpty == true }
+    print("[DEBUG] Genre backfill: Found \(targets.count) songs without genres")
+    if targets.isEmpty { return }
+
+    let songsToFetch = Array(targets.prefix(120))
+    totalMetadataFetches = songsToFetch.count
+    isGenreBackfillActive = true
+    await MainActor.run {
+      indexingStatus = .fetchingMetadata(total: songsToFetch.count)
+    }
+    print("[DEBUG] Genre backfill: Starting fetch for \(songsToFetch.count) songs")
+
+    for (index, song) in songsToFetch.enumerated() {
+      pendingMetadataFetches += 1
+      defer {
+        pendingMetadataFetches -= 1
+      }
+
+      if let genre = await MetadataService.shared.fetchGenreTags(for: song), !genre.isEmpty {
+        song.genre = genre
+        try? modelContext.save()
+      }
+
+      // Update status with remaining count
+      let remaining = songsToFetch.count - index - 1
+      if remaining > 0 {
+        await MainActor.run {
+          indexingStatus = .fetchingMetadata(total: remaining)
+        }
+      }
+
+      try? await Task.sleep(nanoseconds: 1_600_000_000)
+    }
+
+    print("[DEBUG] Genre backfill: Completed")
+    // Mark as complete
+    await MainActor.run {
+      indexingStatus = .complete
+    }
+    totalMetadataFetches = 0
+    isGenreBackfillActive = false
+  }
+
+  /// Distinct genre labels with song counts. Splits compound tags (e.g. `Rock/Pop`) on `/`.
+  func genreEntriesSortedByPopularity() -> [(name: String, count: Int)] {
+    var counts: [String: Int] = [:]
+    for song in songs {
+      guard let raw = song.genre?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty
+      else {
+        continue
+      }
+      for part in raw.split(separator: "/") {
+        let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { continue }
+        counts[String(trimmed), default: 0] += 1
+      }
+    }
+    return counts.map { (name: $0.key, count: $0.value) }
+      .sorted {
+        if $0.count != $1.count { return $0.count > $1.count }
+        return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+      }
   }
 
   func setModelContext(_ context: ModelContext) {

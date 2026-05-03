@@ -41,6 +41,11 @@ struct LibrarySortMenu: View {
         get: { appSettings.artistSortOrder },
         set: { appSettings.artistSortOrder = $0 }
       )
+    case .genres:
+      return Binding(
+        get: { appSettings.songSortOrder },
+        set: { appSettings.songSortOrder = $0 }
+      )
     }
   }
 
@@ -58,7 +63,94 @@ struct LibrarySortMenu: View {
       ]
     case .artists:
       return [.titleAscending, .titleDescending, .dateAddedDescending, .random]
+    case .genres:
+      return []
     }
+  }
+}
+
+// MARK: - Genres grid (Library tab + Genres browse)
+
+struct GenresGridView: View {
+  var searchText: String = ""
+  @Environment(ThemeManager.self) private var themeManager
+  private var library: SongLibrary { SongLibrary.shared }
+
+  private var entries: [(name: String, count: Int)] {
+    let base = library.genreEntriesSortedByPopularity()
+    guard !searchText.isEmpty else { return base }
+    return base.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+  }
+
+  private let columns = [
+    GridItem(.flexible(), spacing: 14),
+    GridItem(.flexible(), spacing: 14),
+  ]
+
+  var body: some View {
+    Group {
+      if entries.isEmpty {
+        ContentUnavailableView(
+          library.songs.isEmpty ? "No Genres" : "No Results",
+          systemImage: "tag",
+          description: Text(
+            library.songs.isEmpty
+              ? "Import songs with genre metadata to see genres here."
+              : "No genres match your search."
+          )
+        )
+        .padding(.top, 48)
+      } else {
+        ScrollView {
+          LazyVGrid(columns: columns, spacing: 14) {
+            ForEach(entries, id: \.name) { entry in
+              NavigationLink {
+                GenreSongsView(genre: entry.name)
+              } label: {
+                genreCell(name: entry.name, count: entry.count)
+              }
+              .buttonStyle(.plain)
+            }
+          }
+          .padding(.horizontal, 20)
+          .padding(.top, 12)
+        }
+      }
+    }
+    .background(themeManager.backgroundColor)
+  }
+
+  private func genreCell(name: String, count: Int) -> some View {
+    let colors = GenrePalette.gradient(for: name)
+    return ZStack(alignment: .bottomLeading) {
+      LinearGradient(
+        colors: colors,
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+      LinearGradient(
+        colors: [.black.opacity(0.06), .black.opacity(0.42)],
+        startPoint: .top,
+        endPoint: .bottom
+      )
+      VStack(alignment: .leading, spacing: 4) {
+        Text(name)
+          .font(.title2.weight(.bold))
+          .foregroundStyle(.white)
+          .lineLimit(3)
+          .minimumScaleFactor(0.72)
+        Text("\(count) songs")
+          .font(.subheadline.weight(.medium))
+          .foregroundStyle(.white.opacity(0.92))
+      }
+      .padding(16)
+    }
+    .frame(maxWidth: .infinity, minHeight: 124)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .shadow(color: .black.opacity(0.14), radius: 10, y: 5)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("\(name), \(count) songs")
+    .accessibilityHint("View songs in this genre")
   }
 }
 
@@ -84,12 +176,14 @@ struct LibraryView: View {
     case songs = "Songs"
     case albums = "Albums"
     case artists = "Artists"
+    case genres = "Genres"
 
     var icon: String {
       switch self {
       case .songs: return "music.note"
       case .albums: return "square.stack"
       case .artists: return "person.2"
+      case .genres: return "tag.fill"
       }
     }
   }
@@ -117,6 +211,8 @@ struct LibraryView: View {
           AlbumsGridView(searchText: searchText)
         case .artists:
           ArtistsListView(searchText: searchText)
+        case .genres:
+          GenresGridView(searchText: searchText)
         }
       }
     }
@@ -124,9 +220,11 @@ struct LibraryView: View {
     .tint(themeManager.accentColor)
     .navigationTitle("Library")
     .toolbar {
-      LibrarySortMenu(selectedTab: selectedTab, appSettings: appSettings)
+      if selectedTab != .genres {
+        LibrarySortMenu(selectedTab: selectedTab, appSettings: appSettings)
+      }
     }
-    .searchable(text: $searchText, prompt: "Search in Library")
+    .searchable(text: $searchText, prompt: "Search songs, artists, albums, lyrics...")
     .onAppear {
       playlistManager.setModelContext(modelContext)
     }
@@ -154,11 +252,27 @@ struct SongsListView: View {
     if searchText.isEmpty {
       songs = library.songs
     } else {
-      songs = library.songs.filter {
-        $0.title.localizedCaseInsensitiveContains(searchText)
-          || $0.artist.localizedCaseInsensitiveContains(searchText)
-          || ($0.album?.localizedCaseInsensitiveContains(searchText)
-            ?? false)
+      songs = library.songs.filter { song in
+        // Check basic fields
+        let basicMatch =
+          song.title.localizedCaseInsensitiveContains(searchText)
+          || song.artist.localizedCaseInsensitiveContains(searchText)
+          || (song.album?.localizedCaseInsensitiveContains(searchText) ?? false)
+
+        // Only check lyrics for longer search terms to avoid performance issues
+        if searchText.count >= 3 {
+          // Check plain lyrics
+          let lyricsMatch = song.lyrics?.localizedCaseInsensitiveContains(searchText) ?? false
+
+          // Check synced lyrics
+          let syncedLyricsMatch =
+            LyricsService.shared.getCachedLyrics(for: song)?
+            .lines.contains { $0.text.localizedCaseInsensitiveContains(searchText) } ?? false
+
+          return basicMatch || lyricsMatch || syncedLyricsMatch
+        } else {
+          return basicMatch
+        }
       }
     }
 

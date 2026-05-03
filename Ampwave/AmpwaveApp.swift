@@ -98,6 +98,7 @@ struct AmpwaveApp: App {
         #endif
       }
       .environment(ThemeManager.shared)
+      .onOpenURL { AmpwaveURLRouter.handle($0) }
     }
     .modelContainer(modelContainer)
 
