@@ -6,6 +6,12 @@
 internal import SwiftUI
 import WidgetKit
 
+#if os(macOS)
+  import AppKit
+#else
+  import UIKit
+#endif
+
 struct NowPlayingEntry: TimelineEntry {
   let date: Date
   let playbackInfo: SharedPlaybackInfo?
@@ -50,6 +56,12 @@ struct NowPlayingWidgetView: View {
   var entry: NowPlayingEntry
   @Environment(\.widgetFamily) private var family
 
+  #if os(iOS)
+    @State private var image: UIImage?
+  #else
+    @State private var image: NSImage?
+  #endif
+
   private var artURL: URL? {
     guard let name = entry.playbackInfo?.artworkRelativePath,
       let container = FileManager.default.containerURL(
@@ -62,22 +74,43 @@ struct NowPlayingWidgetView: View {
   var body: some View {
     if let info = entry.playbackInfo {
       HStack(alignment: .center, spacing: 10) {
-        if let url = artURL, let data = try? Data(contentsOf: url),
-          let ui = UIImage(data: data)
-        {
-          Image(uiImage: ui)
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .frame(width: family == .systemSmall ? 52 : 64, height: family == .systemSmall ? 52 : 64)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .accessibilityHidden(true)
-        } else {
-          Image(systemName: "music.note")
-            .font(.title2)
-            .frame(width: 52, height: 52)
-            .background(.quaternary)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
+        #if os(iOS)
+          if let url = artURL, let data = try? Data(contentsOf: url), let img = UIImage(data: data)
+          {
+            Image(uiImage: img)
+              .resizable()
+              .aspectRatio(contentMode: .fill)
+              .frame(
+                width: family == .systemSmall ? 52 : 64, height: family == .systemSmall ? 52 : 64
+              )
+              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+              .accessibilityHidden(true)
+          } else {
+            Image(systemName: "music.note")
+              .font(.title2)
+              .frame(width: 52, height: 52)
+              .background(.quaternary)
+              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          }
+        #else
+          if let url = artURL, let data = try? Data(contentsOf: url), let img = NSImage(data: data)
+          {
+            Image(nsImage: img)
+              .resizable()
+              .aspectRatio(contentMode: .fill)
+              .frame(
+                width: family == .systemSmall ? 52 : 64, height: family == .systemSmall ? 52 : 64
+              )
+              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+              .accessibilityHidden(true)
+          } else {
+            Image(systemName: "music.note")
+              .font(.title2)
+              .frame(width: 52, height: 52)
+              .background(.quaternary)
+              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          }
+        #endif
 
         VStack(alignment: .leading, spacing: 4) {
           Text(info.title)
@@ -126,7 +159,3 @@ struct NowPlayingWidget: Widget {
     .supportedFamilies([.systemSmall, .systemMedium])
   }
 }
-
-#if canImport(UIKit)
-  import UIKit
-#endif

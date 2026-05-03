@@ -45,7 +45,8 @@ enum PlaylistImportExport {
     data: Data, into modelContext: ModelContext, library: SongLibrary
   ) throws -> Playlist {
     guard let text = String(data: data, encoding: .utf8) else {
-      throw NSError(domain: "Ampwave", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid file"])
+      throw NSError(
+        domain: "Ampwave", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid file"])
     }
     let pm = PlaylistManager.shared
     pm.setModelContext(modelContext)
@@ -68,7 +69,9 @@ enum PlaylistImportExport {
       }
       if line.isEmpty || line.hasPrefix("#") { continue }
       let url = URL(fileURLWithPath: line)
-      if let song = library.songs.first(where: { library.getFileURL(for: $0).standardizedFileURL == url.standardizedFileURL }) {
+      if let song = library.songs.first(where: {
+        library.getFileURL(for: $0).standardizedFileURL == url.standardizedFileURL
+      }) {
         pending.append(song)
       } else if FileManager.default.fileExists(atPath: url.path),
         let song = library.songs.first(where: { $0.fileName == url.lastPathComponent })

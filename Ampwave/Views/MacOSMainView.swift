@@ -142,7 +142,7 @@ struct MacOSMainView: View {
           }
           Spacer(minLength: 0)
         }
-        .frame(width: 280)
+        .frame(width: 340)
 
         progressView
       } else {
@@ -260,19 +260,19 @@ struct DetailView: View {
         case .search:
           SearchView()
         case .artists:
-          ArtistsListView(searchText: "")
+          ArtistsListView()
             .navigationTitle("Artists")
             .toolbar {
               LibrarySortMenu(selectedTab: .artists, appSettings: appSettings)
             }
         case .albums:
-          AlbumsGridView(searchText: "")
+          AlbumsGridView()
             .navigationTitle("Albums")
             .toolbar {
               LibrarySortMenu(selectedTab: .albums, appSettings: appSettings)
             }
         case .songs:
-          SongsListView(searchText: "")
+          SongsListView()
             .navigationTitle("Songs")
             .toolbar {
               LibrarySortMenu(selectedTab: .songs, appSettings: appSettings)

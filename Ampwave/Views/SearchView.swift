@@ -233,12 +233,12 @@ struct SearchResultsView: View {
       if searchText.count >= 3 {
         // Check plain lyrics
         let lyricsMatch = song.lyrics?.localizedCaseInsensitiveContains(searchText) ?? false
-        
+
         // Check synced lyrics
         let syncedLyricsMatch =
           LyricsService.shared.getCachedLyrics(for: song)?
           .lines.contains { $0.text.localizedCaseInsensitiveContains(searchText) } ?? false
-        
+
         return basicMatch || lyricsMatch || syncedLyricsMatch
       } else {
         return basicMatch

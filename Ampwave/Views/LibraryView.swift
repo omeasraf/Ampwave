@@ -1,12 +1,108 @@
 //
-//  LibraryView.swift
-//  Ampwave
+// LibraryView.swift
+// Ampwave
 //
-//  Library view with tabs for Songs, Albums, Artists, and Playlists.
+// Library view with tabs for Songs, Albums, Artists, and Playlists.
 //
 
 import SwiftData
 internal import SwiftUI
+
+// MARK: - Optimized Search Helpers
+
+/// Optimized fuzzy search with early exit for common cases
+private func optimizedFuzzyMatch(_ pattern: String, _ text: String, maxDistance: Int = 2) -> Bool {
+  let p = pattern.lowercased()
+  let t = text.lowercased()
+
+  if p.isEmpty { return true }
+
+  // Quick win: direct substring match (much faster than Levenshtein)
+  if t.contains(p) { return true }
+
+  // For very short patterns, use faster character-by-character check
+  if p.count <= 3 {
+    return fuzzyMatchShort(p, t, maxDistance: maxDistance)
+  }
+
+  // For longer patterns, use optimized Levenshtein with early termination
+  return optimizedLevenshteinDistance(p, t, maxDistance: maxDistance)
+}
+
+/// Fast fuzzy matching for short strings
+private func fuzzyMatchShort(_ pattern: String, _ text: String, maxDistance: Int) -> Bool {
+  let patternChars = Array(pattern)
+  let textChars = Array(text)
+  let patternLength = patternChars.count
+  let textLength = textChars.count
+
+  // If text is much shorter than pattern, can't match
+  if textLength < patternLength - maxDistance {
+    return false
+  }
+
+  var matches = 0
+  var i = 0
+  var j = 0
+  var mismatches = 0
+
+  while i < patternLength && j < textLength && mismatches <= maxDistance {
+    if patternChars[i] == textChars[j] {
+      matches += 1
+      i += 1
+      j += 1
+    } else {
+      mismatches += 1
+      // Try skipping character in text
+      j += 1
+    }
+  }
+
+  let remainingPattern = patternLength - i
+  return remainingPattern <= maxDistance
+}
+
+/// Optimized Levenshtein with early termination
+private func optimizedLevenshteinDistance(_ a: String, _ b: String, maxDistance: Int) -> Bool {
+  let aChars = Array(a)
+  let bChars = Array(b)
+  let aLen = aChars.count
+  let bLen = bChars.count
+
+  // Quick bounds check
+  if abs(aLen - bLen) > maxDistance {
+    return false
+  }
+
+  // Use only two rows for memory efficiency
+  var previousRow = Array(0...aLen)
+
+  for j in 1...bLen {
+    var currentRow = [j]
+    var minInRow = j
+
+    for i in 1...aLen {
+      let cost = aChars[i - 1] == bChars[j - 1] ? 0 : 1
+      let insertion = currentRow[i - 1] + 1
+      let deletion = previousRow[i] + 1
+      let substitution = previousRow[i - 1] + cost
+      let cellValue = min(insertion, deletion, substitution)
+      currentRow.append(cellValue)
+      minInRow = min(minInRow, cellValue)
+    }
+
+    // Early termination if minimum distance already exceeds max
+    if minInRow > maxDistance {
+      return false
+    }
+
+    previousRow = currentRow
+  }
+
+  return previousRow[aLen] <= maxDistance
+}
+
+// MARK: - LibrarySortMenu
 
 struct LibrarySortMenu: View {
   let selectedTab: LibraryView.LibraryTab
@@ -69,17 +165,14 @@ struct LibrarySortMenu: View {
   }
 }
 
-// MARK: - Genres grid (Library tab + Genres browse)
+// MARK: - Genres grid
 
 struct GenresGridView: View {
-  var searchText: String = ""
   @Environment(ThemeManager.self) private var themeManager
   private var library: SongLibrary { SongLibrary.shared }
 
   private var entries: [(name: String, count: Int)] {
-    let base = library.genreEntriesSortedByPopularity()
-    guard !searchText.isEmpty else { return base }
-    return base.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    library.genreEntriesSortedByPopularity()
   }
 
   private let columns = [
@@ -154,12 +247,13 @@ struct GenresGridView: View {
   }
 }
 
+// MARK: - LibraryView (updated)
+
 struct LibraryView: View {
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
   @State private var selectedTab: LibraryTab
-  @State private var searchText = ""
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -190,29 +284,18 @@ struct LibraryView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      // Tab picker
-      Picker("Library Section", selection: $selectedTab) {
-        ForEach(LibraryTab.allCases, id: \.self) { tab in
-          Label(tab.rawValue, systemImage: tab.icon)
-            .tag(tab)
-        }
-      }
-      .pickerStyle(.segmented)
-      .tint(themeManager.accentColor)
-      .padding(.horizontal, 20)
-      .padding(.vertical, 12)
+      libraryTabStrip
 
-      // Content based on selected tab
       Group {
         switch selectedTab {
         case .songs:
-          SongsListView(searchText: searchText)
+          SongsListView()
         case .albums:
-          AlbumsGridView(searchText: searchText)
+          AlbumsGridView()
         case .artists:
-          ArtistsListView(searchText: searchText)
+          ArtistsListView()
         case .genres:
-          GenresGridView(searchText: searchText)
+          GenresGridView()
         }
       }
     }
@@ -224,159 +307,38 @@ struct LibraryView: View {
         LibrarySortMenu(selectedTab: selectedTab, appSettings: appSettings)
       }
     }
-    .searchable(text: $searchText, prompt: "Search songs, artists, albums, lyrics...")
     .onAppear {
       playlistManager.setModelContext(modelContext)
     }
   }
-}
 
-// MARK: - Songs List View
-
-struct SongsListView: View {
-  let searchText: String
-  @Environment(\.modelContext) private var modelContext
-  @Environment(ThemeManager.self) private var themeManager
-  @Query private var settings: [AppSettings]
-
-  private var library: SongLibrary { SongLibrary.shared }
-  private var playback: PlaybackController { PlaybackController.shared }
-  private var playlistManager: PlaylistManager { PlaylistManager.shared }
-
-  private var appSettings: AppSettings {
-    settings.first ?? AppSettings.getOrCreate(in: modelContext)
-  }
-
-  var filteredSongs: [LibrarySong] {
-    let songs: [LibrarySong]
-    if searchText.isEmpty {
-      songs = library.songs
-    } else {
-      songs = library.songs.filter { song in
-        // Check basic fields
-        let basicMatch =
-          song.title.localizedCaseInsensitiveContains(searchText)
-          || song.artist.localizedCaseInsensitiveContains(searchText)
-          || (song.album?.localizedCaseInsensitiveContains(searchText) ?? false)
-
-        // Only check lyrics for longer search terms to avoid performance issues
-        if searchText.count >= 3 {
-          // Check plain lyrics
-          let lyricsMatch = song.lyrics?.localizedCaseInsensitiveContains(searchText) ?? false
-
-          // Check synced lyrics
-          let syncedLyricsMatch =
-            LyricsService.shared.getCachedLyrics(for: song)?
-            .lines.contains { $0.text.localizedCaseInsensitiveContains(searchText) } ?? false
-
-          return basicMatch || lyricsMatch || syncedLyricsMatch
-        } else {
-          return basicMatch
-        }
-      }
-    }
-
-    return sortSongs(songs)
-  }
-
-  private func sortSongs(_ songs: [LibrarySong]) -> [LibrarySong] {
-    switch appSettings.songSortOrder {
-    case .titleAscending:
-      return songs.sorted {
-        $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-      }
-    case .titleDescending:
-      return songs.sorted {
-        $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending
-      }
-    case .artistAscending:
-      return songs.sorted {
-        $0.artist.localizedCaseInsensitiveCompare($1.artist) == .orderedAscending
-      }
-    case .artistDescending:
-      return songs.sorted {
-        $0.artist.localizedCaseInsensitiveCompare($1.artist) == .orderedDescending
-      }
-    case .dateAddedDescending:
-      return songs.sorted { $0.importedDate > $1.importedDate }
-    case .dateAddedAscending:
-      return songs.sorted { $0.importedDate < $1.importedDate }
-    case .yearDescending:
-      return songs.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
-    case .yearAscending:
-      return songs.sorted { ($0.year ?? 0) < ($1.year ?? 0) }
-    case .random:
-      return songs.sorted { $0.id.uuidString < $1.id.uuidString }
-    }
-  }
-
-  var body: some View {
-    List {
-      if !filteredSongs.isEmpty {
-        Button {
-          playback.playQueue(filteredSongs)
-        } label: {
-          Label("Play All", systemImage: "play.circle.fill")
-            .font(.system(size: 16, weight: .semibold))
-        }
-        .listRowBackground(themeManager.backgroundColor)
-      }
-
-      ForEach(filteredSongs) { song in
-        SongRow(
-          song: song,
-          isCurrent: playback.currentItem?.id == song.id
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
-          playback.playQueue(
-            filteredSongs,
-            startingAt: filteredSongs.firstIndex(where: {
-              $0.id == song.id
-            }) ?? 0
-          )
-        }
-        .listRowBackground(themeManager.backgroundColor)
-        .swipeActions(edge: .trailing) {
+  private var libraryTabStrip: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 12) {
+        ForEach(LibraryTab.allCases, id: \.self) { tab in
           Button {
-            playlistManager.toggleLike(song: song)
+            selectedTab = tab
           } label: {
-            Image(
-              systemName: playlistManager.isLiked(song: song)
-                ? "heart.slash" : "heart"
+            HStack(spacing: 10) {
+              Image(systemName: tab.icon)
+                .font(.system(size: 16, weight: .semibold))
+              Text(tab.rawValue)
+                .font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(selectedTab == tab ? .white : .primary)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .background(
+              selectedTab == tab
+                ? themeManager.accentColor
+                : themeManager.cardBackgroundColor
             )
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
           }
-          .tint(playlistManager.isLiked(song: song) ? .gray : themeManager.accentColor)
-        }
-        .swipeActions(edge: .leading) {
-          Button {
-            playback.playNext(song)
-          } label: {
-            Label("Play Next", systemImage: "text.insert")
-          }
-          .tint(.orange)
+          .buttonStyle(.plain)
         }
       }
-    }
-    .listStyle(.plain)
-    .scrollContentBackground(.hidden)
-    .background(themeManager.backgroundColor)
-    .overlay {
-      if library.songs.isEmpty {
-        ContentUnavailableView(
-          "No Songs",
-          systemImage: "music.note",
-          description: Text(
-            "Import songs from Settings to get started"
-          )
-        )
-      } else if filteredSongs.isEmpty {
-        ContentUnavailableView(
-          "No Results",
-          systemImage: "magnifyingglass",
-          description: Text("No songs match your search")
-        )
-      }
+      .padding(.horizontal, 20)
     }
   }
 }
@@ -384,7 +346,6 @@ struct SongsListView: View {
 // MARK: - Albums Grid View
 
 struct AlbumsGridView: View {
-  let searchText: String
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
@@ -396,18 +357,7 @@ struct AlbumsGridView: View {
   }
 
   var filteredAlbums: [Album] {
-    let albums: [Album]
-    if searchText.isEmpty {
-      albums = library.albums
-    } else {
-      albums = library.albums.filter {
-        $0.name.localizedCaseInsensitiveContains(searchText)
-          || ($0.artist?.localizedCaseInsensitiveContains(searchText)
-            ?? false)
-      }
-    }
-
-    return sortAlbums(albums)
+    sortAlbums(library.albums)
   }
 
   private func sortAlbums(_ albums: [Album]) -> [Album] {
@@ -473,14 +423,9 @@ struct AlbumsGridView: View {
   }
 }
 
-// MARK: - Album Card
-
-// AlbumCard moved to Subviews/AlbumCard.swift - includes context menu support
-
 // MARK: - Artists List View
 
 struct ArtistsListView: View {
-  let searchText: String
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
@@ -493,16 +438,7 @@ struct ArtistsListView: View {
   }
 
   var filteredArtists: [Artist] {
-    let artistsToFilter: [Artist]
-    if searchText.isEmpty {
-      artistsToFilter = artists
-    } else {
-      artistsToFilter = artists.filter {
-        $0.name.localizedCaseInsensitiveContains(searchText)
-      }
-    }
-
-    return sortArtists(artistsToFilter)
+    sortArtists(artists)
   }
 
   private func sortArtists(_ artists: [Artist]) -> [Artist] {
@@ -576,6 +512,14 @@ struct ArtistsListView: View {
 
   private func loadArtists() async {
     artists = await library.allArtists()
+  }
+}
+
+// MARK: - Helper Extension
+
+extension String {
+  func split(separators: CharacterSet) -> [String] {
+    return self.components(separatedBy: separators).filter { !$0.isEmpty }
   }
 }
 

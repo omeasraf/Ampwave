@@ -33,7 +33,8 @@ enum AmpwaveShortcutURLs {
 @available(iOS 17.0, macOS 14.0, *)
 struct PlayLikedSongsIntent: AppIntent {
   static var title: LocalizedStringResource = "Play Liked Songs"
-  static var description = IntentDescription("Starts playback of your Liked Songs playlist in Ampwave.")
+  static var description = IntentDescription(
+    "Starts playback of your Liked Songs playlist in Ampwave.")
   static var openAppWhenRun: Bool = true
 
   func perform() async throws -> some IntentResult {
@@ -47,7 +48,8 @@ struct PlayLikedSongsIntent: AppIntent {
 @available(iOS 17.0, macOS 14.0, *)
 struct ResumePlaybackIntent: AppIntent {
   static var title: LocalizedStringResource = "Resume Ampwave"
-  static var description = IntentDescription("Opens Ampwave and resumes the last queue if possible.")
+  static var description = IntentDescription(
+    "Opens Ampwave and resumes the last queue if possible.")
   static var openAppWhenRun: Bool = true
 
   func perform() async throws -> some IntentResult {

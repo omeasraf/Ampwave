@@ -8,6 +8,7 @@
 import Foundation
 import SwiftData
 internal import SwiftUI
+
 #if os(macOS)
   import AppKit
 #elseif canImport(UIKit)

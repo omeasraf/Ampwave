@@ -94,12 +94,12 @@ struct OpenTabView: View {
         .background(themeManager.backgroundColor)
       }
 
-      // Search tab (special role)
-      //      Tab(value: AppTab.search, role: .search) {
-      //        NavigationStack {
-      //          SearchView()
-      //        }
-      //      }
+      //       Search tab (special role)
+      Tab(value: AppTab.search, role: .search) {
+        NavigationStack {
+          SearchView()
+        }
+      }
     }
 
     #if os(iOS)
@@ -114,11 +114,11 @@ struct OpenTabView: View {
       }
     #endif
     .ignoresSafeArea(.keyboard)
-//    .safeAreaInset(edge: .top, spacing: 0) {
-//      IndexingStatusView()
-//    }
+    //    .safeAreaInset(edge: .top, spacing: 0) {
+    //      IndexingStatusView()
+    //    }
     .overlay(alignment: .top) {
-        IndexingStatusView()
+      IndexingStatusView()
     }
     .onAppear {
       // Only setup once to avoid redundant work
