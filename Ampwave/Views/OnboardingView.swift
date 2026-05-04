@@ -46,7 +46,9 @@ struct OnboardingView: View {
           .padding(24)
         }
       }
-      .tabViewStyle(.page(indexDisplayMode: .always))
+      #if os(iOS)
+        .tabViewStyle(.page(indexDisplayMode: .always))
+      #endif
 
       Button {
         if page < pages.count - 1 {

@@ -173,12 +173,21 @@ struct OpenTabView: View {
         print("[DEBUG] Service initialization complete")
       }
     }
-    .fullScreenCover(isPresented: $showOnboarding) {
-      Group {
-        OnboardingView()
+    #if os(iOS)
+      .fullScreenCover(isPresented: $showOnboarding) {
+        Group {
+          OnboardingView()
+        }
+        .environment(ThemeManager.shared)
       }
-      .environment(ThemeManager.shared)
-    }
+    #else
+      .sheet(isPresented: $showOnboarding) {
+        Group {
+          OnboardingView()
+        }
+        .environment(ThemeManager.shared)
+      }
+    #endif
   }
 }
 

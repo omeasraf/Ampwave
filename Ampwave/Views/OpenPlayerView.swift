@@ -136,7 +136,9 @@ struct OpenPlayerView: View {
           }
         }
       }
-      .toolbarBackground(.hidden, for: .navigationBar)
+      #if os(iOS)
+        .toolbarBackground(.hidden, for: .navigationBar)
+      #endif
       .confirmationDialog(
         "Add Song to Playlist",
         isPresented: $showingAddToPlaylist

@@ -534,7 +534,8 @@ final class MetadataService {
     for song: LibrarySong,
     in candidates: [MusicBrainzRecording]
   ) -> MusicBrainzRecording? {
-    let scored = candidates
+    let scored =
+      candidates
       .map { ($0, scoreRecording($0, against: song)) }
       .sorted { $0.1 > $1.1 }
 
@@ -549,7 +550,8 @@ final class MetadataService {
     let albumTitle = normalizedSearchText(album.name)
     let albumArtist = normalizedSearchText(album.artist ?? "")
 
-    let scored = candidates
+    let scored =
+      candidates
       .map { release -> (MusicBrainzRelease, Double) in
         var score = stringSimilarityScore(normalizedSearchText(release.title), albumTitle)
         if let releaseArtist = release.artistCredit?.first?.name {
@@ -563,7 +565,9 @@ final class MetadataService {
     return best.0
   }
 
-  private func scoreRecording(_ recording: MusicBrainzRecording, against song: LibrarySong) -> Double {
+  private func scoreRecording(_ recording: MusicBrainzRecording, against song: LibrarySong)
+    -> Double
+  {
     let localTitle = normalizedSearchText(song.title)
     let localArtist = normalizedSearchText(song.artist)
     let localAlbum = normalizedSearchText(song.album ?? "")
@@ -636,7 +640,8 @@ final class MetadataService {
     case "electronica":
       mapped = "Electronic"
     default:
-      mapped = cleaned
+      mapped =
+        cleaned
         .split(separator: " ")
         .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
         .joined(separator: " ")
@@ -646,7 +651,8 @@ final class MetadataService {
   }
 
   private func normalizedGenreLabel(from label: String) -> String {
-    let parts = label
+    let parts =
+      label
       .split(separator: "/")
       .flatMap { $0.split(separator: ",") }
       .compactMap { normalizeGenreName(String($0)) }

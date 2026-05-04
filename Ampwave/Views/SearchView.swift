@@ -14,7 +14,7 @@ struct SearchView: View {
   @State private var selectedFilter: SearchFilter = .all
   @State private var recentSearches = SearchPersistence.loadRecentSearches()
   @State private var debounceTask: Task<Void, Never>?
-  
+
   private var searchManager = SearchManager.shared
 
   enum SearchFilter: String, CaseIterable {
@@ -115,7 +115,7 @@ struct SearchView: View {
       // 400ms debounce
       try? await Task.sleep(nanoseconds: 400_000_000)
       guard !Task.isCancelled else { return }
-      
+
       await MainActor.run {
         withAnimation(.easeOut(duration: 0.15)) {
           debouncedQuery = trimmed

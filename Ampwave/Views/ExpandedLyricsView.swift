@@ -147,18 +147,19 @@ struct ExpandedLyricsView: View {
       .navigationTitle(playback.currentItem?.title ?? "")
       #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
-      #endif
-      .toolbar {
-        ToolbarItem(placement: .navigation) {
-          Button {
-            isExpanded = false
-          } label: {
-            Image(systemName: "chevron.down")
+
+        .toolbar {
+          ToolbarItem(placement: .navigation) {
+            Button {
+              isExpanded = false
+            } label: {
+              Image(systemName: "chevron.down")
               .font(.system(size: 18, weight: .semibold))
               .foregroundStyle(.white)
+            }
           }
         }
-      }
+      #endif
       .onAppear {
         #if os(iOS)
           UIApplication.shared.isIdleTimerDisabled = true

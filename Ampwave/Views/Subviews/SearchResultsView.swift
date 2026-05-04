@@ -5,18 +5,18 @@
 //  Created by Ome Asraf on 5/4/26.
 //
 
-internal import SwiftUI
 import SwiftData
+internal import SwiftUI
 
 struct SearchResultsView: View {
   let query: String
   let filter: SearchView.SearchFilter
   let onResultTapped: () -> Void
-  
+
   @Environment(ThemeManager.self) private var themeManager
   @State private var results = SearchResultsBundle.empty
   @State private var searchTask: Task<Void, Never>?
-  
+
   private var searchManager = SearchManager.shared
 
   init(query: String, filter: SearchView.SearchFilter, onResultTapped: @escaping () -> Void) {
@@ -148,9 +148,11 @@ struct SearchResultsView: View {
               }
               .frame(width: 112)
             }
-            .simultaneousGesture(TapGesture().onEnded {
-              onResultTapped()
-            })
+            .simultaneousGesture(
+              TapGesture().onEnded {
+                onResultTapped()
+              }
+            )
             .buttonStyle(.plain)
           }
         }
@@ -180,9 +182,11 @@ struct SearchResultsView: View {
             }
           }
         }
-        .simultaneousGesture(TapGesture().onEnded {
-          onResultTapped()
-        })
+        .simultaneousGesture(
+          TapGesture().onEnded {
+            onResultTapped()
+          }
+        )
         .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
         .listRowBackground(themeManager.backgroundColor)
       }
@@ -194,7 +198,7 @@ struct SearchResultsView: View {
 
   private func refreshResults() {
     searchTask?.cancel()
-    
+
     guard !query.isEmpty else {
       results = .empty
       return
@@ -203,7 +207,7 @@ struct SearchResultsView: View {
     searchTask = Task {
       let computed = await searchManager.search(query: query, filter: filter)
       guard !Task.isCancelled else { return }
-      
+
       await MainActor.run {
         results = computed
       }

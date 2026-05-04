@@ -235,12 +235,14 @@ struct HomeView: View {
 
   private var headerSummary: String {
     if library.songs.isEmpty {
-      return "Import your library to unlock personalized discovery, smart search, and offline playback."
+      return
+        "Import your library to unlock personalized discovery, smart search, and offline playback."
     }
 
     let recentCount = recentlyPlayedSongs.count
     if recentCount > 0 {
-      return "\(library.songs.count) songs ready. \(recentCount) recent favorites are shaping your recommendations."
+      return
+        "\(library.songs.count) songs ready. \(recentCount) recent favorites are shaping your recommendations."
     }
 
     return "\(library.songs.count) songs ready for smarter discovery."

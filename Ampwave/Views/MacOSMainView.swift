@@ -44,6 +44,7 @@ struct MacOSMainView: View {
       DetailView(selection: $selection)
         .background(themeManager.backgroundColor)
     }
+    .navigationSplitViewStyle(.balanced)
     .toolbar {
       ToolbarItemGroup(placement: .navigation) {
         playbackControls
@@ -142,20 +143,20 @@ struct MacOSMainView: View {
           }
           Spacer(minLength: 0)
         }
-        .frame(width: 340)
+        .frame(maxWidth: .infinity, alignment: .leading)
 
         progressView
+          .frame(maxWidth: .infinity)
       } else {
         Text("Not Playing")
           .font(.system(size: 12, weight: .medium))
           .foregroundStyle(.secondary)
-          .frame(width: 280)
+          .frame(maxWidth: .infinity, alignment: .leading)
           .frame(height: 44)
       }
     }
-    .frame(width: 300)
     .padding(.horizontal, 12)
-    .frame(maxHeight: .infinity)
+    .fixedSize(horizontal: false, vertical: true)
   }
 
   private var progressView: some View {

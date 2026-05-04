@@ -89,7 +89,7 @@ struct SettingsView: View {
       allowsMultipleSelection: importType != .folder && importType != .playlist
     ) { result in
       let currentType = importType
-      
+
       Task { @MainActor in
         switch currentType {
         case .file:
@@ -997,7 +997,9 @@ struct AddThemeView: View {
     .scrollContentBackground(.hidden)
     .tint(themeManager.accentColor)
     .navigationTitle("Custom Colors")
-    .navigationBarTitleDisplayMode(.inline)
+    #if os(iOS)
+      .navigationBarTitleDisplayMode(.inline)
+    #endif
   }
 }
 

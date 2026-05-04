@@ -91,7 +91,8 @@ final class RecommendationEngine {
     let nowPlayingId = PlaybackController.shared.currentItem?.id
     let statsBySongId = statisticsBySongID()
 
-    let scoredCandidates = library.songs.compactMap { song -> (song: LibrarySong, score: Double, reason: RecommendationReason)? in
+    let scoredCandidates = library.songs.compactMap {
+      song -> (song: LibrarySong, score: Double, reason: RecommendationReason)? in
       guard song.id != nowPlayingId else { return nil }
 
       var score = baseRecommendationScore(for: song, statsBySongId: statsBySongId)

@@ -26,6 +26,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>UISupportsCarPlay</key>
+	<true/>
 	<key>NSBonjourServices</key>
 	<array/>
 	<key>NSLocalNetworkUsageDescription</key>

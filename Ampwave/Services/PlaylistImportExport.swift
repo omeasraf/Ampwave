@@ -91,7 +91,8 @@ enum PlaylistImportExport {
       guard !line.isEmpty else { continue }
 
       if line.hasPrefix("#PLAYLIST:") {
-        playlistName = String(line.dropFirst("#PLAYLIST:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        playlistName = String(line.dropFirst("#PLAYLIST:".count)).trimmingCharacters(
+          in: .whitespacesAndNewlines)
         continue
       }
 
@@ -178,7 +179,9 @@ enum PlaylistImportExport {
     return playlist
   }
 
-  private static func resolveSong(from track: PortableTrackDocument, library: SongLibrary) -> LibrarySong? {
+  private static func resolveSong(from track: PortableTrackDocument, library: SongLibrary)
+    -> LibrarySong?
+  {
     if let songID = track.songID,
       let uuid = UUID(uuidString: songID),
       let match = library.songs.first(where: { $0.id == uuid })
@@ -192,7 +195,9 @@ enum PlaylistImportExport {
       return match
     }
 
-    if let identifier = track.identifier?.trimmingCharacters(in: .whitespacesAndNewlines), !identifier.isEmpty {
+    if let identifier = track.identifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !identifier.isEmpty
+    {
       let normalizedIdentifier = normalize(identifier)
       if let match = library.songs.first(where: {
         normalize($0.fileName) == normalizedIdentifier
@@ -234,7 +239,8 @@ enum PlaylistImportExport {
       return score >= 8 ? (song, score) : nil
     }
 
-    return rankedMatches
+    return
+      rankedMatches
       .sorted { lhs, rhs in
         if lhs.1 == rhs.1 {
           return lhs.0.importedDate > rhs.0.importedDate
@@ -249,9 +255,10 @@ enum PlaylistImportExport {
       return true
     }
 
-    guard let firstNonWhitespace = String(data: data, encoding: .utf8)?
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .first
+    guard
+      let firstNonWhitespace = String(data: data, encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .first
     else {
       return false
     }
@@ -385,7 +392,8 @@ private struct PendingM3UEntry {
     let parts = metadata.components(separatedBy: " - ")
     if parts.count >= 2 {
       artist = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-      title = parts.dropFirst().joined(separator: " - ").trimmingCharacters(in: .whitespacesAndNewlines)
+      title = parts.dropFirst().joined(separator: " - ").trimmingCharacters(
+        in: .whitespacesAndNewlines)
     } else {
       title = metadata.trimmingCharacters(in: .whitespacesAndNewlines)
     }

@@ -5,8 +5,8 @@
 //  Created by Ome Asraf on 4/3/26.
 //
 
-import CoreImage
 import CoreGraphics
+import CoreImage
 internal import SwiftUI
 
 #if os(iOS)
@@ -58,15 +58,17 @@ private enum DominantColorSampler {
     let bytesPerRow = width * bytesPerPixel
     var pixels = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
 
-    guard let context = CGContext(
-      data: &pixels,
-      width: width,
-      height: height,
-      bitsPerComponent: 8,
-      bytesPerRow: bytesPerRow,
-      space: CGColorSpaceCreateDeviceRGB(),
-      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    ) else {
+    guard
+      let context = CGContext(
+        data: &pixels,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: bytesPerRow,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+      )
+    else {
       return nil
     }
 
