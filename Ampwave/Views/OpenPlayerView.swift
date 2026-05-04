@@ -37,9 +37,12 @@ struct OpenPlayerView: View {
   var body: some View {
     NavigationStack {
       ZStack {
-          if userPreferences?.fullArtworkBackground ?? true {
-              playerBackground
-          }
+        if userPreferences?.fullArtworkBackground ?? true {
+          playerBackground
+        } else {
+          themeManager.backgroundColor
+            .ignoresSafeArea()
+        }
 
         ScrollView {
           VStack(spacing: 0) {
@@ -49,8 +52,8 @@ struct OpenPlayerView: View {
               LargeFixedArtworkView(
                 artworkPath: playback.currentItem?.artworkPath
               )
-              .padding(.top, 40)
-              .padding(.bottom, 30)
+              .padding(.top, 20)
+              .padding(.bottom, 25)
               .padding(.horizontal, 24)
             }
 
@@ -336,7 +339,7 @@ struct OpenPlayerView: View {
         onExpand: {
           isLyricsExpanded = true
         }
-      )
+      ).padding(.top, 10)
     }
   }
 

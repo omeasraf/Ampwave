@@ -263,7 +263,7 @@ struct SettingsView: View {
         importType = .playlist
         isShowingImporter = true
       } label: {
-        Label("Import Playlist (M3U)", systemImage: "music.note.list")
+        Label("Import Playlist", systemImage: "music.note.list")
       }
       .disabled(isImporting)
 
@@ -296,7 +296,7 @@ struct SettingsView: View {
       Text("Import")
     } footer: {
       Text(
-        "Import audio files (MP3, FLAC, WAV, etc.) to your library. Files are copied to the app's storage. M3U playlists only include tracks already in your library or resolvable file paths."
+        "Import audio files (MP3, FLAC, WAV, etc.) to your library. Files are copied to the app's storage."
       )
     }
   }
