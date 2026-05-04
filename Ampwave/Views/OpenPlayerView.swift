@@ -37,17 +37,20 @@ struct OpenPlayerView: View {
   var body: some View {
     NavigationStack {
       ZStack {
-        playerBackground
+          if userPreferences?.fullArtworkBackground ?? true {
+              playerBackground
+          }
 
         ScrollView {
           VStack(spacing: 0) {
-            if userPreferences?.fullArtworkBackground ?? false {
+            if userPreferences?.fullArtworkBackground ?? true {
               FullArtworkBackgroundView(artworkPath: playback.currentItem?.artworkPath)
             } else {
               LargeFixedArtworkView(
                 artworkPath: playback.currentItem?.artworkPath
               )
-              .padding(.top, 8)
+              .padding(.top, 40)
+              .padding(.bottom, 30)
               .padding(.horizontal, 24)
             }
 
@@ -90,7 +93,7 @@ struct OpenPlayerView: View {
           .background(themeManager.backgroundColor)
         }
         .scrollContentBackground(.hidden)
-        .ignoresSafeArea(edges: .top)
+        .ignoresSafeArea(edges: (userPreferences?.fullArtworkBackground ?? true) ? .top : [])
       }
       .navigationTitle("Now Playing")
       #if os(iOS)

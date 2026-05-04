@@ -16,6 +16,7 @@ enum ImportType {
 struct SettingsView: View {
   @Environment(\.modelContext) private var modelContext
   @State private var importType: ImportType?
+  @State private var isShowingImporter = false
   @State private var importError: String?
   @State private var isImporting = false
   @State private var importProgress: Double = 0
@@ -83,15 +84,14 @@ struct SettingsView: View {
     .tint(themeManager.accentColor)
     .navigationTitle("Settings")
     .fileImporter(
-      isPresented: Binding(
-        get: { importType != nil },
-        set: { if !$0 { importType = nil } }
-      ),
+      isPresented: $isShowingImporter,
       allowedContentTypes: allowedContentTypesForImport,
       allowsMultipleSelection: importType != .folder && importType != .playlist
     ) { result in
+      let currentType = importType
+      
       Task { @MainActor in
-        switch importType {
+        switch currentType {
         case .file:
           await handleFileImport(result)
         case .folder:
@@ -102,6 +102,7 @@ struct SettingsView: View {
           break
         }
         importType = nil
+        isShowingImporter = false
       }
     }
     .alert("Clear Cache?", isPresented: $showingClearCacheConfirmation) {
@@ -244,6 +245,7 @@ struct SettingsView: View {
     Section {
       Button {
         importType = .file
+        isShowingImporter = true
       } label: {
         Label("Import Songs", systemImage: "square.and.arrow.down")
       }
@@ -251,6 +253,7 @@ struct SettingsView: View {
 
       Button {
         importType = .folder
+        isShowingImporter = true
       } label: {
         Label("Import Folder", systemImage: "folder.badge.plus")
       }
@@ -258,6 +261,7 @@ struct SettingsView: View {
 
       Button {
         importType = .playlist
+        isShowingImporter = true
       } label: {
         Label("Import Playlist (M3U)", systemImage: "music.note.list")
       }

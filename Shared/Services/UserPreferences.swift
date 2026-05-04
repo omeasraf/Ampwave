@@ -338,7 +338,7 @@ final class UserPreferences: Identifiable {
     }
     set {
       _fullArtworkBackground = newValue
-      UserDefaults.standard.set(newValue ?? false, forKey: "com.ampwave.fullArtworkBackground")
+      UserDefaults.standard.set(newValue ?? true, forKey: "com.ampwave.fullArtworkBackground")
       save()
     }
   }
