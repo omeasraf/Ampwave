@@ -7,6 +7,7 @@
 
 import SwiftData
 internal import SwiftUI
+import AppIntents
 
 /// Applies tint and color scheme from `ThemeManager` in the environment (observation-safe; avoids @State + singleton issues).
 private struct AppThemeChrome: ViewModifier {
@@ -72,6 +73,11 @@ struct AmpwaveApp: App {
 
       // Setup preferences and theme
       _ = UserPreferences.getOrCreate(in: context)
+
+      // Update Siri App Shortcuts
+      if #available(iOS 17.0, macOS 14.0, *) {
+        AmpwaveShortcuts.updateAppShortcutParameters()
+      }
 
     } catch {
       fatalError("Could not initialize ModelContainer: \(error)")

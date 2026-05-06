@@ -441,6 +441,14 @@ struct SettingsView: View {
             set: { preferences.showLyricsByDefault = $0 }
           )
         )
+
+        Toggle(
+          "Word-synced Lyrics",
+          isOn: Binding(
+            get: { preferences.wordSyncedLyricsEnabled },
+            set: { preferences.wordSyncedLyricsEnabled = $0 }
+          )
+        )
       }
     } header: {
       Text("Library")

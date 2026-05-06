@@ -492,6 +492,11 @@ final class SongLibrary {
       print("[DEBUG] SongLibrary.importFiles: Final save and reloading library")
       saveContext()
       await loadSongs()
+      
+      // Start background metadata fetch for everything imported
+      Task {
+        await fetchMetadataForNewSongs()
+      }
     }
     print(
       "[DEBUG] SongLibrary.importFiles: Completed. Imported \(importedCount)/\(totalCount) files")
@@ -665,11 +670,6 @@ final class SongLibrary {
       if album.songs.count == 1 { artist.albumCount += 1 }
     }
 
-    // Background fetch online metadata and assets
-    Task {
-      await fetchMetadataForSong(song)
-    }
-
     print("[DEBUG] SongLibrary.importFile: Finished successfully for \(url.lastPathComponent)")
     return song
   }
@@ -767,11 +767,6 @@ final class SongLibrary {
       song.albumReference = album
       album.songs.append(song)
       if album.songs.count == 1 { artist.albumCount += 1 }
-    }
-
-    // Background fetch online metadata and assets
-    Task {
-      await fetchMetadataForSong(song)
     }
 
     return song
@@ -879,8 +874,13 @@ final class SongLibrary {
 
     // 1. Online Metadata & Artwork
     // Only fetch if metadata is missing/incomplete AND we haven't already tried.
-    let needsMetadata =
-      song.artworkPath == nil || song.album == nil || song.album == "Unknown Album"
+    // IMPROVED: Be more thorough. Fetch if any key field is missing or generic.
+    let isGenericAlbum = song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true
+    let isGenericArtist = song.artist == "Unknown Artist" || song.artist.isEmpty
+    let isMissingKeyInfo = song.genre == nil || song.genre?.isEmpty == true || song.year == nil || song.year == 0
+    
+    let needsMetadata = song.artworkPath == nil || isGenericAlbum || isGenericArtist || isMissingKeyInfo
+
     if preferences.autoFetchMetadata && needsMetadata && !song.metadataCheckAttempted {
       pendingMetadataFetches += 1
       defer {
@@ -927,18 +927,39 @@ final class SongLibrary {
     print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Starting batch fetch")
     guard let modelContext = modelContext else { return }
 
-    // Fetch for songs that have no artwork and haven't been attempted yet
+    // Simplify predicate to avoid compiler timeout. 
+    // We'll filter for specific missing metadata fields in memory.
     let descriptor = FetchDescriptor<LibrarySong>(
-      predicate: #Predicate<LibrarySong> { $0.artworkPath == nil && !$0.metadataCheckAttempted }
+      predicate: #Predicate<LibrarySong> { song in
+        song.metadataCheckAttempted == false
+      }
     )
 
     do {
-      let songsToFetch = try modelContext.fetch(descriptor).prefix(10)
-      if songsToFetch.isEmpty { return }
-
-      for song in songsToFetch {
-        await fetchMetadataForSong(song)
+      let uncheckedSongs = try modelContext.fetch(descriptor)
+      let songsToFetch = uncheckedSongs.filter { song in
+        let isGeneric = song.album == "Unknown Album" || song.artist == "Unknown Artist"
+        let isMissingInfo = song.artworkPath == nil || song.genre == nil || song.year == nil || song.year == 0
+        return isGeneric || isMissingInfo
       }
+
+      if songsToFetch.isEmpty {
+        print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: No songs needing metadata fetch")
+        return
+      }
+
+      print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Fetching for \(songsToFetch.count) songs")
+      
+      for song in songsToFetch {
+        // Double check if context is still valid
+        guard let _ = self.modelContext else { break }
+        await fetchMetadataForSong(song)
+        
+        // Brief pause between songs to allow system to breathe
+        try? await Task.sleep(nanoseconds: 200_000_000) // 0.2s
+      }
+      
+      print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Finished batch fetch")
     } catch {
       print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Error: \(error)")
     }

@@ -433,42 +433,76 @@ struct LyricLineView: View {
   let index: Int
   let isCurrent: Bool
   @Bindable var playback: PlaybackController
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
-    Text(line.text)
-      .font(
-        .system(
-          size: 24,
-          weight: isCurrent ? .bold : .semibold
+    Group {
+      if isCurrent, themeManager.userPreferences?.wordSyncedLyricsEnabled ?? true,
+        let words = line.wordOffsets,
+        !words.isEmpty
+      {
+        WordByWordLyricView(
+          words: words,
+          currentTime: playback.currentTime,
+          isCurrent: true
         )
-      )
-      .foregroundStyle(
-        isCurrent ? .white : .white.opacity(0.35)
-      )
-      .multilineTextAlignment(.center)
-      .lineLimit(nil)
-      .fixedSize(horizontal: false, vertical: true)
-      .lineSpacing(4)
-      .padding(.horizontal, 32)
-      #if os(iOS)
-        .frame(maxWidth: UIScreen.main.bounds.width - 64)
-      #else
-        .frame(maxWidth: .infinity)
-      #endif
-      .scaleEffect(
-        isCurrent ? 1.05 : 1.0,
-        anchor: .center
-      )
-      .id(index)
-      .onTapGesture {
-        playback.seek(to: line.timestamp)
-        if !playback.isPlaying {
-          playback.play()
-        }
+      } else {
+        Text(line.text)
+          .font(
+            .system(
+              size: 24,
+              weight: isCurrent ? .bold : .semibold
+            )
+          )
+          .foregroundStyle(
+            isCurrent ? .white : .white.opacity(0.35)
+          )
       }
-      .animation(
-        .spring(response: 0.3, dampingFraction: 0.7),
-        value: playback.currentLyricIndex
-      )
+    }
+    .multilineTextAlignment(.center)
+    .lineLimit(nil)
+    .fixedSize(horizontal: false, vertical: true)
+    .lineSpacing(4)
+    .padding(.horizontal, 32)
+    #if os(iOS)
+      .frame(maxWidth: UIScreen.main.bounds.width - 64)
+    #else
+      .frame(maxWidth: .infinity)
+    #endif
+    .scaleEffect(
+      isCurrent ? 1.05 : 1.0,
+      anchor: .center
+    )
+    .id(index)
+    .onTapGesture {
+      playback.seek(to: line.timestamp)
+      if !playback.isPlaying {
+        playback.play()
+      }
+    }
+    .animation(
+      .spring(response: 0.3, dampingFraction: 0.7),
+      value: playback.currentLyricIndex
+    )
+  }
+}
+
+struct WordByWordLyricView: View {
+  let words: [WordOffset]
+  let currentTime: TimeInterval
+  let isCurrent: Bool
+
+  var body: some View {
+    // Flowing layout for words
+    // We use a simple wrap-around approach by joining Text views or using a custom layout
+    // For simplicity and best visual effect, we can use a Canvas or just multiple Text views in a container.
+    // SwiftUI's Text concatenation is great for this.
+    
+    words.reduce(Text("")) { (result, word) in
+      let isWordPassed = currentTime >= word.timestamp
+      return result + Text(word.text)
+        .font(.system(size: 24, weight: .bold))
+        .foregroundStyle(isWordPassed ? .white : .white.opacity(0.35))
+    }
   }
 }

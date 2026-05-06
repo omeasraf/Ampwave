@@ -133,6 +133,18 @@ final class MetadataService {
       metadata.artworkURL = await fetchArtworkURL(forRelease: releaseId)
     }
 
+    // Fallback: If no artwork found via recording, but we have an album title, search for the release specifically
+    if metadata.artworkURL == nil, let albumTitle = metadata.album {
+      print("[DEBUG] MetadataService.fetchMetadata: No artwork found via recording, searching release for \(albumTitle)")
+      let searchArtist = metadata.artist ?? song.artist
+      if let release = await searchRelease(albumTitle: albumTitle, artist: searchArtist) {
+        metadata.artworkURL = await fetchArtworkURL(forRelease: release.id)
+        if metadata.year == nil || metadata.year == 0 {
+          metadata.year = parseReleaseDate(release.date)
+        }
+      }
+    }
+
     if metadata.genre == nil || metadata.genre?.isEmpty == true {
       metadata.genre = await fetchGenreTagsForRecording(mbid: recording.id)
     }
@@ -239,26 +251,6 @@ final class MetadataService {
     return nil
   }
 
-  /// Downloads and caches artwork
-  func downloadArtwork(from url: URL) async -> String? {
-    do {
-      let (data, _) = try await URLSession.shared.data(from: url)
-
-      // Validate that data is valid image
-      //      #if os(iOS)
-      //        guard UIImage(data: data) != nil else { return nil }
-      //      #else
-      //        guard NSImage(data: data) != nil else { return nil }
-      //      #endif
-
-      // Cache the artwork
-      return await cacheArtwork(data, for: nil)
-    } catch {
-      print("Failed to download artwork: \(error)")
-      return nil
-    }
-  }
-
   /// Refreshes metadata for a song
   @MainActor
   func refreshMetadata(for song: LibrarySong) async {
@@ -305,7 +297,12 @@ final class MetadataService {
   // MARK: - MusicBrainz Search
 
   private func searchRecording(song: LibrarySong) async -> MusicBrainzRecording? {
-    let query = "recording:\"\(song.title)\" AND artist:\"\(song.artist)\""
+    // Escape double quotes for Lucene query
+    let title = song.title.replacingOccurrences(of: "\"", with: "\\\"")
+    let artist = song.artist.replacingOccurrences(of: "\"", with: "\\\"")
+    
+    // Primary query: strict recording + artist
+    let query = "recording:\"\(title)\" AND artist:\"\(artist)\""
 
     var components = URLComponents(string: "\(musicBrainzDefaultURL)/recording")
     components?.queryItems = [
@@ -317,15 +314,81 @@ final class MetadataService {
     guard let url = components?.url else { return nil }
     print("[DEBUG] MetadataService.searchRecording: URL: \(url.absoluteString)")
 
-    guard let data = await performRequest(url: url) else { return nil }
-
-    do {
-      let response = try JSONDecoder().decode(MusicBrainzRecordingSearchResponse.self, from: data)
-      return bestRecordingMatch(for: song, in: response.recordings ?? [])
-    } catch {
-      print("[DEBUG] MetadataService.searchRecording: Decoding error: \(error)")
-      return nil
+    if let data = await performRequest(url: url) {
+      do {
+        let response = try JSONDecoder().decode(MusicBrainzRecordingSearchResponse.self, from: data)
+        if let match = bestRecordingMatch(for: song, in: response.recordings ?? []), !response.recordings!.isEmpty {
+          return match
+        }
+      } catch {
+        print("[DEBUG] MetadataService.searchRecording: Decoding error: \(error)")
+      }
     }
+
+    // Fallback query: just search text (less strict)
+    print("[DEBUG] MetadataService.searchRecording: Strict search failed, trying fallback")
+    let fallbackQuery = "\(title) \(artist)"
+    var fallbackComponents = URLComponents(string: "\(musicBrainzDefaultURL)/recording")
+    fallbackComponents?.queryItems = [
+      URLQueryItem(name: "query", value: fallbackQuery),
+      URLQueryItem(name: "fmt", value: "json"),
+      URLQueryItem(name: "limit", value: "5"),
+    ]
+    
+    if let fallbackUrl = fallbackComponents?.url,
+       let data = await performRequest(url: fallbackUrl) {
+      do {
+        let response = try JSONDecoder().decode(MusicBrainzRecordingSearchResponse.self, from: data)
+        return bestRecordingMatch(for: song, in: response.recordings ?? [])
+      } catch {
+        print("[DEBUG] MetadataService.searchRecording Fallback: Decoding error: \(error)")
+      }
+    }
+
+    return nil
+  }
+
+  private func searchRelease(albumTitle: String, artist: String) async -> MusicBrainzRelease? {
+    let cleanTitle = albumTitle.replacingOccurrences(of: "\"", with: "\\\"")
+    let cleanArtist = artist.replacingOccurrences(of: "\"", with: "\\\"")
+    let query = "release:\"\(cleanTitle)\" AND artist:\"\(cleanArtist)\""
+
+    var components = URLComponents(string: "\(musicBrainzDefaultURL)/release")
+    components?.queryItems = [
+      URLQueryItem(name: "query", value: query),
+      URLQueryItem(name: "fmt", value: "json"),
+      URLQueryItem(name: "limit", value: "5"),
+    ]
+
+    guard let url = components?.url else { return nil }
+    
+    if let data = await performRequest(url: url) {
+      do {
+        let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
+        if let match = response.releases?.first {
+           return match
+        }
+      } catch {}
+    }
+
+    // Fallback
+    let fallbackQuery = "\(cleanTitle) \(cleanArtist)"
+    var fallbackComponents = URLComponents(string: "\(musicBrainzDefaultURL)/release")
+    fallbackComponents?.queryItems = [
+      URLQueryItem(name: "query", value: fallbackQuery),
+      URLQueryItem(name: "fmt", value: "json"),
+      URLQueryItem(name: "limit", value: "5"),
+    ]
+    
+    if let fallbackUrl = fallbackComponents?.url,
+       let data = await performRequest(url: fallbackUrl) {
+      do {
+        let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
+        return response.releases?.first
+      } catch {}
+    }
+
+    return nil
   }
 
   private func searchRelease(album: Album) async -> MusicBrainzRelease? {
@@ -404,25 +467,61 @@ final class MetadataService {
 
     guard let url = URL(string: urlString) else { return nil }
 
-    do {
-      let (data, _) = try await URLSession.shared.data(from: url)
-      let response = try JSONDecoder().decode(CoverArtArchiveResponse.self, from: data)
+    if let data = await performRequest(url: url) {
+      do {
+        // If data starts with '<', it's likely HTML/XML (e.g. error page)
+        if let firstByte = data.first, firstByte == 60 { // '<' character
+          print("[DEBUG] MetadataService.fetchArtworkURL: Received non-JSON response for release \(releaseId)")
+          return nil
+        }
 
-      // Prefer a reasonably sized front cover thumbnail before falling back to originals.
-      let frontImages = response.images.filter { $0.types.contains("Front") }
-      let bestImage = frontImages.max { $0.image.width ?? 0 < $1.image.width ?? 0 }
-      return bestImage?.thumbnails.thumb500
-        ?? bestImage?.thumbnails.large
-        ?? bestImage?.image.url
-        ?? response.images.first?.thumbnails.thumb500
-        ?? response.images.first?.image.url
+        let response = try JSONDecoder().decode(CoverArtArchiveResponse.self, from: data)
+
+        // Prefer a reasonably sized front cover thumbnail before falling back to originals.
+        let frontImages = response.images.filter { $0.types.contains("Front") }
+        let bestImage = frontImages.max { $0.image.width ?? 0 < $1.image.width ?? 0 }
+        
+        let artworkURL = bestImage?.thumbnails.thumb500
+          ?? bestImage?.thumbnails.large
+          ?? bestImage?.image.url
+          ?? response.images.first?.thumbnails.thumb500
+          ?? response.images.first?.image.url
+          
+        return artworkURL.flatMap { forceHTTPS($0) }
+      } catch {
+        print("Failed to decode artwork JSON: \(error)")
+        return nil
+      }
+    }
+    return nil
+  }
+
+  // MARK: - Artwork Caching
+
+  /// Downloads and caches artwork
+  func downloadArtwork(from url: URL) async -> String? {
+    let secureURL = forceHTTPS(url)
+    print("[DEBUG] MetadataService.downloadArtwork: Downloading from \(secureURL.absoluteString)")
+    
+    do {
+      // Use performRequest for consistent User-Agent and retry logic
+      if let data = await performRequest(url: secureURL) {
+        // Cache the artwork
+        return await cacheArtwork(data, for: nil)
+      }
+      return nil
     } catch {
-      print("Failed to fetch artwork: \(error)")
+      print("Failed to download artwork: \(error)")
       return nil
     }
   }
 
-  // MARK: - Artwork Caching
+  private func forceHTTPS(_ url: URL) -> URL {
+    guard url.scheme == "http" else { return url }
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.scheme = "https"
+    return components?.url ?? url
+  }
 
   private func cacheArtwork(_ data: Data, for song: LibrarySong?) async -> String? {
     let hash = data.sha256()

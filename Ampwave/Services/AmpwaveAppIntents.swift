@@ -31,19 +31,23 @@ enum AmpwaveShortcutURLs {
 }
 
 @available(iOS 17.0, macOS 14.0, *)
-struct PlayLikedSongsIntent: AudioPlaybackIntent {
-  static var title: LocalizedStringResource = "Play Liked Songs"
-  static var description = IntentDescription(
+public struct PlayLikedSongsIntent: AudioPlaybackIntent {
+  public static var title: LocalizedStringResource = "Play Liked Songs"
+  public static var description = IntentDescription(
     "Starts playback of your Liked Songs playlist in Ampwave.")
-  static var openAppWhenRun: Bool = true
+  public static var openAppWhenRun: Bool = true
 
-  func perform() async throws -> some IntentResult {
+  public init() {}
+
+  public func perform() async throws -> some IntentResult {
+    print("[DEBUG] Siri: PlayLikedSongsIntent.perform")
     await MainActor.run {
       let pm = PlaylistManager.shared
       let playback = PlaybackController.shared
       if let liked = pm.likedSongsPlaylist, !liked.songs.isEmpty {
         playback.playPlaylist(liked)
       } else {
+        print("[DEBUG] Siri: No liked songs found, opening app")
         AmpwaveShortcutURLs.openInApp("play/liked")
       }
     }
@@ -52,13 +56,16 @@ struct PlayLikedSongsIntent: AudioPlaybackIntent {
 }
 
 @available(iOS 17.0, macOS 14.0, *)
-struct ResumePlaybackIntent: AudioPlaybackIntent {
-  static var title: LocalizedStringResource = "Resume Ampwave"
-  static var description = IntentDescription(
+public struct ResumePlaybackIntent: AudioPlaybackIntent {
+  public static var title: LocalizedStringResource = "Resume Ampwave"
+  public static var description = IntentDescription(
     "Opens Ampwave and resumes the last queue if possible.")
-  static var openAppWhenRun: Bool = true
+  public static var openAppWhenRun: Bool = true
 
-  func perform() async throws -> some IntentResult {
+  public init() {}
+
+  public func perform() async throws -> some IntentResult {
+    print("[DEBUG] Siri: ResumePlaybackIntent.perform")
     await MainActor.run {
       let playback = PlaybackController.shared
       if playback.currentItem != nil {
@@ -73,18 +80,18 @@ struct ResumePlaybackIntent: AudioPlaybackIntent {
 }
 
 @available(iOS 17.0, macOS 14.0, *)
-struct ControlPlaybackIntent: AudioPlaybackIntent {
-  static var title: LocalizedStringResource = "Control Playback"
-  static var description = IntentDescription("Controls music playback in Ampwave.")
+public struct ControlPlaybackIntent: AudioPlaybackIntent {
+  public static var title: LocalizedStringResource = "Control Playback"
+  public static var description = IntentDescription("Controls music playback in Ampwave.")
   
   @Parameter(title: "Action")
-  var action: PlaybackAction
+  public var action: PlaybackAction
   
-  enum PlaybackAction: String, AppEnum {
+  public enum PlaybackAction: String, AppEnum {
     case play, pause, toggle, next, previous
     
-    static var typeDisplayRepresentation: TypeDisplayRepresentation = "Playback Action"
-    static var caseDisplayRepresentations: [PlaybackAction: DisplayRepresentation] = [
+    public static var typeDisplayRepresentation: TypeDisplayRepresentation = "Playback Action"
+    public static var caseDisplayRepresentations: [PlaybackAction: DisplayRepresentation] = [
       .play: "Play",
       .pause: "Pause",
       .toggle: "Toggle Play/Pause",
@@ -93,7 +100,10 @@ struct ControlPlaybackIntent: AudioPlaybackIntent {
     ]
   }
 
-  func perform() async throws -> some IntentResult {
+  public init() {}
+
+  public func perform() async throws -> some IntentResult {
+    print("[DEBUG] Siri: ControlPlaybackIntent.perform (action: \(action.rawValue))")
     await MainActor.run {
       let playback = PlaybackController.shared
       switch action {
@@ -109,11 +119,14 @@ struct ControlPlaybackIntent: AudioPlaybackIntent {
 }
 
 @available(iOS 17.0, macOS 14.0, *)
-struct LikeCurrentSongIntent: AppIntent {
-  static var title: LocalizedStringResource = "Like This Song"
-  static var description = IntentDescription("Likes or unlikes the currently playing song in Ampwave.")
+public struct LikeCurrentSongIntent: AppIntent {
+  public static var title: LocalizedStringResource = "Like This Song"
+  public static var description = IntentDescription("Likes or unlikes the currently playing song in Ampwave.")
 
-  func perform() async throws -> some IntentResult {
+  public init() {}
+
+  public func perform() async throws -> some IntentResult {
+    print("[DEBUG] Siri: LikeCurrentSongIntent.perform")
     await MainActor.run {
       if let song = PlaybackController.shared.currentItem {
         _ = PlaylistManager.shared.toggleLike(song: song)
@@ -124,28 +137,37 @@ struct LikeCurrentSongIntent: AppIntent {
 }
 
 @available(iOS 17.0, macOS 14.0, *)
-struct PlayMusicIntent: AudioPlaybackIntent {
-  static var title: LocalizedStringResource = "Play Music"
-  static var description = IntentDescription("Plays music in Ampwave based on a search query.")
-  static var openAppWhenRun: Bool = true
+public struct PlayMusicIntent: AudioPlaybackIntent {
+  public static var title: LocalizedStringResource = "Play Music"
+  public static var description = IntentDescription("Plays music in Ampwave based on a search query.")
+  public static var openAppWhenRun: Bool = true
 
   @Parameter(title: "Query", description: "The song, artist, album, or playlist to play")
-  var query: String
+  public var query: String
 
-  func perform() async throws -> some IntentResult {
+  public init() {}
+
+  public func perform() async throws -> some IntentResult {
+    print("[DEBUG] Siri: PlayMusicIntent.perform (query: \(query))")
     let results = await SearchManager.shared.search(query: query, filter: .all)
     
     await MainActor.run {
       let playback = PlaybackController.shared
       
       if let song = results.topSong {
+        print("[DEBUG] Siri: Playing song \(song.title)")
         playback.play(song, from: .library)
       } else if let artist = results.artists.first {
+        print("[DEBUG] Siri: Playing artist \(artist.name)")
         playback.playArtist(artist.name)
       } else if let album = results.albums.first {
+        print("[DEBUG] Siri: Playing album \(album.name)")
         playback.playAlbum(album)
       } else if let playlist = results.playlists.first {
+        print("[DEBUG] Siri: Playing playlist \(playlist.name)")
         playback.playPlaylist(playlist)
+      } else {
+        print("[DEBUG] Siri: No results found for query")
       }
     }
     
@@ -154,15 +176,18 @@ struct PlayMusicIntent: AudioPlaybackIntent {
 }
 
 @available(iOS 17.0, macOS 14.0, *)
-struct PlayArtistIntent: AudioPlaybackIntent {
-  static var title: LocalizedStringResource = "Play Artist"
-  static var description = IntentDescription("Plays songs by a specific artist in Ampwave.")
-  static var openAppWhenRun: Bool = true
+public struct PlayArtistIntent: AudioPlaybackIntent {
+  public static var title: LocalizedStringResource = "Play Artist"
+  public static var description = IntentDescription("Plays songs by a specific artist in Ampwave.")
+  public static var openAppWhenRun: Bool = true
 
   @Parameter(title: "Artist Name")
-  var artistName: String
+  public var artistName: String
 
-  func perform() async throws -> some IntentResult {
+  public init() {}
+
+  public func perform() async throws -> some IntentResult {
+    print("[DEBUG] Siri: PlayArtistIntent.perform (artist: \(artistName))")
     let results = await SearchManager.shared.search(query: artistName, filter: .artists)
     
     await MainActor.run {
@@ -175,15 +200,18 @@ struct PlayArtistIntent: AudioPlaybackIntent {
 }
 
 @available(iOS 17.0, macOS 14.0, *)
-struct PlaySpecificPlaylistIntent: AudioPlaybackIntent {
-  static var title: LocalizedStringResource = "Play Playlist"
-  static var description = IntentDescription("Plays a specific playlist in Ampwave.")
-  static var openAppWhenRun: Bool = true
+public struct PlaySpecificPlaylistIntent: AudioPlaybackIntent {
+  public static var title: LocalizedStringResource = "Play Playlist"
+  public static var description = IntentDescription("Plays a specific playlist in Ampwave.")
+  public static var openAppWhenRun: Bool = true
 
   @Parameter(title: "Playlist Name")
-  var playlistName: String
+  public var playlistName: String
 
-  func perform() async throws -> some IntentResult {
+  public init() {}
+
+  public func perform() async throws -> some IntentResult {
+    print("[DEBUG] Siri: PlaySpecificPlaylistIntent.perform (playlist: \(playlistName))")
     let results = await SearchManager.shared.search(query: playlistName, filter: .playlists)
     
     await MainActor.run {
@@ -196,15 +224,18 @@ struct PlaySpecificPlaylistIntent: AudioPlaybackIntent {
 }
 
 @available(iOS 17.0, macOS 14.0, *)
-struct AddToPlaylistIntent: AppIntent {
-  static var title: LocalizedStringResource = "Add to Playlist"
-  static var description = IntentDescription("Adds the currently playing song to a playlist.")
-  static var openAppWhenRun: Bool = true
+public struct AddToPlaylistIntent: AppIntent {
+  public static var title: LocalizedStringResource = "Add to Playlist"
+  public static var description = IntentDescription("Adds the currently playing song to a playlist.")
+  public static var openAppWhenRun: Bool = true
 
   @Parameter(title: "Playlist Name")
-  var playlistName: String
+  public var playlistName: String
 
-  func perform() async throws -> some IntentResult {
+  public init() {}
+
+  public func perform() async throws -> some IntentResult {
+    print("[DEBUG] Siri: AddToPlaylistIntent.perform (playlist: \(playlistName))")
     let results = await SearchManager.shared.search(query: playlistName, filter: .playlists)
     
     await MainActor.run {
