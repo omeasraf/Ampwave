@@ -293,7 +293,7 @@ struct LibraryView: View {
         case .albums:
           AlbumsGridView()
         case .artists:
-          ArtistsListView()
+          ArtistsGridView()
         case .genres:
           GenresGridView()
         }
@@ -428,9 +428,9 @@ struct AlbumsGridView: View {
   }
 }
 
-// MARK: - Artists List View
+// MARK: - Artists Grid View
 
-struct ArtistsListView: View {
+struct ArtistsGridView: View {
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
@@ -467,49 +467,38 @@ struct ArtistsListView: View {
     }
   }
 
+  let columns = [
+    GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)
+  ]
+
   var body: some View {
-    List {
-      ForEach(filteredArtists) { artist in
-        NavigationLink(destination: ArtistView(artist: artist)) {
-          HStack(spacing: 12) {
-            ArtistImageView(
-              artworkPath: artist.artworkPath,
-              size: 50
-            )
-
-            VStack(alignment: .leading, spacing: 2) {
-              Text(artist.name)
-                .font(.system(size: 16, weight: .medium))
-
-              Text(
-                "\(artist.songCount) song\(artist.songCount == 1 ? "" : "s")"
-              )
-              .font(.system(size: 13))
-              .foregroundStyle(.secondary)
-            }
-          }
-        }
-        .listRowBackground(themeManager.backgroundColor)
-      }
-    }
-    .listStyle(.plain)
-    .scrollContentBackground(.hidden)
-    .background(themeManager.backgroundColor)
-    .overlay {
+    ScrollView {
       if artists.isEmpty {
         ContentUnavailableView(
           "No Artists",
           systemImage: "person.2",
           description: Text("Import songs to see artists")
         )
+        .padding(.top, 100)
       } else if filteredArtists.isEmpty {
         ContentUnavailableView(
           "No Results",
           systemImage: "magnifyingglass",
           description: Text("No artists match your search")
         )
+        .padding(.top, 100)
+      } else {
+        LazyVGrid(columns: columns, spacing: 18) {
+          ForEach(filteredArtists) { artist in
+            ArtistCard(artist: artist)
+          }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 24)
       }
     }
+    .background(themeManager.backgroundColor)
     .task {
       await loadArtists()
     }

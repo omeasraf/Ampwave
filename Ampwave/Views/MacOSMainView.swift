@@ -261,7 +261,7 @@ struct DetailView: View {
         case .search:
           SearchView()
         case .artists:
-          ArtistsListView()
+          ArtistsGridView()
             .navigationTitle("Artists")
             .toolbar {
               LibrarySortMenu(selectedTab: .artists, appSettings: appSettings)

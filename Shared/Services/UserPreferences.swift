@@ -463,7 +463,7 @@ final class UserPreferences: Identifiable {
       RecommendationSource.similarArtists.rawValue,
     ]
     self.selectedThemeRaw = AppTheme.ampwave.rawValue
-    self.fullArtworkBackground = false
+    self.fullArtworkBackground = true
     self.showFullArtworkGradient = true
     self.miniPlayerFloating = false
     self.isPremiumUser = true
@@ -485,7 +485,7 @@ final class UserPreferences: Identifiable {
         if existing.selectedThemeRaw == nil {
           existing.selectedThemeRaw = AppTheme.ampwave.rawValue
         }
-        if existing.fullArtworkBackground == nil { existing.fullArtworkBackground = false }
+        if existing.fullArtworkBackground == nil { existing.fullArtworkBackground = true }
         if existing.showFullArtworkGradient == nil { existing.showFullArtworkGradient = true }
         if existing.miniPlayerFloating == nil { existing.miniPlayerFloating = false }
         if existing.isPremiumUser == nil { existing.isPremiumUser = true }

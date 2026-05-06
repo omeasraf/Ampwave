@@ -8,6 +8,7 @@
 internal import SwiftUI
 
 struct AlbumCard: View {
+  @Environment(ThemeManager.self) private var themeManager
   let album: Album
 
   @State private var isEditingShown = false
@@ -47,7 +48,7 @@ struct AlbumCard: View {
       .frame(width: 184, alignment: .leading)
       .background(
         RoundedRectangle(cornerRadius: 22, style: .continuous)
-          .fill(.ultraThinMaterial)
+          .fill(cardBackground)
           .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
               .stroke(.white.opacity(0.06), lineWidth: 1)
@@ -64,6 +65,17 @@ struct AlbumCard: View {
     .sheet(isPresented: $isEditingShown) {
       AlbumEditSheet(album: album, isPresented: $isEditingShown)
     }
+  }
+
+  private var cardBackground: some ShapeStyle {
+    LinearGradient(
+      colors: [
+        themeManager.cardBackgroundColor.opacity(0.94),
+        themeManager.backgroundColor.opacity(0.82),
+      ],
+      startPoint: .topLeading,
+      endPoint: .bottomTrailing
+    )
   }
 
   private var albumAccessibilityLabel: String {
