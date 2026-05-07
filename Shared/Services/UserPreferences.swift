@@ -278,7 +278,8 @@ final class UserPreferences: Identifiable {
 
   var autoFetchMetadata: Bool
   var autoFetchLyrics: Bool
-  var wordSyncedLyricsEnabled: Bool
+  var wordSyncedLyricsEnabled: Bool = false
+  var copyMusicToStorage: Bool = true
   var preferOnlineArtwork: Bool
   var organizeByAlbum: Bool
 
@@ -453,7 +454,8 @@ final class UserPreferences: Identifiable {
     self.artworkQualityRaw = ArtworkQuality.high.rawValue
     self.autoFetchMetadata = true
     self.autoFetchLyrics = true
-    self.wordSyncedLyricsEnabled = true
+    self.wordSyncedLyricsEnabled = false
+    self.copyMusicToStorage = true
     self.preferOnlineArtwork = true
     self.organizeByAlbum = true
     self.isOfflineMode = false
@@ -490,7 +492,8 @@ final class UserPreferences: Identifiable {
         if existing.fullArtworkBackground == nil { existing.fullArtworkBackground = true }
         if existing.showFullArtworkGradient == nil { existing.showFullArtworkGradient = true }
         if existing.miniPlayerFloating == nil { existing.miniPlayerFloating = false }
-        if existing.wordSyncedLyricsEnabled == nil { existing.wordSyncedLyricsEnabled = true }
+        if existing.wordSyncedLyricsEnabled == nil { existing.wordSyncedLyricsEnabled = false }
+        if existing.copyMusicToStorage == nil { existing.copyMusicToStorage = true }
         if existing.isPremiumUser == nil { existing.isPremiumUser = true }
         if existing.customColorSchemeRaw == nil { existing.customColorSchemeRaw = "dark" }
 

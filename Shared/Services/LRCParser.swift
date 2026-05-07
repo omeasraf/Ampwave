@@ -77,7 +77,7 @@ enum LRCParser {
       if wordOffsets.isEmpty {
         text = rawLineContent.trimmingCharacters(in: .whitespaces)
       } else {
-        // Reconstruct text from word offsets for consistency if needed, 
+        // Reconstruct text from word offsets for consistency if needed,
         // but often the rawLineContent without tags is better.
         // Let's just strip the tags for the 'text' property.
         text = rawLineContent.replacingOccurrences(

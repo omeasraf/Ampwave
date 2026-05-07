@@ -48,6 +48,19 @@ struct OpenPlayerView: View {
           VStack(spacing: 0) {
             if userPreferences?.fullArtworkBackground ?? true {
               FullArtworkBackgroundView(artworkPath: playback.currentItem?.artworkPath)
+                .frame(height: 500)
+                .overlay {
+                  LinearGradient(
+                    stops: [
+                      .init(color: .clear, location: 0),
+                      .init(color: .clear, location: 0.6),
+                      .init(color: themeManager.backgroundColor.opacity(0.8), location: 0.85),
+                      .init(color: themeManager.backgroundColor, location: 1.0),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                  )
+                }
             } else {
               LargeFixedArtworkView(
                 artworkPath: playback.currentItem?.artworkPath

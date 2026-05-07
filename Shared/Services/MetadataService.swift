@@ -124,7 +124,8 @@ final class MetadataService {
       duration: recording.length.map { TimeInterval($0) / 1000.0 },
       musicBrainzId: recording.id,
       artworkURL: nil,
-      songDescription: song.songDescription
+      songDescription: song.songDescription,
+      albumArtist: nil  // Recording release ref doesn't have artist credit, will fetch via release if needed
     )
 
     // Fetch artwork if we have a release
@@ -135,12 +136,17 @@ final class MetadataService {
 
     // Fallback: If no artwork found via recording, but we have an album title, search for the release specifically
     if metadata.artworkURL == nil, let albumTitle = metadata.album {
-      print("[DEBUG] MetadataService.fetchMetadata: No artwork found via recording, searching release for \(albumTitle)")
+      print(
+        "[DEBUG] MetadataService.fetchMetadata: No artwork found via recording, searching release for \(albumTitle)"
+      )
       let searchArtist = metadata.artist ?? song.artist
       if let release = await searchRelease(albumTitle: albumTitle, artist: searchArtist) {
         metadata.artworkURL = await fetchArtworkURL(forRelease: release.id)
         if metadata.year == nil || metadata.year == 0 {
           metadata.year = parseReleaseDate(release.date)
+        }
+        if metadata.albumArtist == nil {
+          metadata.albumArtist = release.artistCredit?.first?.name
         }
       }
     }
@@ -300,7 +306,7 @@ final class MetadataService {
     // Escape double quotes for Lucene query
     let title = song.title.replacingOccurrences(of: "\"", with: "\\\"")
     let artist = song.artist.replacingOccurrences(of: "\"", with: "\\\"")
-    
+
     // Primary query: strict recording + artist
     let query = "recording:\"\(title)\" AND artist:\"\(artist)\""
 
@@ -317,7 +323,9 @@ final class MetadataService {
     if let data = await performRequest(url: url) {
       do {
         let response = try JSONDecoder().decode(MusicBrainzRecordingSearchResponse.self, from: data)
-        if let match = bestRecordingMatch(for: song, in: response.recordings ?? []), !response.recordings!.isEmpty {
+        if let match = bestRecordingMatch(for: song, in: response.recordings ?? []),
+          !response.recordings!.isEmpty
+        {
           return match
         }
       } catch {
@@ -334,9 +342,10 @@ final class MetadataService {
       URLQueryItem(name: "fmt", value: "json"),
       URLQueryItem(name: "limit", value: "5"),
     ]
-    
+
     if let fallbackUrl = fallbackComponents?.url,
-       let data = await performRequest(url: fallbackUrl) {
+      let data = await performRequest(url: fallbackUrl)
+    {
       do {
         let response = try JSONDecoder().decode(MusicBrainzRecordingSearchResponse.self, from: data)
         return bestRecordingMatch(for: song, in: response.recordings ?? [])
@@ -361,12 +370,12 @@ final class MetadataService {
     ]
 
     guard let url = components?.url else { return nil }
-    
+
     if let data = await performRequest(url: url) {
       do {
         let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
         if let match = response.releases?.first {
-           return match
+          return match
         }
       } catch {}
     }
@@ -379,9 +388,10 @@ final class MetadataService {
       URLQueryItem(name: "fmt", value: "json"),
       URLQueryItem(name: "limit", value: "5"),
     ]
-    
+
     if let fallbackUrl = fallbackComponents?.url,
-       let data = await performRequest(url: fallbackUrl) {
+      let data = await performRequest(url: fallbackUrl)
+    {
       do {
         let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
         return response.releases?.first
@@ -470,8 +480,10 @@ final class MetadataService {
     if let data = await performRequest(url: url) {
       do {
         // If data starts with '<', it's likely HTML/XML (e.g. error page)
-        if let firstByte = data.first, firstByte == 60 { // '<' character
-          print("[DEBUG] MetadataService.fetchArtworkURL: Received non-JSON response for release \(releaseId)")
+        if let firstByte = data.first, firstByte == 60 {  // '<' character
+          print(
+            "[DEBUG] MetadataService.fetchArtworkURL: Received non-JSON response for release \(releaseId)"
+          )
           return nil
         }
 
@@ -480,13 +492,14 @@ final class MetadataService {
         // Prefer a reasonably sized front cover thumbnail before falling back to originals.
         let frontImages = response.images.filter { $0.types.contains("Front") }
         let bestImage = frontImages.max { $0.image.width ?? 0 < $1.image.width ?? 0 }
-        
-        let artworkURL = bestImage?.thumbnails.thumb500
+
+        let artworkURL =
+          bestImage?.thumbnails.thumb500
           ?? bestImage?.thumbnails.large
           ?? bestImage?.image.url
           ?? response.images.first?.thumbnails.thumb500
           ?? response.images.first?.image.url
-          
+
         return artworkURL.flatMap { forceHTTPS($0) }
       } catch {
         print("Failed to decode artwork JSON: \(error)")
@@ -502,7 +515,7 @@ final class MetadataService {
   func downloadArtwork(from url: URL) async -> String? {
     let secureURL = forceHTTPS(url)
     print("[DEBUG] MetadataService.downloadArtwork: Downloading from \(secureURL.absoluteString)")
-    
+
     do {
       // Use performRequest for consistent User-Agent and retry logic
       if let data = await performRequest(url: secureURL) {
@@ -728,6 +741,23 @@ final class MetadataService {
     guard !cleaned.isEmpty else { return nil }
 
     let normalized = cleaned.lowercased()
+
+    // Blacklist common non-genre MusicBrainz tags
+    let blacklist: Set<String> = [
+      "favorite", "seen live", "good", "best", "awesome", "classic", "beautiful",
+      "amazing", "great", "love", "chill", "relax", "mellow", "fast", "slow",
+      "instrumental", "vocal", "female vocalists", "male vocalists", "canadian",
+      "british", "american", "japanese", "german", "french", "swedish", "under 2000 listeners",
+      "top", "playlist", "spotify", "apple music", "itunes", "2010s", "2020s", "90s", "80s", "70s",
+      "60s",
+      "remix", "cover", "bootleg", "live", "recording", "studio", "independent", "indie",
+      "heard on pandora", "heard on xm", "heard on radio", "heard on tv", "soundtrack",
+    ]
+
+    if blacklist.contains(normalized) {
+      return nil
+    }
+
     let mapped: String
     switch normalized {
     case "hip hop", "hip-hop", "rap":
@@ -738,6 +768,12 @@ final class MetadataService {
       mapped = "Alternative"
     case "electronica":
       mapped = "Electronic"
+    case "j pop", "j-pop":
+      mapped = "J-Pop"
+    case "k pop", "k-pop":
+      mapped = "K-Pop"
+    case "heavy metal", "death metal", "black metal", "thrash metal":
+      mapped = "Metal"
     default:
       mapped =
         cleaned

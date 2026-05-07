@@ -83,20 +83,20 @@ public struct ResumePlaybackIntent: AudioPlaybackIntent {
 public struct ControlPlaybackIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Control Playback"
   public static var description = IntentDescription("Controls music playback in Ampwave.")
-  
+
   @Parameter(title: "Action")
   public var action: PlaybackAction
-  
+
   public enum PlaybackAction: String, AppEnum {
     case play, pause, toggle, next, previous
-    
+
     public static var typeDisplayRepresentation: TypeDisplayRepresentation = "Playback Action"
     public static var caseDisplayRepresentations: [PlaybackAction: DisplayRepresentation] = [
       .play: "Play",
       .pause: "Pause",
       .toggle: "Toggle Play/Pause",
       .next: "Next Track",
-      .previous: "Previous Track"
+      .previous: "Previous Track",
     ]
   }
 
@@ -121,7 +121,8 @@ public struct ControlPlaybackIntent: AudioPlaybackIntent {
 @available(iOS 17.0, macOS 14.0, *)
 public struct LikeCurrentSongIntent: AppIntent {
   public static var title: LocalizedStringResource = "Like This Song"
-  public static var description = IntentDescription("Likes or unlikes the currently playing song in Ampwave.")
+  public static var description = IntentDescription(
+    "Likes or unlikes the currently playing song in Ampwave.")
 
   public init() {}
 
@@ -139,7 +140,8 @@ public struct LikeCurrentSongIntent: AppIntent {
 @available(iOS 17.0, macOS 14.0, *)
 public struct PlayMusicIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Play Music"
-  public static var description = IntentDescription("Plays music in Ampwave based on a search query.")
+  public static var description = IntentDescription(
+    "Plays music in Ampwave based on a search query.")
   public static var openAppWhenRun: Bool = true
 
   @Parameter(title: "Query", description: "The song, artist, album, or playlist to play")
@@ -150,10 +152,10 @@ public struct PlayMusicIntent: AudioPlaybackIntent {
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: PlayMusicIntent.perform (query: \(query))")
     let results = await SearchManager.shared.search(query: query, filter: .all)
-    
+
     await MainActor.run {
       let playback = PlaybackController.shared
-      
+
       if let song = results.topSong {
         print("[DEBUG] Siri: Playing song \(song.title)")
         playback.play(song, from: .library)
@@ -170,7 +172,7 @@ public struct PlayMusicIntent: AudioPlaybackIntent {
         print("[DEBUG] Siri: No results found for query")
       }
     }
-    
+
     return .result()
   }
 }
@@ -189,7 +191,7 @@ public struct PlayArtistIntent: AudioPlaybackIntent {
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: PlayArtistIntent.perform (artist: \(artistName))")
     let results = await SearchManager.shared.search(query: artistName, filter: .artists)
-    
+
     await MainActor.run {
       if let artist = results.artists.first {
         PlaybackController.shared.playArtist(artist.name)
@@ -213,7 +215,7 @@ public struct PlaySpecificPlaylistIntent: AudioPlaybackIntent {
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: PlaySpecificPlaylistIntent.perform (playlist: \(playlistName))")
     let results = await SearchManager.shared.search(query: playlistName, filter: .playlists)
-    
+
     await MainActor.run {
       if let playlist = results.playlists.first {
         PlaybackController.shared.playPlaylist(playlist)
@@ -226,7 +228,8 @@ public struct PlaySpecificPlaylistIntent: AudioPlaybackIntent {
 @available(iOS 17.0, macOS 14.0, *)
 public struct AddToPlaylistIntent: AppIntent {
   public static var title: LocalizedStringResource = "Add to Playlist"
-  public static var description = IntentDescription("Adds the currently playing song to a playlist.")
+  public static var description = IntentDescription(
+    "Adds the currently playing song to a playlist.")
   public static var openAppWhenRun: Bool = true
 
   @Parameter(title: "Playlist Name")
@@ -237,10 +240,11 @@ public struct AddToPlaylistIntent: AppIntent {
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: AddToPlaylistIntent.perform (playlist: \(playlistName))")
     let results = await SearchManager.shared.search(query: playlistName, filter: .playlists)
-    
+
     await MainActor.run {
       if let playlist = results.playlists.first,
-         let song = PlaybackController.shared.currentItem {
+        let song = PlaybackController.shared.currentItem
+      {
         PlaylistManager.shared.addSong(song, to: playlist)
       }
     }
@@ -275,7 +279,7 @@ struct AmpwaveShortcuts: AppShortcutsProvider {
       phrases: [
         "Play music in \(.applicationName)",
         "Play in \(.applicationName)",
-        "Search and play in \(.applicationName)"
+        "Search and play in \(.applicationName)",
       ],
       shortTitle: "Play Music",
       systemImageName: "magnifyingglass"
@@ -284,7 +288,7 @@ struct AmpwaveShortcuts: AppShortcutsProvider {
       intent: PlayArtistIntent(),
       phrases: [
         "Play an artist in \(.applicationName)",
-        "Start artist music in \(.applicationName)"
+        "Start artist music in \(.applicationName)",
       ],
       shortTitle: "Play Artist",
       systemImageName: "music.mic"
@@ -293,7 +297,7 @@ struct AmpwaveShortcuts: AppShortcutsProvider {
       intent: PlaySpecificPlaylistIntent(),
       phrases: [
         "Play a playlist in \(.applicationName)",
-        "Start playlist in \(.applicationName)"
+        "Start playlist in \(.applicationName)",
       ],
       shortTitle: "Play Playlist",
       systemImageName: "music.note.list"
@@ -302,7 +306,7 @@ struct AmpwaveShortcuts: AppShortcutsProvider {
       intent: LikeCurrentSongIntent(),
       phrases: [
         "Like this song in \(.applicationName)",
-        "Favorite this song in \(.applicationName)"
+        "Favorite this song in \(.applicationName)",
       ],
       shortTitle: "Like Song",
       systemImageName: "heart"
@@ -311,7 +315,7 @@ struct AmpwaveShortcuts: AppShortcutsProvider {
       intent: AddToPlaylistIntent(),
       phrases: [
         "Add this to a playlist in \(.applicationName)",
-        "Add this song to my playlist in \(.applicationName)"
+        "Add this song to my playlist in \(.applicationName)",
       ],
       shortTitle: "Add to Playlist",
       systemImageName: "plus.circle"

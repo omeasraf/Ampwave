@@ -11,12 +11,24 @@ import SwiftData
 
 @Model
 final class LibrarySong: Identifiable, Hashable {
+  enum StorageMode: String, Codable {
+    case copied
+    case referenced
+  }
+
   // MARK: - Required (identity & storage)
   @Attribute(.unique) var id: UUID
   var fileName: String
   var fileHash: String
   var importedDate: Date
   var size: Int
+  var storageModeRaw: String = "copied"
+  var bookmarkData: Data?
+
+  var storageMode: StorageMode {
+    get { StorageMode(rawValue: storageModeRaw) ?? .copied }
+    set { storageModeRaw = newValue.rawValue }
+  }
 
   // MARK: - Core display
   var title: String
@@ -52,6 +64,9 @@ final class LibrarySong: Identifiable, Hashable {
   var mode: String?
   var processingChain: String?
 
+  // MARK: - Search Indexing
+  var searchIndex: String? = ""
+
   // MARK: - Fetching status
   var metadataCheckAttempted: Bool = false
   var lyricsCheckAttempted: Bool = false
@@ -86,7 +101,9 @@ final class LibrarySong: Identifiable, Hashable {
     output: String? = nil,
     mode: String? = nil,
     processingChain: String? = nil,
-    shouldSyncToWatch: Bool = false
+    shouldSyncToWatch: Bool = false,
+    storageMode: StorageMode = .copied,
+    bookmarkData: Data? = nil
   ) {
     self.id = UUID()
     self.title = title
@@ -120,6 +137,8 @@ final class LibrarySong: Identifiable, Hashable {
     self.metadataCheckAttempted = false
     self.lyricsCheckAttempted = false
     self.shouldSyncToWatch = shouldSyncToWatch
+    self.storageModeRaw = storageMode.rawValue
+    self.bookmarkData = bookmarkData
   }
 
   static func == (lhs: LibrarySong, rhs: LibrarySong) -> Bool {
@@ -128,5 +147,43 @@ final class LibrarySong: Identifiable, Hashable {
 
   func hash(into hasher: inout Hasher) {
     hasher.combine(id)
+  }
+
+  // MARK: - Search Indexing
+
+  func updateSearchIndex() {
+    let components = [
+      title,
+      artist,
+      album ?? "",
+      albumArtist ?? "",
+      genre ?? "",
+      cleanLyrics(),
+    ]
+
+    self.searchIndex =
+      components
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+  }
+
+  private func cleanLyrics() -> String {
+    guard let lyrics = lyrics, !lyrics.isEmpty else { return "" }
+
+    // Remove LRC timestamps like [00:12.34]
+    let timestampPattern = #"\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]"#
+    let cleaned = lyrics.replacingOccurrences(
+      of: timestampPattern,
+      with: "",
+      options: .regularExpression
+    )
+
+    // Limit indexing to first 1000 characters to keep searchIndex size manageable
+    return String(cleaned.prefix(1000))
   }
 }

@@ -5,9 +5,9 @@
 //  Main app entry point for Ampwave music player.
 //
 
+import AppIntents
 import SwiftData
 internal import SwiftUI
-import AppIntents
 
 /// Applies tint and color scheme from `ThemeManager` in the environment (observation-safe; avoids @State + singleton issues).
 private struct AppThemeChrome: ViewModifier {

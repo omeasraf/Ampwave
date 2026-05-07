@@ -272,12 +272,22 @@ private struct SearchLibraryIndex {
 
     init(song: LibrarySong) {
       self.song = song
-      self.normalizedTitle = SearchFuzzyEngine.normalize(song.title)
-      self.normalizedArtist = SearchFuzzyEngine.normalize(song.artist)
-      self.normalizedAlbum = SearchFuzzyEngine.normalize(song.album ?? "")
-      self.normalizedGenre = SearchFuzzyEngine.normalize(song.genre ?? "")
-      // Using song.lyrics if already in memory
-      self.normalizedLyrics = SearchFuzzyEngine.normalize(song.lyrics ?? "")
+
+      // Use pre-calculated search index if available, otherwise fallback to live normalization
+      if let index = song.searchIndex, !index.isEmpty {
+        // We still need individual fields for weighted scoring
+        self.normalizedTitle = SearchFuzzyEngine.normalize(song.title)
+        self.normalizedArtist = SearchFuzzyEngine.normalize(song.artist)
+        self.normalizedAlbum = SearchFuzzyEngine.normalize(song.album ?? "")
+        self.normalizedGenre = SearchFuzzyEngine.normalize(song.genre ?? "")
+        self.normalizedLyrics = index  // The index already contains normalized lyrics and metadata
+      } else {
+        self.normalizedTitle = SearchFuzzyEngine.normalize(song.title)
+        self.normalizedArtist = SearchFuzzyEngine.normalize(song.artist)
+        self.normalizedAlbum = SearchFuzzyEngine.normalize(song.album ?? "")
+        self.normalizedGenre = SearchFuzzyEngine.normalize(song.genre ?? "")
+        self.normalizedLyrics = SearchFuzzyEngine.normalize(song.lyrics ?? "")
+      }
 
       self.titleTokens = SearchFuzzyEngine.tokens(from: normalizedTitle)
       self.artistTokens = SearchFuzzyEngine.tokens(from: normalizedArtist)

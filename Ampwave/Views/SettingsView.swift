@@ -222,14 +222,14 @@ struct SettingsView: View {
             set: { preferences.fullArtworkBackground = $0 }
           ))
 
-        if preferences.fullArtworkBackground ?? false {
-          Toggle(
-            "Show Background Gradient",
-            isOn: Binding(
-              get: { preferences.showFullArtworkGradient ?? false },
-              set: { preferences.showFullArtworkGradient = $0 }
-            ))
-        }
+        //        if preferences.fullArtworkBackground ?? false {
+        //          Toggle(
+        //            "Show Background Gradient",
+        //            isOn: Binding(
+        //              get: { preferences.showFullArtworkGradient ?? false },
+        //              set: { preferences.showFullArtworkGradient = $0 }
+        //            ))
+        //        }
 
         //        Toggle("Mini Player Floating", isOn: Binding(
         //          get: { preferences.miniPlayerFloating ?? false },
@@ -276,6 +276,20 @@ struct SettingsView: View {
               .foregroundStyle(.secondary)
           }
         }
+      } else if case .fetchingMetadata(let current, let total) = library.indexingStatus {
+        VStack(alignment: .leading, spacing: 8) {
+          HStack {
+            ProgressView()
+              .scaleEffect(0.8)
+            if total > 1 {
+              Text("Fetching metadata (\(current + 1)/\(total))…")
+                .foregroundStyle(.secondary)
+            } else {
+              Text("Fetching metadata…")
+                .foregroundStyle(.secondary)
+            }
+          }
+        }
       } else if isImporting {
         VStack(alignment: .leading, spacing: 8) {
           HStack {
@@ -295,9 +309,15 @@ struct SettingsView: View {
     } header: {
       Text("Import")
     } footer: {
-      Text(
-        "Import audio files (MP3, FLAC, WAV, etc.) to your library. Files are copied to the app's storage."
-      )
+      if userPreferences?.copyMusicToStorage ?? true {
+        Text(
+          "Import audio files (MP3, FLAC, WAV, etc.) to your library. Files are copied to the app's storage."
+        )
+      } else {
+        Text(
+          "Import audio files to your library. Files stay in their original location, and the app stores references to them."
+        )
+      }
     }
   }
 
@@ -447,6 +467,14 @@ struct SettingsView: View {
           isOn: Binding(
             get: { preferences.wordSyncedLyricsEnabled },
             set: { preferences.wordSyncedLyricsEnabled = $0 }
+          )
+        )
+
+        Toggle(
+          "Copy Imported Music",
+          isOn: Binding(
+            get: { preferences.copyMusicToStorage },
+            set: { preferences.copyMusicToStorage = $0 }
           )
         )
       }

@@ -39,10 +39,16 @@ struct HomeView: View {
 
   private var indexingMessage: String? {
     switch library.indexingStatus {
+    case .indexing(let message):
+      return message
+    case .fetchingMetadata(let current, let total):
+      if total > 1 {
+        return "Fetching metadata (\(current + 1)/\(total))…"
+      } else {
+        return "Fetching metadata…"
+      }
     case .complete, .idle:
       return nil
-    @unknown default:
-      return "Loading your library..."
     }
   }
 
@@ -858,11 +864,10 @@ struct GenreSongsView: View {
   private func songMatchesGenre(_ song: LibrarySong) -> Bool {
     guard let g = song.genre, !g.isEmpty else { return false }
     let needle = genre.lowercased()
-    let parts = g.split(separator: "/").map {
-      $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-    if parts.contains(needle) { return true }
-    return g.lowercased().contains(needle)
+    let parts = g.components(separatedBy: CharacterSet(charactersIn: "/;,"))
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+    return parts.contains(needle) || g.lowercased().contains(needle)
   }
 
   var body: some View {

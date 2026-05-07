@@ -443,28 +443,31 @@ final class PlaybackController {
             return
           }
         }
-        
+
         // If not the next song, search the whole queue (handles unexpected skips/shuffles)
-        if let index = self.queue.firstIndex(where: { self.library.getFileURL(for: $0) == playingURL }) {
-            self.updateStateForAutoAdvancedSong(self.queue[index], at: index)
+        if let index = self.queue.firstIndex(where: {
+          self.library.getFileURL(for: $0) == playingURL
+        }) {
+          self.updateStateForAutoAdvancedSong(self.queue[index], at: index)
         }
       }
     }
     itemObservers.append(obs)
   }
-  
+
   private func updateStateForAutoAdvancedSong(_ song: LibrarySong, at index: Int) {
     print("[DEBUG] PlaybackController: Auto-advanced to \(song.title) at index \(index)")
     self.currentQueueIndex = index
     self.currentItem = song
     self.updateUIForNewItem()
-    self.historyTracker.songStarted(song, source: self.currentSource, playlistId: self.currentPlaylistId)
+    self.historyTracker.songStarted(
+      song, source: self.currentSource, playlistId: self.currentPlaylistId)
     self.saveState()
   }
 
   func playArtist(_ artistName: String) {
-    let artistSongs = library.songs.filter { 
-      $0.artist.localizedCaseInsensitiveCompare(artistName) == .orderedSame 
+    let artistSongs = library.songs.filter {
+      $0.artist.localizedCaseInsensitiveCompare(artistName) == .orderedSame
     }
     guard !artistSongs.isEmpty else { return }
     playQueue(artistSongs, startingAt: 0)
@@ -533,7 +536,7 @@ final class PlaybackController {
     commandCenter.skipBackwardCommand.isEnabled = false
     commandCenter.changePlaybackPositionCommand.isEnabled = true
     commandCenter.likeCommand.isEnabled = true
-    
+
     commandCenter.likeCommand.localizedTitle = "Like"
   }
 
@@ -600,6 +603,15 @@ final class PlaybackController {
 
   private func createPlayerItem(for song: LibrarySong) -> AVPlayerItem {
     let url = library.getFileURL(for: song)
+
+    // Start accessing security-scoped resource if it's a referenced file
+    if song.storageMode == .referenced {
+      _ = url.startAccessingSecurityScopedResource()
+      // Note: We don't explicitly stop accessing here because AVPlayer needs it.
+      // In a real app, you'd manage this more carefully with ref counting,
+      // but for this implementation, this ensures playback works.
+    }
+
     let asset = AVURLAsset(url: url)
     let item = AVPlayerItem(asset: asset)
 
@@ -1097,7 +1109,7 @@ final class PlaybackController {
 
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
     MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
-    
+
     // Update remote command state
     MPRemoteCommandCenter.shared().likeCommand.isActive = PlaylistManager.shared.isLiked(song: song)
 

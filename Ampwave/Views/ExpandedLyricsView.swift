@@ -48,6 +48,8 @@ struct ExpandedLyricsView: View {
                       line: line,
                       index: index,
                       isCurrent: isCurrentLine(index),
+                      nextLineTimestamp: index < lyrics.lines.count - 1
+                        ? lyrics.lines[index + 1].timestamp : nil,
                       playback: playback
                     )
                   }
@@ -432,31 +434,25 @@ struct LyricLineView: View {
   let line: LyricLine
   let index: Int
   let isCurrent: Bool
+  let nextLineTimestamp: TimeInterval?
   @Bindable var playback: PlaybackController
   @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     Group {
-      if isCurrent, themeManager.userPreferences?.wordSyncedLyricsEnabled ?? true,
-        let words = line.wordOffsets,
-        !words.isEmpty
-      {
-        WordByWordLyricView(
-          words: words,
-          currentTime: playback.currentTime,
-          isCurrent: true
-        )
+      if isCurrent, themeManager.userPreferences?.wordSyncedLyricsEnabled ?? true {
+        let words = line.wordOffsets ?? generateWordOffsets()
+        if !words.isEmpty {
+          WordByWordLyricView(
+            words: words,
+            currentTime: playback.currentTime,
+            isCurrent: true
+          )
+        } else {
+          plainLineText
+        }
       } else {
-        Text(line.text)
-          .font(
-            .system(
-              size: 24,
-              weight: isCurrent ? .bold : .semibold
-            )
-          )
-          .foregroundStyle(
-            isCurrent ? .white : .white.opacity(0.35)
-          )
+        plainLineText
       }
     }
     .multilineTextAlignment(.center)
@@ -485,6 +481,42 @@ struct LyricLineView: View {
       value: playback.currentLyricIndex
     )
   }
+
+  private var plainLineText: some View {
+    Text(line.text)
+      .font(
+        .system(
+          size: 24,
+          weight: isCurrent ? .bold : .semibold
+        )
+      )
+      .foregroundStyle(
+        isCurrent ? .white : .white.opacity(0.35)
+      )
+  }
+
+  private func generateWordOffsets() -> [WordOffset] {
+    let rawWords = line.text.components(separatedBy: .whitespaces)
+      .filter { !$0.isEmpty }
+    guard !rawWords.isEmpty else { return [] }
+
+    let duration: TimeInterval
+    if let next = nextLineTimestamp {
+      duration = max(0.5, next - line.timestamp)
+    } else if let total = playback.currentItem?.duration, total > line.timestamp {
+      duration = max(0.5, total - line.timestamp)
+    } else {
+      duration = 3.0  // Fallback
+    }
+
+    let wordDuration = duration / Double(rawWords.count)
+    return rawWords.enumerated().map { i, word in
+      WordOffset(
+        timestamp: line.timestamp + (Double(i) * wordDuration),
+        text: word + (i < rawWords.count - 1 ? " " : "")
+      )
+    }
+  }
 }
 
 struct WordByWordLyricView: View {
@@ -493,16 +525,67 @@ struct WordByWordLyricView: View {
   let isCurrent: Bool
 
   var body: some View {
-    // Flowing layout for words
-    // We use a simple wrap-around approach by joining Text views or using a custom layout
-    // For simplicity and best visual effect, we can use a Canvas or just multiple Text views in a container.
-    // SwiftUI's Text concatenation is great for this.
-    
-    words.reduce(Text("")) { (result, word) in
-      let isWordPassed = currentTime >= word.timestamp
-      return result + Text(word.text)
+    // We use a simpler but effective progressive highlight:
+    // We render the full text twice, one dim and one bright.
+    // The bright one is masked by a rectangle that moves according to time.
+
+    let fullText = words.map { $0.text }.joined()
+
+    ZStack(alignment: .leading) {
+      Text(fullText)
         .font(.system(size: 24, weight: .bold))
-        .foregroundStyle(isWordPassed ? .white : .white.opacity(0.35))
+        .foregroundStyle(.white.opacity(0.35))
+
+      Text(fullText)
+        .font(.system(size: 24, weight: .bold))
+        .foregroundStyle(.white)
+        .mask(
+          GeometryReader { geo in
+            HStack(spacing: 0) {
+              Rectangle()
+                .frame(width: calculateProgressWidth(totalWidth: geo.size.width))
+              Spacer(minLength: 0)
+            }
+          }
+        )
+    }
+  }
+
+  private func calculateProgressWidth(totalWidth: Double) -> Double {
+    guard !words.isEmpty else { return 0 }
+
+    // Find which word we are currently on
+    if let currentIndex = words.lastIndex(where: { currentTime >= $0.timestamp }) {
+      // Calculate progress through words
+      let wordProgress = Double(currentIndex + 1) / Double(words.count)
+
+      // If we are on the last word, we might want to animate its completion
+      // but without word-specific widths, we just use word-count progress.
+      // This is "progressive" enough for a generated timing.
+
+      // For a smoother look, we can interpolate between words
+      let nextTimestamp: TimeInterval
+      if currentIndex < words.count - 1 {
+        nextTimestamp = words[currentIndex + 1].timestamp
+      } else {
+        nextTimestamp = words[currentIndex].timestamp + 0.5
+      }
+
+      let duration = nextTimestamp - words[currentIndex].timestamp
+      let elapsed = currentTime - words[currentIndex].timestamp
+      let internalProgress = duration > 0 ? min(1.0, elapsed / duration) : 1.0
+
+      let totalProgress = (Double(currentIndex) + internalProgress) / Double(words.count)
+      return totalWidth * min(1.0, totalProgress)
+    } else {
+      // Before first word
+      guard let first = words.first else { return 0 }
+      let timeToFirst = first.timestamp - currentTime
+      if timeToFirst < 0.5 && timeToFirst > 0 {
+        // Optional: pre-roll animation
+        return 0
+      }
+      return 0
     }
   }
 }
