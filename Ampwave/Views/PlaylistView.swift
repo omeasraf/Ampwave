@@ -35,9 +35,9 @@ struct PlaylistView: View {
       .listRowBackground(Color.clear)
       .listRowInsets(EdgeInsets())
 
-      if !playlist.songs.isEmpty {
+      if !playlist.orderedSongs.isEmpty {
         Section {
-          ForEach(playlist.songs) { song in
+          ForEach(playlist.orderedSongs) { song in
             SongRow(
               song: song,
               isCurrent: playback.currentItem?.id == song.id
@@ -46,7 +46,7 @@ struct PlaylistView: View {
             .onTapGesture {
               playback.playPlaylist(
                 playlist,
-                startingAt: playlist.songs.firstIndex(where: {
+                startingAt: playlist.orderedSongs.firstIndex(where: {
                   $0.id == song.id
                 }) ?? 0
               )
@@ -91,7 +91,7 @@ struct PlaylistView: View {
             Label("Add Songs", systemImage: "plus")
           }
 
-          if !playlist.songs.isEmpty, let url = playlistJSONShareURL {
+          if !playlist.orderedSongs.isEmpty, let url = playlistJSONShareURL {
             ShareLink(
               item: url,
               subject: Text(playlist.name),
@@ -107,7 +107,7 @@ struct PlaylistView: View {
             }
           }
 
-          if !playlist.songs.isEmpty, let url = playlistM3UShareURL {
+          if !playlist.orderedSongs.isEmpty, let url = playlistM3UShareURL {
             ShareLink(
               item: url,
               subject: Text(playlist.name),
@@ -193,7 +193,7 @@ struct PlaylistView: View {
       Text("This action cannot be undone.")
     }
     .task(id: playlistExportStamp) {
-      guard !playlist.songs.isEmpty else {
+      guard !playlist.orderedSongs.isEmpty else {
         playlistJSONShareURL = nil
         playlistM3UShareURL = nil
         return
@@ -255,7 +255,7 @@ struct PlaylistView: View {
         }
       }
 
-      if !playlist.songs.isEmpty {
+      if !playlist.orderedSongs.isEmpty {
         HStack(spacing: 16) {
           Button {
             playback.playPlaylist(playlist)
@@ -275,7 +275,7 @@ struct PlaylistView: View {
           Button {
             playback.shuffleMode = .on
             let randomStartIndex = Int.random(
-              in: 0..<playlist.songs.count
+              in: 0..<playlist.orderedSongs.count
             )
             playback.playPlaylist(
               playlist,

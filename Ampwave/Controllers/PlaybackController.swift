@@ -700,7 +700,7 @@ final class PlaybackController {
 
   func playPlaylist(_ playlist: Playlist, startingAt index: Int = 0) {
     playQueue(
-      playlist.songs,
+      playlist.orderedSongs,
       startingAt: index,
       from: .playlist,
       playlistId: playlist.id

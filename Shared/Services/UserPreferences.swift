@@ -37,6 +37,12 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
   case catppuccinMacchiato
   case catppuccinMocha
   case dracula
+  case nordDark
+  case nordLight
+  case everforestDark
+  case everforestLight
+  case kanagawaWave
+  case kanagawaLotus
   case custom
 
   var id: String { rawValue }
@@ -60,6 +66,12 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     case .catppuccinMacchiato: return "Catppuccin Macchiato"
     case .catppuccinMocha: return "Catppuccin Mocha"
     case .dracula: return "Dracula"
+    case .nordDark: return "Nord Dark"
+    case .nordLight: return "Nord Light"
+    case .everforestDark: return "Everforest Dark"
+    case .everforestLight: return "Everforest Light"
+    case .kanagawaWave: return "Kanagawa Wave"
+    case .kanagawaLotus: return "Kanagawa Lotus"
     case .custom: return "Custom"
     }
   }
@@ -71,8 +83,8 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     let actualIsDark: Bool
     switch self {
     case .ampwave: actualIsDark = isDark
-    case .light, .catppuccinLatte, .roseGold: actualIsDark = false
-    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula:
+    case .light, .catppuccinLatte, .roseGold, .nordLight, .everforestLight: actualIsDark = false
+    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula, .nordDark, .everforestDark, .kanagawaWave, .kanagawaLotus:
       actualIsDark = true
     case .custom: actualIsDark = isDark
     }
@@ -139,6 +151,30 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
       bg = Color(red: 40 / 255.0, green: 42 / 255.0, blue: 54 / 255.0)
       accent = Color(red: 189 / 255.0, green: 147 / 255.0, blue: 249 / 255.0)
       card = Color(red: 68 / 255.0, green: 71 / 255.0, blue: 90 / 255.0)
+    case .nordDark:
+      bg = Color(hex: "#2E3440")
+      accent = Color(hex: "#88C0D0")
+      card = Color(hex: "#3B4252")
+    case .nordLight:
+      bg = Color(hex: "#ECEFF4")
+      accent = Color(hex: "#5E81AC")
+      card = Color(hex: "#E5E9F0")
+    case .everforestDark:
+      bg = Color(hex: "#2D353B")
+      accent = Color(hex: "#A7C080")
+      card = Color(hex: "#323C41")
+    case .everforestLight:
+      bg = Color(hex: "#F3EFDA")
+      accent = Color(hex: "#8DA101")
+      card = Color(hex: "#FDF6E3")
+    case .kanagawaWave:
+      bg = Color(hex: "#1F1F28")
+      accent = Color(hex: "#7E9CD8")
+      card = Color(hex: "#2A2A37")
+    case .kanagawaLotus:
+      bg = Color(hex: "#F2ECBC")
+      accent = Color(hex: "#C84053")
+      card = Color(hex: "#E4E0BE")
     case .custom:
       bg = customBackground ?? (actualIsDark ? .black : .white)
       accent = customAccent ?? Color.pink
@@ -346,6 +382,31 @@ final class UserPreferences: Identifiable {
   }
   @Attribute(originalName: "fullArtworkBackground") var _fullArtworkBackground: Bool?
 
+  var openPlayerGlassBackground: Bool? {
+    get {
+      _openPlayerGlassBackground
+        ?? UserDefaults.standard.bool(forKey: "com.ampwave.openPlayerGlassBackground")
+    }
+    set {
+      _openPlayerGlassBackground = newValue
+      UserDefaults.standard.set(newValue ?? true, forKey: "com.ampwave.openPlayerGlassBackground")
+      save()
+    }
+  }
+  @Attribute(originalName: "openPlayerGlassBackground") var _openPlayerGlassBackground: Bool?
+
+  var fullAppBackground: Bool? {
+    get {
+      _fullAppBackground ?? UserDefaults.standard.bool(forKey: "com.ampwave.fullAppBackground")
+    }
+    set {
+      _fullAppBackground = newValue
+      UserDefaults.standard.set(newValue ?? false, forKey: "com.ampwave.fullAppBackground")
+      save()
+    }
+  }
+  @Attribute(originalName: "fullAppBackground") var _fullAppBackground: Bool?
+
   var showFullArtworkGradient: Bool? {
     get {
       _showFullArtworkGradient
@@ -426,6 +487,10 @@ final class UserPreferences: Identifiable {
     UserDefaults.standard.set(
       fullArtworkBackground ?? false, forKey: "com.ampwave.fullArtworkBackground")
     UserDefaults.standard.set(
+      openPlayerGlassBackground ?? true, forKey: "com.ampwave.openPlayerGlassBackground")
+    UserDefaults.standard.set(
+      fullAppBackground ?? false, forKey: "com.ampwave.fullAppBackground")
+    UserDefaults.standard.set(
       showFullArtworkGradient ?? true, forKey: "com.ampwave.showFullArtworkGradient")
     UserDefaults.standard.set(miniPlayerFloating ?? false, forKey: "com.ampwave.miniPlayerFloating")
   }
@@ -468,6 +533,8 @@ final class UserPreferences: Identifiable {
     ]
     self.selectedThemeRaw = AppTheme.ampwave.rawValue
     self.fullArtworkBackground = true
+    self.openPlayerGlassBackground = true
+    self.fullAppBackground = false
     self.showFullArtworkGradient = true
     self.miniPlayerFloating = false
     self.isPremiumUser = true
@@ -490,6 +557,8 @@ final class UserPreferences: Identifiable {
           existing.selectedThemeRaw = AppTheme.ampwave.rawValue
         }
         if existing.fullArtworkBackground == nil { existing.fullArtworkBackground = true }
+        if existing.openPlayerGlassBackground == nil { existing.openPlayerGlassBackground = true }
+        if existing.fullAppBackground == nil { existing.fullAppBackground = false }
         if existing.showFullArtworkGradient == nil { existing.showFullArtworkGradient = true }
         if existing.miniPlayerFloating == nil { existing.miniPlayerFloating = false }
         if existing.wordSyncedLyricsEnabled == nil { existing.wordSyncedLyricsEnabled = false }
@@ -516,6 +585,8 @@ extension ThemeManager {
   var usesSystemAppearance: Bool { currentTheme == .ampwave }
 
   var fullArtworkBackground: Bool { userPreferences?.fullArtworkBackground ?? false }
+  var openPlayerGlassBackground: Bool { userPreferences?.openPlayerGlassBackground ?? true }
+  var fullAppBackground: Bool { userPreferences?.fullAppBackground ?? false }
   var showFullArtworkGradient: Bool { userPreferences?.showFullArtworkGradient ?? true }
   var miniPlayerFloating: Bool { userPreferences?.miniPlayerFloating ?? false }
 }

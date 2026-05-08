@@ -27,7 +27,7 @@ struct WatchSyncSettingsView: View {
               VStack(alignment: .leading) {
                 Text(playlist.name)
                   .font(.headline)
-                Text("\(playlist.songs.count) songs")
+                Text("\(playlist.orderedSongs.count) songs")
                   .font(.caption)
                   .foregroundColor(.secondary)
               }

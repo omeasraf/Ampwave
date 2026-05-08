@@ -173,10 +173,11 @@ final class WatchSyncManager: NSObject, WCSessionDelegate {
 
     // Update songs in playlist
     playlist.songs.removeAll()
+    playlist.songOrder = []
     for songId in songIds {
       let songDescriptor = FetchDescriptor<LibrarySong>(predicate: #Predicate { $0.id == songId })
       if let song = try? context.fetch(songDescriptor).first {
-        playlist.songs.append(song)
+        playlist.addSong(song)
       } else {
         // Create a stub song if it doesn't exist yet
         let stub = LibrarySong(
@@ -188,7 +189,7 @@ final class WatchSyncManager: NSObject, WCSessionDelegate {
         )
         stub.id = songId
         context.insert(stub)
-        playlist.songs.append(stub)
+        playlist.addSong(stub)
       }
     }
 

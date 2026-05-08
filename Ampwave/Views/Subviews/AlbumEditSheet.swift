@@ -96,15 +96,31 @@ struct AlbumEditSheet: View {
                 Spacer()
 
                 if artworkPath != nil || artworkImage != nil {
-                  Button(role: .destructive) {
-                    artworkImage = nil
-                    artworkData = nil
-                    artworkPath = nil
-                  } label: {
-                    Label("Reset", systemImage: "arrow.counterclockwise")
-                      .font(.caption)
+                  VStack(alignment: .trailing, spacing: 5) {
+                    Button(role: .destructive) {
+                      artworkImage = nil
+                      artworkData = nil
+                      artworkPath = nil
+                    } label: {
+                      Label("Remove", systemImage: "trash")
+                        .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+
+                    if let embedded = album.embeddedArtworkPath,
+                      embedded != artworkPath || artworkImage != nil
+                    {
+                      Button {
+                        artworkImage = nil
+                        artworkData = nil
+                        artworkPath = embedded
+                      } label: {
+                        Label("Original", systemImage: "arrow.revert.quarters")
+                          .font(.caption)
+                      }
+                      .buttonStyle(.bordered)
+                    }
                   }
-                  .buttonStyle(.bordered)
                 }
               }
             }

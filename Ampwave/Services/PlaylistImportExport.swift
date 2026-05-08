@@ -320,7 +320,7 @@ private struct PortablePlaylistDocument: Codable {
   init(playlist: Playlist, library: SongLibrary) {
     self.init(
       name: playlist.name,
-      tracks: playlist.songs.map { PortableTrackDocument(song: $0, library: library) }
+      tracks: playlist.orderedSongs.map { PortableTrackDocument(song: $0, library: library) }
     )
   }
 }

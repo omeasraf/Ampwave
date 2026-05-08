@@ -17,7 +17,7 @@ struct AddSongsToPlaylistSheet: View {
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
 
   var filteredSongs: [LibrarySong] {
-    let existingIds = Set(playlist.songs.map { $0.id })
+    let existingIds = Set(playlist.orderedSongs.map { $0.id })
     let availableSongs = library.songs.filter {
       !existingIds.contains($0.id)
     }

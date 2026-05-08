@@ -21,7 +21,7 @@ struct WatchPlaylistView: View {
             VStack(alignment: .leading) {
               Text(playlist.name)
                 .font(.headline)
-              Text("\(playlist.songs.count) songs")
+              Text("\(playlist.orderedSongs.count) songs")
                 .font(.caption)
                 .foregroundColor(.secondary)
             }
@@ -31,7 +31,7 @@ struct WatchPlaylistView: View {
       }
 
       Section {
-        ForEach(playlist.songs) { song in
+        ForEach(playlist.orderedSongs) { song in
           Button(action: {
             WatchPlaybackManager.shared.play(song)
             showPlayer = true

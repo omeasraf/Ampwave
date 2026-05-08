@@ -48,7 +48,7 @@ struct OpenPlayerView: View {
           VStack(spacing: 0) {
             if userPreferences?.fullArtworkBackground ?? true {
               FullArtworkBackgroundView(artworkPath: playback.currentItem?.artworkPath)
-                .frame(height: 500)
+                .frame(height: 490)
                 .overlay {
                   LinearGradient(
                     stops: [
@@ -65,12 +65,12 @@ struct OpenPlayerView: View {
               LargeFixedArtworkView(
                 artworkPath: playback.currentItem?.artworkPath
               )
-              .padding(.top, 20)
-              .padding(.bottom, 25)
-              .padding(.horizontal, 24)
+              .padding(.top, 10)
+              .padding(.bottom, 10)
+              .padding(.horizontal, 32)
             }
 
-            VStack(spacing: 24) {
+            VStack(spacing: (userPreferences?.fullArtworkBackground ?? true) ? 24 : 20) {
               trackInfoSection
 
               PlayerProgressView()
@@ -81,30 +81,21 @@ struct OpenPlayerView: View {
 
               tabSection
             }
-            .padding(24)
+            .padding(.vertical, (userPreferences?.fullArtworkBackground ?? true) ? 24 : 16)
+            .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 24 : 12)
             .background(
-              RoundedRectangle(cornerRadius: 32, style: .continuous)
-                .fill(
-                  LinearGradient(
-                    gradient: Gradient(colors: [
-                      themeManager.cardBackgroundColor.opacity(0.7),
-                      themeManager.cardBackgroundColor.opacity(0.5),
-                    ]),
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                  )
-                )
-                .overlay {
+              Group {
+                if !(userPreferences?.openPlayerGlassBackground ?? true) {
+                  Color.clear
+                } else {
                   RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(themeManager.cardBackgroundColor)
                 }
-                .overlay {
-                  RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .stroke(.white.opacity(0.08), lineWidth: 1)
-                }
+              }
             )
-            .padding(.horizontal, 16)
-            .padding(.bottom, 30)
+
+            .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 16 : 8)
+            .padding(.bottom, 40)
           }
           .background(themeManager.backgroundColor)
         }
@@ -370,8 +361,9 @@ struct OpenPlayerView: View {
         .frame(maxWidth: .infinity)
         .frame(height: 50)
         .background(
-          RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(.thinMaterial)
+            (userPreferences?.openPlayerGlassBackground ?? true)
+                ? AnyView(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.thinMaterial))
+                : AnyView(Color.clear)
         )
     }
     .buttonStyle(.plain)
@@ -573,3 +565,4 @@ struct TechnicalInfoSheet: View {
     }
   }
 }
+

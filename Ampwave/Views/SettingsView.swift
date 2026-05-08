@@ -222,6 +222,22 @@ struct SettingsView: View {
             set: { preferences.fullArtworkBackground = $0 }
           ))
 
+        Toggle(
+          "Player Glass Background",
+          isOn: Binding(
+            get: { preferences.openPlayerGlassBackground ?? true },
+            set: { preferences.openPlayerGlassBackground = $0 }
+          ))
+
+        Toggle(
+          "Full App Background",
+          isOn: Binding(
+            get: { preferences.fullAppBackground ?? false },
+            set: { preferences.fullAppBackground = $0 }
+          )
+        )
+        .disabled(true)
+
         //        if preferences.fullArtworkBackground ?? false {
         //          Toggle(
         //            "Show Background Gradient",
@@ -480,6 +496,10 @@ struct SettingsView: View {
       }
     } header: {
       Text("Library")
+    } footer: {
+        Text(
+            "Turn off 'Copy Imported Music' to keep files in their original location; the app will reference them instead."
+        )
     }
   }
 

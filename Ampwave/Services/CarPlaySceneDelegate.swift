@@ -281,7 +281,7 @@
       let playlists = playlistManager.playlists
 
       let items = playlists.map { playlist in
-        let item = CPListItem(text: playlist.name, detailText: "\(playlist.songs.count) songs")
+        let item = CPListItem(text: playlist.name, detailText: "\(playlist.orderedSongs.count) songs")
         item.accessoryType = .disclosureIndicator
         item.handler = { [weak self] _, completion in
           Task { @MainActor in
@@ -299,7 +299,7 @@
     }
 
     private func showPlaylistSongs(_ playlist: Playlist) {
-      let items = playlist.songs.map { song in
+      let items = playlist.orderedSongs.map { song in
         let item = CPListItem(text: song.title, detailText: song.artist)
         item.setImage(loadUIImage(from: song.artworkPath, size: 60))
         item.handler = { _, completion in

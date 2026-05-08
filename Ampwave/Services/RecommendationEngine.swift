@@ -496,7 +496,7 @@ final class RecommendationEngine {
   /// Generates smart playlist recommendations
   func generatePlaylistRecommendations(for playlist: Playlist, limit: Int = 20) -> [Recommendation]
   {
-    let playlistSongs = playlist.songs
+    let playlistSongs = playlist.orderedSongs
 
     guard !playlistSongs.isEmpty else {
       return []

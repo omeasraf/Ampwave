@@ -656,6 +656,7 @@ final class SongLibrary {
       year: metadata.year,
       composer: metadata.composer,
       artworkPath: artworkPath,
+      embeddedArtworkPath: artworkPath,
       sampleRate: metadata.sampleRate,
       bitDepth: metadata.bitDepth,
       bitRate: metadata.bitRate,
@@ -696,6 +697,7 @@ final class SongLibrary {
       artist: primaryArtistName,
       year: metadata.year,
       artworkPath: artworkPath,
+      embeddedArtworkPath: artworkPath,
       in: modelContext
     ) {
       song.albumReference = album
@@ -770,6 +772,7 @@ final class SongLibrary {
       year: metadata.year,
       composer: metadata.composer,
       artworkPath: artworkPath,
+      embeddedArtworkPath: artworkPath,
       sampleRate: metadata.sampleRate,
       bitDepth: metadata.bitDepth,
       bitRate: metadata.bitRate,
@@ -808,6 +811,7 @@ final class SongLibrary {
       artist: primaryArtistName,
       year: metadata.year,
       artworkPath: artworkPath,
+      embeddedArtworkPath: artworkPath,
       in: modelContext
     ) {
       song.albumReference = album
@@ -1164,7 +1168,8 @@ final class SongLibrary {
   // MARK: - Album Management
 
   private func getOrCreateAlbum(
-    name: String?, artist: String?, year: Int?, artworkPath: String?, in modelContext: ModelContext
+    name: String?, artist: String?, year: Int?, artworkPath: String?,
+    embeddedArtworkPath: String?, in modelContext: ModelContext
   ) -> Album? {
     guard let albumName = name, !albumName.isEmpty else { return nil }
 
@@ -1179,6 +1184,9 @@ final class SongLibrary {
         if existingAlbum.artworkPath == nil, let newArtworkPath = artworkPath {
           existingAlbum.artworkPath = newArtworkPath
         }
+        if existingAlbum.embeddedArtworkPath == nil, let newEmbeddedPath = embeddedArtworkPath {
+          existingAlbum.embeddedArtworkPath = newEmbeddedPath
+        }
         return existingAlbum
       }
     } catch {
@@ -1189,7 +1197,8 @@ final class SongLibrary {
       name: albumName,
       artist: artistName,
       year: year,
-      artworkPath: artworkPath
+      artworkPath: artworkPath,
+      embeddedArtworkPath: embeddedArtworkPath
     )
     modelContext.insert(album)
     return album
