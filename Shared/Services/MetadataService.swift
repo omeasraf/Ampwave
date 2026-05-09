@@ -38,7 +38,7 @@ final class MetadataService {
 
   // MARK: - Internal Request Helper
 
-  private func performRequest(url: URL, retries: Int = 3) async -> Data? {
+  func performRequest(url: URL, retries: Int = 3) async -> Data? {
     var attempt = 0
     var backoffDelay: TimeInterval = 1.5
 
@@ -470,6 +470,72 @@ final class MetadataService {
     }
   }
 
+  /// Searches for multiple artwork options for a song or album
+  func searchArtworkOptions(title: String, artist: String) async -> [URL] {
+    print("[DEBUG] MetadataService.searchArtworkOptions: Searching for \(title) by \(artist)")
+    
+    // 1. Search for releases on MusicBrainz
+    let query = "release:\"\(title.replacingOccurrences(of: "\"", with: "\\\""))\" AND artist:\"\(artist.replacingOccurrences(of: "\"", with: "\\\""))\""
+    var components = URLComponents(string: "\(musicBrainzDefaultURL)/release")
+    components?.queryItems = [
+      URLQueryItem(name: "query", value: query),
+      URLQueryItem(name: "fmt", value: "json"),
+      URLQueryItem(name: "limit", value: "10"),
+    ]
+
+    guard let url = components?.url else { return [] }
+    
+    var artworkURLs: [URL] = []
+    if let data = await performRequest(url: url) {
+      do {
+        let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
+        if let releases = response.releases {
+          // Fetch artwork for each release ID
+          for release in releases {
+            if let artworkURL = await fetchArtworkURL(forRelease: release.id) {
+              if !artworkURLs.contains(artworkURL) {
+                artworkURLs.append(artworkURL)
+              }
+            }
+            if artworkURLs.count >= 12 { break } // Limit to 12 results
+          }
+        }
+      } catch {
+        print("[DEBUG] MetadataService.searchArtworkOptions: Decoding error: \(error)")
+      }
+    }
+
+    // 2. If we have very few results, try a broader search
+    if artworkURLs.count < 3 {
+      let fallbackQuery = "\(title) \(artist)"
+      var fallbackComponents = URLComponents(string: "\(musicBrainzDefaultURL)/release")
+      fallbackComponents?.queryItems = [
+        URLQueryItem(name: "query", value: fallbackQuery),
+        URLQueryItem(name: "fmt", value: "json"),
+        URLQueryItem(name: "limit", value: "10"),
+      ]
+      
+      if let fallbackUrl = fallbackComponents?.url,
+         let data = await performRequest(url: fallbackUrl) {
+        do {
+          let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
+          if let releases = response.releases {
+            for release in releases {
+              if let artworkURL = await fetchArtworkURL(forRelease: release.id) {
+                if !artworkURLs.contains(artworkURL) {
+                  artworkURLs.append(artworkURL)
+                }
+              }
+              if artworkURLs.count >= 12 { break }
+            }
+          }
+        } catch {}
+      }
+    }
+
+    return artworkURLs
+  }
+
   // MARK: - Cover Art Archive
 
   private func fetchArtworkURL(forRelease releaseId: String) async -> URL? {
@@ -564,39 +630,68 @@ final class MetadataService {
   private func applyMetadata(_ metadata: FetchedMetadata, to song: LibrarySong) async {
     guard let modelContext = modelContext else { return }
 
-    // Update song fields
-    if let title = metadata.title, !title.isEmpty {
+    var needsSave = false
+
+    // Update song fields only if they're empty or generic (Preserve user edits)
+    if let title = metadata.title, !title.isEmpty, 
+       !song.userEditedFields.contains("title"),
+       (song.title == song.fileName || song.title.contains("Untitled")) {
       song.title = title
+      needsSave = true
     }
-    if let artist = metadata.artist, !artist.isEmpty {
+    if let artist = metadata.artist, !artist.isEmpty,
+       !song.userEditedFields.contains("artist"),
+       (song.artist == "Unknown Artist" || song.artist.isEmpty) {
       song.artist = artist
+      needsSave = true
     }
-    if let album = metadata.album, !album.isEmpty {
+    if let album = metadata.album, !album.isEmpty,
+       !song.userEditedFields.contains("album"),
+       (song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true) {
       song.album = album
+      needsSave = true
     }
-    if let year = metadata.year {
+    if let year = metadata.year, 
+       !song.userEditedFields.contains("year"),
+       (song.year == nil || song.year == 0) {
       song.year = year
+      needsSave = true
     }
-    if let genre = metadata.genre, !genre.isEmpty {
+    if let genre = metadata.genre, !genre.isEmpty, 
+       !song.userEditedFields.contains("genre"),
+       (song.genre == nil || song.genre?.isEmpty == true) {
       song.genre = normalizedGenreLabel(from: genre)
+      needsSave = true
     }
-    if let description = metadata.songDescription, !description.isEmpty {
-      song.songDescription = description
-    }
-    if let duration = metadata.duration, duration > 0 {
+    if let duration = metadata.duration, duration > 0, song.duration <= 0 {
       song.duration = duration
+      needsSave = true
     }
 
     // Download and cache artwork if available
     if let artworkURL = metadata.artworkURL {
-      if let artworkPath = await downloadArtwork(from: artworkURL) {
-        song.artworkPath = artworkPath
-        song.isRemoteArtwork = true
+      // Only replace if no artwork or if remote artwork is preferred and not user-selected
+      let prefs = UserPreferences.getOrCreate(in: modelContext)
+      let isUserSelected = song.artworkSource == .user
+      let hasEmbeddedArt = song.embeddedArtworkPath != nil
+      
+      // If preferEmbeddedArtwork is true and we have embedded art, don't replace
+      let shouldRespectEmbedded = prefs.preferEmbeddedArtwork && hasEmbeddedArt
+      
+      if song.artworkPath == nil || (prefs.preferOnlineArtwork && !isUserSelected && !shouldRespectEmbedded) {
+        if let artworkPath = await downloadArtwork(from: artworkURL) {
+          song.artworkPath = artworkPath
+          song.isRemoteArtwork = true
+          song.artworkSource = .online
+          needsSave = true
+        }
       }
     }
 
-    song.metadataCheckAttempted = true
-    try? modelContext.save()
+    if needsSave {
+      song.metadataCheckAttempted = true
+      try? modelContext.save()
+    }
   }
 
   @MainActor
@@ -651,7 +746,11 @@ final class MetadataService {
       .map { ($0, scoreRecording($0, against: song)) }
       .sorted { $0.1 > $1.1 }
 
-    guard let best = scored.first, best.1 >= 1.5 else { return nil }
+    // Increased threshold from 1.5 to 2.2 for higher confidence
+    guard let best = scored.first, best.1 >= 2.2 else { 
+      print("[DEBUG] MetadataService.bestRecordingMatch: No candidate reached threshold (Best: \(scored.first?.1 ?? 0))")
+      return nil 
+    }
     return best.0
   }
 
@@ -685,24 +784,45 @@ final class MetadataService {
     let localAlbum = normalizedSearchText(song.album ?? "")
 
     var score = 0.0
-    score += stringSimilarityScore(normalizedSearchText(recording.title), localTitle) * 1.6
+    
+    // Title match (Weighted high)
+    let titleSimilarity = stringSimilarityScore(normalizedSearchText(recording.title), localTitle)
+    score += titleSimilarity * 2.0
 
+    // Artist match (Weighted high)
     if let artistName = recording.artistCredit.first?.name {
-      score += stringSimilarityScore(normalizedSearchText(artistName), localArtist) * 1.4
+      let artistSimilarity = stringSimilarityScore(normalizedSearchText(artistName), localArtist)
+      score += artistSimilarity * 1.5
     }
 
-    if let releaseTitle = recording.releases?.first?.title, !localAlbum.isEmpty {
-      score += stringSimilarityScore(normalizedSearchText(releaseTitle), localAlbum) * 0.9
+    // Album match (Weighted medium - very important to avoid wrong artwork)
+    if let release = recording.releases?.first {
+      let releaseTitle = normalizedSearchText(release.title)
+      if !localAlbum.isEmpty && localAlbum != "unknown album" {
+        let albumSimilarity = stringSimilarityScore(releaseTitle, localAlbum)
+        score += albumSimilarity * 1.2
+        
+        // Bonus for exact album match
+        if releaseTitle == localAlbum {
+          score += 0.5
+        }
+      } else {
+        // If we don't have a local album, we can't be as sure, but we don't penalize
+        score += 0.2
+      }
     }
 
+    // Duration match (Crucial for identifying correct version/track)
     if let remoteDuration = recording.length.map({ TimeInterval($0) / 1000.0 }), song.duration > 0 {
       let difference = abs(remoteDuration - song.duration)
-      if difference <= 8 {
-        score += 0.8
+      if difference <= 3 {
+        score += 1.0 // Very high confidence
+      } else if difference <= 8 {
+        score += 0.6
       } else if difference <= 20 {
-        score += 0.35
+        score += 0.2
       } else if difference >= 60 {
-        score -= 0.5
+        score -= 1.0 // Likely a different version or extended mix
       }
     }
 

@@ -25,6 +25,9 @@ struct AlbumEditSheet: View {
   @State private var selectedPhotoItem: PhotosPickerItem?
   @State private var isShowingFilePicker = false
   @State private var artworkPath: String?
+  @State private var artworkSource: Album.ArtworkSource
+  @State private var isShowingArtworkSelection = false
+  @State private var isFetchingMetadata = false
 
   private var library: SongLibrary { SongLibrary.shared }
 
@@ -36,6 +39,7 @@ struct AlbumEditSheet: View {
     _year = State(initialValue: album.year.map(String.init) ?? "")
     _genre = State(initialValue: album.genre?.joined(separator: ", ") ?? "")
     _artworkPath = State(initialValue: album.artworkPath)
+    _artworkSource = State(initialValue: album.artworkSource)
   }
 
   var body: some View {
@@ -77,6 +81,19 @@ struct AlbumEditSheet: View {
 
             VStack(alignment: .leading, spacing: 5) {
               HStack {
+                Text(artworkSourceLabel)
+                  .font(.caption)
+                  .fontWeight(.medium)
+                  .padding(.horizontal, 8)
+                  .padding(.vertical, 2)
+                  .background(themeManager.accentColor.opacity(0.1))
+                  .foregroundStyle(themeManager.accentColor)
+                  .clipShape(Capsule())
+                
+                Spacer()
+              }
+
+              HStack {
                 VStack(alignment: .leading, spacing: 5) {
                   PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
                     Label("Photos", systemImage: "photo")
@@ -91,6 +108,14 @@ struct AlbumEditSheet: View {
                       .font(.caption)
                   }
                   .buttonStyle(.bordered)
+
+                  Button {
+                    isShowingArtworkSelection = true
+                  } label: {
+                    Label("Search Online", systemImage: "globe")
+                      .font(.caption)
+                  }
+                  .buttonStyle(.bordered)
                 }
 
                 Spacer()
@@ -101,6 +126,7 @@ struct AlbumEditSheet: View {
                       artworkImage = nil
                       artworkData = nil
                       artworkPath = nil
+                      artworkSource = .embedded
                     } label: {
                       Label("Remove", systemImage: "trash")
                         .font(.caption)
@@ -114,6 +140,7 @@ struct AlbumEditSheet: View {
                         artworkImage = nil
                         artworkData = nil
                         artworkPath = embedded
+                        artworkSource = .embedded
                       } label: {
                         Label("Original", systemImage: "arrow.revert.quarters")
                           .font(.caption)
@@ -127,19 +154,47 @@ struct AlbumEditSheet: View {
           }
           .padding(.vertical, 5)
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
+
+        Section {
+          Button {
+            fetchOnlineMetadata()
+          } label: {
+            HStack {
+              if isFetchingMetadata {
+                ProgressView()
+                  .controlSize(.small)
+                  .padding(.trailing, 5)
+              }
+              Label("Fetch Album Info Online", systemImage: "magnifyingglass.circle")
+            }
+          }
+          .disabled(isFetchingMetadata)
+        } header: {
+          Text("Metadata Discovery")
+        } footer: {
+          Text("Fetches artist and year from MusicBrainz.")
+        }
+        .listRowBackground(themeManager.cardBackgroundColor)
 
         Section("Album Info") {
           TextField("Album Name", text: $name)
+            .onChange(of: name) { markFieldAsEdited("name") }
           TextField("Artist", text: $artist)
+            .onChange(of: artist) { markFieldAsEdited("artist") }
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
 
         Section("Details") {
           TextField("Year", text: $year)
             #if os(iOS)
               .keyboardType(.numberPad)
             #endif
+            .onChange(of: year) { markFieldAsEdited("year") }
           TextField("Genre", text: $genre)
+            .onChange(of: genre) { markFieldAsEdited("genre") }
         }
+        .listRowBackground(themeManager.cardBackgroundColor)
 
         Section("Songs") {
           Text("\(album.songCount) song\(album.songCount != 1 ? "s" : "")")
@@ -147,7 +202,33 @@ struct AlbumEditSheet: View {
         }
       }
       .navigationTitle("Edit Album")
-      .onChange(of: selectedPhotoItem) { _, newItem in
+      .sheet(isPresented: $isShowingArtworkSelection) {
+        ArtworkSelectionSheet(title: name, artist: artist, isPresented: $isShowingArtworkSelection) { url in
+          Task {
+            if let data = await MetadataService.shared.performRequest(url: url) {
+              #if os(iOS)
+              if let uiImage = UIImage(data: data) {
+                await MainActor.run {
+                  artworkData = data
+                  artworkImage = Image(uiImage: uiImage)
+                  artworkSource = .online
+                  artworkPath = nil
+                }
+              }
+              #else
+              if let nsImage = NSImage(data: data) {
+                await MainActor.run {
+                  artworkData = data
+                  artworkImage = Image(nsImage: nsImage)
+                  artworkSource = .online
+                  artworkPath = nil
+                }
+              }
+              #endif
+            }
+          }
+        }
+      }      .onChange(of: selectedPhotoItem) { _, newItem in
         Task {
           if let data = try? await newItem?.loadTransferable(type: Data.self) {
             #if os(iOS)
@@ -244,6 +325,37 @@ struct AlbumEditSheet: View {
       }
   }
 
+  private var artworkSourceLabel: String {
+    switch artworkSource {
+    case .embedded: return "Embedded Artwork"
+    case .online: return "MusicBrainz Artwork"
+    case .user: return "User Selected Artwork"
+    }
+  }
+
+  private func markFieldAsEdited(_ field: String) {
+    if !album.userEditedFields.contains(field) {
+      album.userEditedFields.append(field)
+    }
+  }
+
+  private func fetchOnlineMetadata() {
+    isFetchingMetadata = true
+    Task {
+      if let metadata = await MetadataService.shared.fetchMetadata(for: album) {
+        await MainActor.run {
+          if !album.userEditedFields.contains("artist"), let newArtist = metadata.artist { artist = newArtist }
+          if !album.userEditedFields.contains("year"), let newYear = metadata.year { year = String(newYear) }
+          
+          if metadata.artworkURL != nil {
+            isShowingArtworkSelection = true
+          }
+        }
+      }
+      isFetchingMetadata = false
+    }
+  }
+
   private func saveAlbumMetadata() async {
     album.name = name
     album.artist = artist.isEmpty ? nil : artist
@@ -262,9 +374,11 @@ struct AlbumEditSheet: View {
     if let data = artworkData {
       if let newPath = await library.cacheArtwork(data) {
         album.artworkPath = newPath
+        album.artworkSource = .user
       }
-    } else if artworkPath == nil {
-      album.artworkPath = nil
+    } else {
+      album.artworkPath = artworkPath
+      album.artworkSource = artworkSource
     }
 
     // Persist changes

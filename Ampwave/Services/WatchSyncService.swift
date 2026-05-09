@@ -143,7 +143,7 @@ final class WatchSyncService: NSObject {
       ]
       session.transferUserInfo(metadata)
 
-      if let artworkPath = song.artworkPath, let artworkURL = PathManager.resolve(artworkPath) {
+      if let artworkPath = song.effectiveArtworkPath, let artworkURL = PathManager.resolve(artworkPath) {
         if FileManager.default.fileExists(atPath: artworkURL.path) {
           session.transferFile(artworkURL, metadata: ["type": "artwork", "id": song.id.uuidString])
         }

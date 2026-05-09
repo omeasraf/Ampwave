@@ -531,6 +531,14 @@ struct SettingsView: View {
         )
 
         Toggle(
+          "Prefer Embedded Artwork",
+          isOn: Binding(
+            get: { preferences.preferEmbeddedArtwork },
+            set: { preferences.preferEmbeddedArtwork = $0 }
+          )
+        )
+
+        Toggle(
           "Enable Recommendations",
           isOn: Binding(
             get: { preferences.enableRecommendations },
@@ -615,6 +623,18 @@ struct SettingsView: View {
 
   private var dataManagementSection: some View {
     Section {
+      NavigationLink {
+        DuplicateManagementView()
+      } label: {
+        Label("Manage Duplicates", systemImage: "rectangle.on.rectangle")
+      }
+
+      NavigationLink {
+        MetadataQueueView()
+      } label: {
+        Label("Review Missing Metadata", systemImage: "questionmark.circle")
+      }
+
       Button {
         showingClearCacheConfirmation = true
       } label: {

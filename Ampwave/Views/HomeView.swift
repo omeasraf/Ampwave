@@ -387,7 +387,7 @@ struct SongCard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      AlbumArtworkView(artworkPath: song.artworkPath, size: 140)
+      AlbumArtworkView(artworkPath: song.effectiveArtworkPath, size: 140)
         .accessibilityHidden(true)
 
       VStack(alignment: .leading, spacing: 2) {
@@ -542,7 +542,7 @@ struct RecommendationCard: View {
       Group {
         switch recommendation.item {
         case .song(let song):
-          AlbumArtworkView(artworkPath: song.artworkPath, size: 160)
+          AlbumArtworkView(artworkPath: song.effectiveArtworkPath, size: 160)
         case .album(let album):
           AlbumArtworkView(artworkPath: album.artworkPath, size: 160)
         case .artist(let artist):

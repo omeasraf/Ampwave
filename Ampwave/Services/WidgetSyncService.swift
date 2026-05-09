@@ -53,7 +53,7 @@ public class WidgetSyncService {
     lyrics: SyncedLyric? = nil
   ) {
     var artName: String?
-    if let song = song, let rel = song.artworkPath, let src = PathManager.resolve(rel),
+    if let song = song, let rel = song.effectiveArtworkPath, let src = PathManager.resolve(rel),
       let container = sharedContainer
     {
       let dest = container.appendingPathComponent(Self.widgetArtFileName)

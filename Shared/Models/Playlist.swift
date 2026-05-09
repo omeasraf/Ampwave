@@ -165,7 +165,7 @@ final class Playlist: Identifiable, Hashable {
     }
 
     // Get unique artwork paths from songs
-    let allPaths = songs.compactMap { $0.artworkPath }
+    let allPaths = songs.compactMap { $0.effectiveArtworkPath }
     let uniquePaths = allPaths.uniqued()
 
     if artworkType == .single || uniquePaths.isEmpty {

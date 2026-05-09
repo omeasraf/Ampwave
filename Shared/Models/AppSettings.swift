@@ -15,6 +15,8 @@ final class AppSettings: Identifiable {
   var groupSongsByAlbum: Bool = true
   /// Whether to automatically merge duplicate albums with same name and artist
   var mergeAlbumDuplicates: Bool = true
+  /// Whether to automatically merge duplicate songs with same title, artist, and album
+  var mergeSongDuplicates: Bool = false
 
   /// Sorting preferences for library tabs
   var songSortOrderRaw: String = LibrarySortOrder.titleAscending.rawValue
@@ -25,6 +27,7 @@ final class AppSettings: Identifiable {
   init(
     groupSongsByAlbum: Bool = true,
     mergeAlbumDuplicates: Bool = true,
+    mergeSongDuplicates: Bool = true,
     songSortOrder: LibrarySortOrder = .titleAscending,
     albumSortOrder: LibrarySortOrder = .titleAscending,
     artistSortOrder: LibrarySortOrder = .titleAscending,
@@ -33,6 +36,7 @@ final class AppSettings: Identifiable {
     self.id = UUID()
     self.groupSongsByAlbum = groupSongsByAlbum
     self.mergeAlbumDuplicates = mergeAlbumDuplicates
+    self.mergeSongDuplicates = mergeSongDuplicates
     self.songSortOrderRaw = songSortOrder.rawValue
     self.albumSortOrderRaw = albumSortOrder.rawValue
     self.artistSortOrderRaw = artistSortOrder.rawValue

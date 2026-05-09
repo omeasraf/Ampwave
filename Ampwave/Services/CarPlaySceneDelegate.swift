@@ -130,7 +130,7 @@
 
       let items = songs.map { song in
         let item = CPListItem(text: song.title, detailText: song.artist)
-        item.setImage(loadUIImage(from: song.artworkPath, size: 60))
+        item.setImage(loadUIImage(from: song.effectiveArtworkPath, size: 60))
         item.accessoryType = .none
         item.handler = { [weak self] _, completion in
           Task { @MainActor in
@@ -262,7 +262,7 @@
       let songs = library.songs.sorted { $0.title < $1.title }.prefix(200)
       let items = songs.map { song in
         let item = CPListItem(text: song.title, detailText: song.artist)
-        item.setImage(loadUIImage(from: song.artworkPath, size: 60))
+        item.setImage(loadUIImage(from: song.effectiveArtworkPath, size: 60))
         item.handler = { _, completion in
           Task { @MainActor in
             PlaybackController.shared.play(song, from: .library)
@@ -301,7 +301,7 @@
     private func showPlaylistSongs(_ playlist: Playlist) {
       let items = playlist.orderedSongs.map { song in
         let item = CPListItem(text: song.title, detailText: song.artist)
-        item.setImage(loadUIImage(from: song.artworkPath, size: 60))
+        item.setImage(loadUIImage(from: song.effectiveArtworkPath, size: 60))
         item.handler = { _, completion in
           Task { @MainActor in
             PlaybackController.shared.play(song, from: .playlist, playlistId: playlist.id)
@@ -346,7 +346,7 @@
       let songs = PlaybackController.shared.upNext
       let items = songs.map { song in
         let item = CPListItem(text: song.title, detailText: song.artist)
-        item.setImage(loadUIImage(from: song.artworkPath, size: 60))
+        item.setImage(loadUIImage(from: song.effectiveArtworkPath, size: 60))
         return item
       }
 
@@ -388,7 +388,7 @@
 
       let items = filteredSongs.map { song in
         let item = CPListItem(text: song.title, detailText: song.artist)
-        item.setImage(loadUIImage(from: song.artworkPath, size: 60))
+        item.setImage(loadUIImage(from: song.effectiveArtworkPath, size: 60))
         item.handler = { _, completion in
           Task { @MainActor in
             PlaybackController.shared.play(song, from: .library)

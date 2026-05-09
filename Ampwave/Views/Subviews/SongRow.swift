@@ -19,7 +19,7 @@ struct SongRow: View {
   var body: some View {
     HStack(spacing: 12) {
       if showArtwork {
-        ArtworkImage(artworkPath: song.artworkPath, size: 50, cornerRadius: 6)
+        ArtworkImage(artworkPath: song.effectiveArtworkPath, size: 50, cornerRadius: 6)
       }
 
       VStack(alignment: .leading, spacing: 3) {
@@ -64,7 +64,7 @@ struct CompactSongRow: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      ArtworkImage(artworkPath: song.artworkPath, size: 40, cornerRadius: 4)
+      ArtworkImage(artworkPath: song.effectiveArtworkPath, size: 40, cornerRadius: 4)
 
       VStack(alignment: .leading, spacing: 2) {
         Text(song.title)
@@ -117,7 +117,7 @@ struct NumberedSongRow: View {
           .frame(width: 28, alignment: .center)
       }
 
-      ArtworkImage(artworkPath: song.artworkPath, size: 40, cornerRadius: 4)
+      ArtworkImage(artworkPath: song.effectiveArtworkPath, size: 40, cornerRadius: 4)
 
       VStack(alignment: .leading, spacing: 2) {
         Text(song.title)

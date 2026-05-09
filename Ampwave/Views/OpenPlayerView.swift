@@ -47,7 +47,7 @@ struct OpenPlayerView: View {
         ScrollView {
           VStack(spacing: 0) {
             if userPreferences?.fullArtworkBackground ?? true {
-              FullArtworkBackgroundView(artworkPath: playback.currentItem?.artworkPath)
+              FullArtworkBackgroundView(artworkPath: playback.currentItem?.effectiveArtworkPath)
                 .frame(height: 490)
                 .overlay {
                   LinearGradient(
@@ -63,14 +63,14 @@ struct OpenPlayerView: View {
                 }
             } else {
               LargeFixedArtworkView(
-                artworkPath: playback.currentItem?.artworkPath
+                artworkPath: playback.currentItem?.effectiveArtworkPath
               )
               .padding(.top, 10)
               .padding(.bottom, 10)
               .padding(.horizontal, 32)
             }
 
-            VStack(spacing: (userPreferences?.fullArtworkBackground ?? true) ? 24 : 20) {
+            VStack(spacing: (userPreferences?.fullArtworkBackground ?? true) ? 24 : 22) {
               trackInfoSection
 
               PlayerProgressView()
@@ -78,6 +78,10 @@ struct OpenPlayerView: View {
               PlayerPlaybackControlsView()
 
               extraControls
+
+              if !(userPreferences?.fullArtworkBackground ?? true) {
+                Spacer(minLength: 30)
+              }
 
               tabSection
             }
@@ -370,7 +374,7 @@ struct OpenPlayerView: View {
   }
 
   private func updateArtworkColor() async {
-    guard let path = playback.currentItem?.artworkPath,
+    guard let path = playback.currentItem?.effectiveArtworkPath,
       let url = PathManager.resolve(path)
     else {
       artworkColor = .clear

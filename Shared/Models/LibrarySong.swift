@@ -16,6 +16,12 @@ final class LibrarySong: Identifiable, Hashable {
     case referenced
   }
 
+  enum ArtworkSource: String, Codable {
+    case embedded
+    case online
+    case user
+  }
+
   // MARK: - Required (identity & storage)
   @Attribute(.unique) var id: UUID
   var fileName: String
@@ -49,7 +55,19 @@ final class LibrarySong: Identifiable, Hashable {
   var artworkPath: String?
   var embeddedArtworkPath: String?
   var isRemoteArtwork: Bool = false
+  var artworkSourceRaw: String = "embedded"
+  @Attribute(.externalStorage) var userEditedFields: [String] = []
   var albumReference: Album?
+
+  var artworkSource: ArtworkSource {
+    get { ArtworkSource(rawValue: artworkSourceRaw) ?? (isRemoteArtwork ? .online : .embedded) }
+    set { artworkSourceRaw = newValue.rawValue }
+  }
+
+  /// Returns the song's artwork path, falling back to the album's artwork if available.
+  var effectiveArtworkPath: String? {
+    artworkPath ?? albumReference?.artworkPath
+  }
 
   @Relationship(inverse: \Playlist.songs)
   var playlists: [Playlist]? = []

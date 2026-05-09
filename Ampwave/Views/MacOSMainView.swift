@@ -129,7 +129,7 @@ struct MacOSMainView: View {
     VStack(spacing: 4) {
       if let item = playback.currentItem {
         HStack(spacing: 10) {
-          FixedArtworkThumbnail(artworkPath: item.artworkPath, size: 28)
+          FixedArtworkThumbnail(artworkPath: item.effectiveArtworkPath, size: 28)
             .cornerRadius(6)
 
           VStack(alignment: .leading, spacing: 1) {

@@ -698,7 +698,7 @@ final class RecommendationEngine {
       score -= Double(stats.skipCount) * 0.3
       if stats.isLiked { score += 0.6 }
     }
-    if song.artworkPath != nil { score += 0.2 }
+    if song.effectiveArtworkPath != nil { score += 0.2 }
     if song.genre != nil { score += 0.15 }
     return score
   }

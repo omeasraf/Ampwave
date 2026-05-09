@@ -1096,7 +1096,7 @@ final class PlaybackController {
     ]
 
     #if os(iOS)
-      if let url = PathManager.resolve(song.artworkPath),
+      if let url = PathManager.resolve(song.effectiveArtworkPath),
         let imageData = try? Data(contentsOf: url),
         let image = UIImage(data: imageData)
       {

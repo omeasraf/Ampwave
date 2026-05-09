@@ -83,8 +83,8 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     let actualIsDark: Bool
     switch self {
     case .ampwave: actualIsDark = isDark
-    case .light, .catppuccinLatte, .roseGold, .nordLight, .everforestLight: actualIsDark = false
-    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula, .nordDark, .everforestDark, .kanagawaWave, .kanagawaLotus:
+    case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight: actualIsDark = false
+    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula, .nordDark, .everforestDark, .kanagawaWave:
       actualIsDark = true
     case .custom: actualIsDark = isDark
     }
@@ -200,6 +200,18 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     case .catppuccinMocha:
       primaryText = Color(red: 205 / 255.0, green: 214 / 255.0, blue: 244 / 255.0)
       secondaryText = Color(red: 186 / 255.0, green: 194 / 255.0, blue: 222 / 255.0)
+    case .nordLight:
+      primaryText = Color(hex: "#2E3440")
+      secondaryText = Color(hex: "#4C566A")
+    case .everforestLight:
+      primaryText = Color(hex: "#5C6A72")
+      secondaryText = Color(hex: "#829181")
+    case .kanagawaLotus:
+      primaryText = Color(hex: "#54546D")
+      secondaryText = Color(hex: "#7E8D85")
+    case .roseGold:
+      primaryText = Color(red: 0.25, green: 0.15, blue: 0.18)
+      secondaryText = Color(red: 0.45, green: 0.35, blue: 0.38)
     default:
       primaryText = actualIsDark ? Color.white : Color.black
       secondaryText = actualIsDark ? Color.white.opacity(0.72) : Color.black.opacity(0.62)
@@ -254,7 +266,7 @@ final class ThemeManager {
       return raw == "light" ? .light : .dark
     }
     switch currentTheme {
-    case .light, .catppuccinLatte, .roseGold: return .light
+    case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight: return .light
     case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula:
       return .dark
     default: return nil
@@ -317,6 +329,7 @@ final class UserPreferences: Identifiable {
   var wordSyncedLyricsEnabled: Bool = false
   var copyMusicToStorage: Bool = true
   var preferOnlineArtwork: Bool
+  var preferEmbeddedArtwork: Bool = true
   var organizeByAlbum: Bool
 
   var isOfflineMode: Bool
@@ -515,13 +528,14 @@ final class UserPreferences: Identifiable {
     self.defaultRepeatModeRaw = RepeatMode.off.rawValue
     self.showNowPlayingOnLaunch = false
     self.expandPlayerAutomatically = false
-    self.showLyricsByDefault = false
+    self.showLyricsByDefault = true
     self.artworkQualityRaw = ArtworkQuality.high.rawValue
     self.autoFetchMetadata = true
     self.autoFetchLyrics = true
     self.wordSyncedLyricsEnabled = false
     self.copyMusicToStorage = true
     self.preferOnlineArtwork = true
+    self.preferEmbeddedArtwork = true
     self.organizeByAlbum = true
     self.isOfflineMode = false
     self.showPlaybackNotifications = true

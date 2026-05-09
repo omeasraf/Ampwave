@@ -188,7 +188,7 @@ private struct SearchLibraryIndex {
       }
 
       if score <= 0.35 { return nil }
-      if entry.song.artworkPath != nil { score += 0.25 }
+      if entry.song.effectiveArtworkPath != nil { score += 0.25 }
       if entry.song.genre != nil { score += 0.1 }
 
       return Ranked(item: entry.song, score: score)

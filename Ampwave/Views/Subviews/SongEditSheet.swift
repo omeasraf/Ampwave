@@ -30,6 +30,9 @@ struct SongEditSheet: View {
   @State private var isShowingFilePicker = false
   @State private var isRemoteArtwork: Bool
   @State private var artworkPath: String?
+  @State private var artworkSource: LibrarySong.ArtworkSource
+  @State private var isShowingArtworkSelection = false
+  @State private var isFetchingMetadata = false
 
   // Technical Metadata
   @State private var sampleRate: String
@@ -58,11 +61,9 @@ struct SongEditSheet: View {
 
     _isRemoteArtwork = State(initialValue: song.isRemoteArtwork)
     _artworkPath = State(initialValue: song.artworkPath)
+    _artworkSource = State(initialValue: song.artworkSource)
 
-    _sampleRate = State(
-      initialValue: song.sampleRate.map { String(format: "%.0f", $0) }
-        ?? ""
-    )
+    _sampleRate = State(initialValue: song.sampleRate.map { String(format: "%.0f", $0) } ?? "")
     _bitDepth = State(initialValue: song.bitDepth.map(String.init) ?? "")
     _bitRate = State(initialValue: song.bitRate.map(String.init) ?? "")
     _format = State(initialValue: song.format ?? "")
@@ -120,12 +121,18 @@ struct SongEditSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 5) {
-              Text(
-                isRemoteArtwork
-                  ? "Remote Artwork" : "Local Artwork"
-              )
-              .font(.subheadline)
-              .foregroundStyle(.secondary)
+              HStack {
+                Text(artworkSourceLabel)
+                  .font(.caption)
+                  .fontWeight(.medium)
+                  .padding(.horizontal, 8)
+                  .padding(.vertical, 2)
+                  .background(themeManager.accentColor.opacity(0.1))
+                  .foregroundStyle(themeManager.accentColor)
+                  .clipShape(Capsule())
+                
+                Spacer()
+              }
 
               HStack {
                 VStack(alignment: .leading, spacing: 5) {
@@ -145,6 +152,14 @@ struct SongEditSheet: View {
                       .font(.caption)
                   }
                   .buttonStyle(.bordered)
+
+                  Button {
+                    isShowingArtworkSelection = true
+                  } label: {
+                    Label("Search Online", systemImage: "globe")
+                      .font(.caption)
+                  }
+                  .buttonStyle(.bordered)
                 }
 
                 Spacer()
@@ -155,6 +170,7 @@ struct SongEditSheet: View {
                       artworkImage = nil
                       artworkData = nil
                       artworkPath = nil
+                      artworkSource = .embedded
                       isRemoteArtwork = false
                     } label: {
                       Label(
@@ -172,7 +188,9 @@ struct SongEditSheet: View {
                         artworkImage = nil
                         artworkData = nil
                         artworkPath = embedded
+                        artworkSource = .embedded
                         isRemoteArtwork = false
+                        print("[DEBUG] SongEditSheet: Reverting to embedded artwork: \(embedded)")
                       } label: {
                         Label(
                           "Original",
@@ -191,23 +209,50 @@ struct SongEditSheet: View {
         }
         .listRowBackground(themeManager.cardBackgroundColor)
 
+        Section {
+          Button {
+            fetchOnlineMetadata()
+          } label: {
+            HStack {
+              if isFetchingMetadata {
+                ProgressView()
+                  .controlSize(.small)
+                  .padding(.trailing, 5)
+              }
+              Label("Fetch Song Info Online", systemImage: "magnifyingglass.circle")
+            }
+          }
+          .disabled(isFetchingMetadata)
+        } header: {
+          Text("Metadata Discovery")
+        } footer: {
+          Text("Fetches title, artist, album, and year from MusicBrainz.")
+        }
+        .listRowBackground(themeManager.cardBackgroundColor)
+
         Section("Basic Info") {
           TextField("Title", text: $title)
+            .onChange(of: title) { markFieldAsEdited("title") }
           TextField("Artist", text: $artist)
+            .onChange(of: artist) { markFieldAsEdited("artist") }
           TextField("Album", text: $album)
+            .onChange(of: album) { markFieldAsEdited("album") }
         }
         .listRowBackground(themeManager.cardBackgroundColor)
 
         Section("Details") {
           TextField("Genre", text: $genre)
+            .onChange(of: genre) { markFieldAsEdited("genre") }
           TextField("Year", text: $year)
             #if os(iOS)
               .keyboardType(.numberPad)
             #endif
+            .onChange(of: year) { markFieldAsEdited("year") }
           TextField("Track Number", text: $trackNumber)
             #if os(iOS)
               .keyboardType(.numberPad)
             #endif
+            .onChange(of: trackNumber) { markFieldAsEdited("trackNumber") }
         }
         .listRowBackground(themeManager.cardBackgroundColor)
 
@@ -266,6 +311,33 @@ struct SongEditSheet: View {
       .scrollContentBackground(.hidden)
       .tint(themeManager.accentColor)
       .navigationTitle("Edit Song")
+      .sheet(isPresented: $isShowingArtworkSelection) {
+        ArtworkSelectionSheet(title: title, artist: artist, isPresented: $isShowingArtworkSelection) { url in
+          Task {
+            if let data = await MetadataService.shared.performRequest(url: url) {
+              #if os(iOS)
+              if let uiImage = UIImage(data: data) {
+                await MainActor.run {
+                  artworkData = data
+                  artworkImage = Image(uiImage: uiImage)
+                  isRemoteArtwork = true
+                  artworkPath = nil // Clear current path since we have new data
+                }
+              }
+              #else
+              if let nsImage = NSImage(data: data) {
+                await MainActor.run {
+                  artworkData = data
+                  artworkImage = Image(nsImage: nsImage)
+                  isRemoteArtwork = true
+                  artworkPath = nil
+                }
+              }
+              #endif
+            }
+          }
+        }
+      }
       .onChange(of: selectedPhotoItem) { _, newItem in
         Task {
           if let data = try? await newItem?.loadTransferable(
@@ -368,6 +440,40 @@ struct SongEditSheet: View {
       }
   }
 
+  private var artworkSourceLabel: String {
+    switch artworkSource {
+    case .embedded: return "Embedded Artwork"
+    case .online: return "MusicBrainz Artwork"
+    case .user: return "User Selected Artwork"
+    }
+  }
+
+  private func markFieldAsEdited(_ field: String) {
+    if !song.userEditedFields.contains(field) {
+      song.userEditedFields.append(field)
+    }
+  }
+
+  private func fetchOnlineMetadata() {
+    isFetchingMetadata = true
+    Task {
+      if let metadata = await MetadataService.shared.fetchMetadata(for: song) {
+        await MainActor.run {
+          // Apply changes only if not edited by user
+          if !song.userEditedFields.contains("title"), let newTitle = metadata.title { title = newTitle }
+          if !song.userEditedFields.contains("artist"), let newArtist = metadata.artist { artist = newArtist }
+          if !song.userEditedFields.contains("album"), let newAlbum = metadata.album { album = newAlbum }
+          if !song.userEditedFields.contains("year"), let newYear = metadata.year { year = String(newYear) }
+          
+          if metadata.artworkURL != nil {
+            isShowingArtworkSelection = true
+          }
+        }
+      }
+      isFetchingMetadata = false
+    }
+  }
+
   private func saveSongMetadata() async {
     song.title = title
     song.artist = artist
@@ -386,14 +492,19 @@ struct SongEditSheet: View {
     if let data = artworkData {
       if let newPath = await library.cacheArtwork(data) {
         song.artworkPath = newPath
-
+        song.artworkSource = .user
+        
         // Update album artwork if primary
         if let album = song.albumReference,
           album.artworkPath == nil || album.songs.first?.id == song.id
         {
           album.artworkPath = newPath
+          album.artworkSource = .user
         }
       }
+    } else {
+      song.artworkPath = artworkPath
+      song.artworkSource = artworkSource
     }
 
     song.isRemoteArtwork = isRemoteArtwork

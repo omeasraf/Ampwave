@@ -61,6 +61,232 @@ final class SongLibrary {
     try? fm.createDirectory(at: artworkDir, withIntermediateDirectories: true)
   }
 
+  // MARK: - Duplicate Detection
+
+  private func normalizeForMatching(_ text: String) -> String {
+    var normalized = text.lowercased()
+    
+    // Remove common parenthetical additions and featured artists
+    let patterns = [
+      "\\(.*?remastered.*?\\)", "\\[.*?remastered.*?\\]",
+      "\\(.*?radio edit.*?\\)", "\\[.*?radio edit.*?\\]",
+      "\\(.*?live.*?\\)", "\\[.*?live.*?\\]",
+      "\\(.*?deluxe.*?\\)", "\\[.*?deluxe.*?\\]",
+      "\\(.*?feat\\..*?\\)", "\\[.*?feat\\..*?\\]",
+      "\\(.*?ft\\..*?\\)", "\\[.*?ft\\..*?\\]",
+      "\\(.*?featuring.*?\\)", "\\[.*?featuring.*?\\]",
+      "\\(.*?official.*?\\)", "\\[.*?official.*?\\]",
+      "\\(.*?lyrics.*?\\)", "\\[.*?lyrics.*?\\]",
+      "\\(.*?hq.*?\\)", "\\[.*?hq.*?\\]",
+      "\\(.*?high quality.*?\\)", "\\[.*?high quality.*?\\]",
+      "remastered", "radio edit", "deluxe edition",
+      "feat\\.", "ft\\.", "featuring", "official video", "official audio"
+    ]
+    
+    for pattern in patterns {
+      normalized = normalized.replacingOccurrences(of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
+    }
+    
+    return normalized
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  struct DuplicateGroup: Identifiable {
+    let id = UUID()
+    let songs: [LibrarySong]
+    let reason: String
+  }
+
+  /// Finds potential duplicate songs in the library.
+  nonisolated func findDuplicates() -> [DuplicateGroup] {
+    // We need to run this on a background context or ensure we're not blocking MainActor
+    // for long periods, but since it's nonisolated, we must fetch the data ourselves.
+    
+    // For safety and simplicity, let's keep it isolated to the actor that owns the data
+    // but ensure we're using it correctly.
+    
+    // Re-evaluating: If I make it nonisolated, I can't access `self.songs`.
+    // The crash happened because of cross-thread access to external storage.
+    // The safest way is to run it on MainActor (where songs live) but keep it efficient.
+    return MainActor.assumeIsolated {
+      var groups: [DuplicateGroup] = []
+
+      // 1. Group by file hash (100% confidence)
+      var hashGroups: [String: [LibrarySong]] = [:]
+      for song in songs {
+        hashGroups[song.fileHash, default: []].append(song)
+      }
+
+      var accountedForIds = Set<UUID>()
+      for (_, group) in hashGroups where group.count > 1 {
+        groups.append(DuplicateGroup(songs: group, reason: "Identical File Hash"))
+        accountedForIds.formUnion(group.map(\.id))
+      }
+
+      // 2. Group by metadata (High confidence: Fuzzy Title + Artist + Album + Duration)
+      let remainingSongs = songs.filter { !accountedForIds.contains($0.id) }
+      var metaGroups: [String: [LibrarySong]] = [:]
+
+      for song in remainingSongs {
+        let title = normalizeForMatching(song.title)
+        // Access artists.first safely on MainActor
+        let artist = normalizeForMatching(song.artists.first ?? song.artist)
+        let album = normalizeForMatching(song.album ?? "")
+        
+        let key = "\(title)|\(artist)|\(album)"
+        metaGroups[key, default: []].append(song)
+      }
+
+      for (_, candidates) in metaGroups where candidates.count > 1 {
+        // Further refine by duration tolerance (± 5 seconds)
+        let refined = refineByDuration(candidates, tolerance: 5.0)
+        for subgroup in refined where subgroup.count > 1 {
+          groups.append(DuplicateGroup(songs: subgroup, reason: "Matching Metadata & Duration"))
+          accountedForIds.formUnion(subgroup.map(\.id))
+        }
+      }
+
+      // 3. Group by loose metadata (Title + Artist + Duration, ignoring Album)
+      let looseRemaining = songs.filter { !accountedForIds.contains($0.id) }
+      var looseGroups: [String: [LibrarySong]] = [:]
+
+      for song in looseRemaining {
+        let title = normalizeForMatching(song.title)
+        let artist = normalizeForMatching(song.artists.first ?? song.artist)
+        let key = "\(title)|\(artist)"
+        looseGroups[key, default: []].append(song)
+      }
+
+      for (_, candidates) in looseGroups where candidates.count > 1 {
+        // Use a stricter duration tolerance when album doesn't match (± 2 seconds)
+        let refined = refineByDuration(candidates, tolerance: 2.0)
+        for subgroup in refined where subgroup.count > 1 {
+          groups.append(DuplicateGroup(songs: subgroup, reason: "Matching Title & Artist"))
+          accountedForIds.formUnion(subgroup.map(\.id))
+        }
+      }
+
+      return groups
+    }
+  }
+
+  private func refineByDuration(_ songs: [LibrarySong], tolerance: TimeInterval) -> [[LibrarySong]] {
+    var subgroups: [[LibrarySong]] = []
+    for song in songs {
+      var found = false
+      for i in 0..<subgroups.count {
+        if abs(subgroups[i][0].duration - song.duration) <= tolerance {
+          subgroups[i].append(song)
+          found = true
+          break
+        }
+      }
+      if !found {
+        subgroups.append([song])
+      }
+    }
+    return subgroups
+  }
+
+  /// Calculates a quality score for a song to determine which version to keep.
+  func calculateQualityScore(for song: LibrarySong) -> Int {
+    var score = 0
+    
+    // Format priority
+    let format = song.format?.lowercased() ?? ""
+    if format.contains("flac") {
+      score += 1000
+    } else if format.contains("alac") || format.contains("wav") || format.contains("aiff") {
+      score += 800
+    } else if format.contains("m4a") || format.contains("aac") {
+      score += 600
+    } else if format.contains("mp3") {
+      score += 400
+    }
+    
+    // Bitrate contribution (secondary)
+    if let bitRate = song.bitRate {
+      score += bitRate / 10 // e.g., 320kbps adds 32 points
+    }
+    
+    // Sample rate and bit depth contribution
+    if let sampleRate = song.sampleRate {
+      score += Int(sampleRate / 1000)
+    }
+    if let bitDepth = song.bitDepth {
+      score += bitDepth
+    }
+    
+    // Metadata completeness
+    if song.artworkPath != nil { score += 10 }
+    if song.lyrics != nil { score += 5 }
+    
+    return score
+  }
+
+  /// Automatically merges duplicate songs if they match with high confidence.
+  private func mergeSongDuplicates(in modelContext: ModelContext) async {
+    let duplicateGroups = findDuplicates()
+    guard !duplicateGroups.isEmpty else { return }
+
+    print("[DEBUG] SongLibrary.mergeSongDuplicates: Found \(duplicateGroups.count) duplicate groups")
+
+    var deletedCount = 0
+    for group in duplicateGroups {
+      // Only auto-merge if identical hash or extremely high confidence metadata match
+      // For metadata matches, we only auto-merge if both have the same album name (not "Unknown Album")
+      let isHashMatch = group.reason == "Identical File Hash"
+      let isHighConfMeta = group.reason == "Matching Metadata & Duration" && 
+                          group.songs.first?.album != nil && 
+                          group.songs.first?.album != "Unknown Album"
+
+      guard isHashMatch || isHighConfMeta else { continue }
+
+      // Keep the "best" song based on quality score
+      let sortedGroup = group.songs.sorted { s1, s2 in
+        let s1Score = calculateQualityScore(for: s1)
+        let s2Score = calculateQualityScore(for: s2)
+        if s1Score != s2Score { return s1Score > s2Score }
+        return s1.importedDate < s2.importedDate // Prefer older if scores are equal
+      }
+
+      let primary = sortedGroup[0]
+      for duplicate in sortedGroup.dropFirst() {
+        // Transfer playlist memberships
+        if let playlists = duplicate.playlists {
+          for playlist in playlists {
+            if !(primary.playlists?.contains(playlist) ?? false) {
+              primary.playlists?.append(playlist)
+              if !(playlist.songs.contains(primary)) {
+                playlist.songs.append(primary)
+              }
+            }
+          }
+        }
+
+        // Delete file if it's in the managed directory and not referenced by others
+        let url = getFileURL(for: duplicate)
+        if duplicate.storageMode == .copied && FileManager.default.fileExists(atPath: url.path) {
+          // Check if any other song uses this exact file path (rare but possible)
+          let otherUsingFile = songs.contains { $0.id != duplicate.id && getFileURL(for: $0).path == url.path }
+          if !otherUsingFile {
+            try? FileManager.default.removeItem(at: url)
+          }
+        }
+
+        modelContext.delete(duplicate)
+        deletedCount += 1
+      }
+    }
+
+    if deletedCount > 0 {
+      try? modelContext.save()
+      print("[DEBUG] SongLibrary.mergeSongDuplicates: Deleted \(deletedCount) duplicate songs")
+    }
+  }
+
   // MARK: - Artists
 
   /// Gets all unique artists from the library
@@ -239,6 +465,15 @@ final class SongLibrary {
       )
       songs = try modelContext.fetch(descriptor)
       print("[DEBUG] SongLibrary.loadSongs: Fetched \(songs.count) songs")
+
+      // Merge duplicate songs if setting is enabled
+      let appSettings = AppSettings.getOrCreate(in: modelContext)
+      if appSettings.mergeSongDuplicates {
+        print("[DEBUG] SongLibrary.loadSongs: Merging duplicate songs")
+        await mergeSongDuplicates(in: modelContext)
+        // Refresh songs after merge
+        songs = try modelContext.fetch(descriptor)
+      }
     } catch {
       print("[DEBUG] SongLibrary.loadSongs: Error fetching songs: \(error)")
       songs = []
@@ -666,6 +901,11 @@ final class SongLibrary {
       bookmarkData: bookmarkData
     )
 
+    // Set initial artwork source
+    if artworkPath != nil {
+      song.artworkSource = .embedded
+    }
+
     song.updateSearchIndex()
 
     print("[DEBUG] SongLibrary.importFile: Inserting song into modelContext")
@@ -781,6 +1021,11 @@ final class SongLibrary {
       storageMode: storageMode,
       bookmarkData: bookmarkData
     )
+
+    // Set initial artwork source
+    if artworkPath != nil {
+      song.artworkSource = .embedded
+    }
 
     song.updateSearchIndex()
 
@@ -1064,6 +1309,37 @@ final class SongLibrary {
     indexingStatus = .complete
   }
 
+  func refreshMetadata(for album: Album) async {
+    print("[DEBUG] SongLibrary.refreshMetadata: Refreshing album \(album.name)")
+    let metadataService = MetadataService.shared
+    if let modelContext = modelContext, metadataService.modelContext == nil {
+      metadataService.setModelContext(modelContext)
+    }
+    await metadataService.refreshMetadata(for: album)
+    
+    // Also refresh all songs in the album
+    for song in album.songs {
+      await metadataService.refreshMetadata(for: song)
+    }
+  }
+
+  func refreshMetadata(for artist: Artist) async {
+    print("[DEBUG] SongLibrary.refreshMetadata: Refreshing artist \(artist.name)")
+    let metadataService = MetadataService.shared
+    if let modelContext = modelContext, metadataService.modelContext == nil {
+      metadataService.setModelContext(modelContext)
+    }
+    
+    // Refresh artist info
+    await metadataService.fetchMetadata(for: artist)
+    
+    // Refresh all songs by this artist
+    let artistSongs = getSongs(byArtist: artist.name)
+    for song in artistSongs {
+      await metadataService.refreshMetadata(for: song)
+    }
+  }
+
   @MainActor
   private func applyFetchedMetadata(
     _ metadata: FetchedMetadata, to song: LibrarySong, preferences: UserPreferences
@@ -1143,6 +1419,7 @@ final class SongLibrary {
           print("[DEBUG] SongLibrary.applyFetchedMetadata: Artwork downloaded to \(artworkPath)")
           song.artworkPath = artworkPath
           song.isRemoteArtwork = true
+          song.artworkSource = .online
           needsSave = true
 
           // Update album artwork too

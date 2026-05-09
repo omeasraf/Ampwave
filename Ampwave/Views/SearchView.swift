@@ -360,7 +360,7 @@ struct TopResultCard: View {
 
   var body: some View {
     HStack(spacing: 16) {
-      AlbumArtworkView(artworkPath: song.artworkPath, size: 86)
+      AlbumArtworkView(artworkPath: song.effectiveArtworkPath, size: 86)
 
       VStack(alignment: .leading, spacing: 6) {
         Text(song.title)

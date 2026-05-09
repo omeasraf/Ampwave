@@ -24,7 +24,7 @@ struct ExpandedLyricsView: View {
     NavigationStack {
       ZStack {
         // Background blur with artwork
-        if let artworkPath = playback.currentItem?.artworkPath {
+        if let artworkPath = playback.currentItem?.effectiveArtworkPath {
           ArtworkBackgroundView(artworkPath: artworkPath)
         } else {
           themeManager.backgroundColor.ignoresSafeArea()
