@@ -61,7 +61,7 @@ struct AlbumView: View {
               .tint(themeManager.accentColor)
 
               Button {
-                playback.playNext(song)
+                Task { await playback.playNext(song) }
               } label: {
                 Label("Play Next", systemImage: "text.insert")
               }

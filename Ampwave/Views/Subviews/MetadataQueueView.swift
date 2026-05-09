@@ -60,10 +60,17 @@ struct MetadataQueueView: View {
       refreshQueue()
     }
     .sheet(item: $selectedSong) { song in
-      SongEditSheet(song: song, isPresented: Binding(
-        get: { selectedSong != nil },
-        set: { if !$0 { selectedSong = nil; refreshQueue() } }
-      ))
+      SongEditSheet(
+        song: song,
+        isPresented: Binding(
+          get: { selectedSong != nil },
+          set: {
+            if !$0 {
+              selectedSong = nil
+              refreshQueue()
+            }
+          }
+        ))
     }
   }
 
@@ -73,11 +80,12 @@ struct MetadataQueueView: View {
       let songs = await Task.detached {
         return SongLibrary.shared.songs.filter { song in
           let isGeneric = song.album == "Unknown Album" || song.artist == "Unknown Artist"
-          let isMissingInfo = song.artworkPath == nil || song.genre == nil || song.year == nil || song.year == 0
+          let isMissingInfo =
+            song.artworkPath == nil || song.genre == nil || song.year == nil || song.year == 0
           return isGeneric || isMissingInfo
         }
       }.value
-      
+
       await MainActor.run {
         self.incompleteSongs = songs
         self.isLoading = false
@@ -96,12 +104,12 @@ struct IncompleteSongRow: View {
       HStack(spacing: 12) {
         if let path = song.effectiveArtworkPath, let url = PathManager.resolve(path) {
           #if os(iOS)
-          if let uiImage = UIImage(contentsOfFile: url.path) {
+            if let uiImage = UIImage(contentsOfFile: url.path) {
               Image(uiImage: uiImage)
-                  .resizable()
-                  .frame(width: 50, height: 50)
-                  .clipShape(RoundedRectangle(cornerRadius: 6))
-          }
+                .resizable()
+                .frame(width: 50, height: 50)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
           #endif
         } else {
           RoundedRectangle(cornerRadius: 6)
@@ -117,12 +125,12 @@ struct IncompleteSongRow: View {
           Text(song.title)
             .font(.headline)
             .lineLimit(1)
-          
+
           Text(song.artist)
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .lineLimit(1)
-          
+
           HStack {
             if song.artworkPath == nil {
               badge("No Art")
@@ -138,9 +146,9 @@ struct IncompleteSongRow: View {
             }
           }
         }
-        
+
         Spacer()
-        
+
         Image(systemName: "chevron.right")
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -149,7 +157,7 @@ struct IncompleteSongRow: View {
     }
     .buttonStyle(.plain)
   }
-  
+
   private func badge(_ text: String) -> some View {
     Text(text)
       .font(.system(size: 8, weight: .bold))

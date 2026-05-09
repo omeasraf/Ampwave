@@ -89,7 +89,7 @@ struct AlbumEditSheet: View {
                   .background(themeManager.accentColor.opacity(0.1))
                   .foregroundStyle(themeManager.accentColor)
                   .clipShape(Capsule())
-                
+
                 Spacer()
               }
 
@@ -203,32 +203,33 @@ struct AlbumEditSheet: View {
       }
       .navigationTitle("Edit Album")
       .sheet(isPresented: $isShowingArtworkSelection) {
-        ArtworkSelectionSheet(title: name, artist: artist, isPresented: $isShowingArtworkSelection) { url in
+        ArtworkSelectionSheet(title: name, artist: artist, isPresented: $isShowingArtworkSelection)
+        { url in
           Task {
             if let data = await MetadataService.shared.performRequest(url: url) {
               #if os(iOS)
-              if let uiImage = UIImage(data: data) {
-                await MainActor.run {
-                  artworkData = data
-                  artworkImage = Image(uiImage: uiImage)
-                  artworkSource = .online
-                  artworkPath = nil
+                if let uiImage = UIImage(data: data) {
+                  await MainActor.run {
+                    artworkData = data
+                    artworkImage = Image(uiImage: uiImage)
+                    artworkSource = .online
+                    artworkPath = nil
+                  }
                 }
-              }
               #else
-              if let nsImage = NSImage(data: data) {
-                await MainActor.run {
-                  artworkData = data
-                  artworkImage = Image(nsImage: nsImage)
-                  artworkSource = .online
-                  artworkPath = nil
+                if let nsImage = NSImage(data: data) {
+                  await MainActor.run {
+                    artworkData = data
+                    artworkImage = Image(nsImage: nsImage)
+                    artworkSource = .online
+                    artworkPath = nil
+                  }
                 }
-              }
               #endif
             }
           }
         }
-      }      .onChange(of: selectedPhotoItem) { _, newItem in
+      }.onChange(of: selectedPhotoItem) { _, newItem in
         Task {
           if let data = try? await newItem?.loadTransferable(type: Data.self) {
             #if os(iOS)
@@ -344,9 +345,13 @@ struct AlbumEditSheet: View {
     Task {
       if let metadata = await MetadataService.shared.fetchMetadata(for: album) {
         await MainActor.run {
-          if !album.userEditedFields.contains("artist"), let newArtist = metadata.artist { artist = newArtist }
-          if !album.userEditedFields.contains("year"), let newYear = metadata.year { year = String(newYear) }
-          
+          if !album.userEditedFields.contains("artist"), let newArtist = metadata.artist {
+            artist = newArtist
+          }
+          if !album.userEditedFields.contains("year"), let newYear = metadata.year {
+            year = String(newYear)
+          }
+
           if metadata.artworkURL != nil {
             isShowingArtworkSelection = true
           }

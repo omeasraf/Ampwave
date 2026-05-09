@@ -365,9 +365,9 @@ struct OpenPlayerView: View {
         .frame(maxWidth: .infinity)
         .frame(height: 50)
         .background(
-            (userPreferences?.openPlayerGlassBackground ?? true)
-                ? AnyView(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.thinMaterial))
-                : AnyView(Color.clear)
+          (userPreferences?.openPlayerGlassBackground ?? true)
+            ? AnyView(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.thinMaterial))
+            : AnyView(Color.clear)
         )
     }
     .buttonStyle(.plain)
@@ -569,4 +569,3 @@ struct TechnicalInfoSheet: View {
     }
   }
 }
-

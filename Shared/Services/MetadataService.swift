@@ -473,9 +473,10 @@ final class MetadataService {
   /// Searches for multiple artwork options for a song or album
   func searchArtworkOptions(title: String, artist: String) async -> [URL] {
     print("[DEBUG] MetadataService.searchArtworkOptions: Searching for \(title) by \(artist)")
-    
+
     // 1. Search for releases on MusicBrainz
-    let query = "release:\"\(title.replacingOccurrences(of: "\"", with: "\\\""))\" AND artist:\"\(artist.replacingOccurrences(of: "\"", with: "\\\""))\""
+    let query =
+      "release:\"\(title.replacingOccurrences(of: "\"", with: "\\\""))\" AND artist:\"\(artist.replacingOccurrences(of: "\"", with: "\\\""))\""
     var components = URLComponents(string: "\(musicBrainzDefaultURL)/release")
     components?.queryItems = [
       URLQueryItem(name: "query", value: query),
@@ -484,7 +485,7 @@ final class MetadataService {
     ]
 
     guard let url = components?.url else { return [] }
-    
+
     var artworkURLs: [URL] = []
     if let data = await performRequest(url: url) {
       do {
@@ -497,7 +498,7 @@ final class MetadataService {
                 artworkURLs.append(artworkURL)
               }
             }
-            if artworkURLs.count >= 12 { break } // Limit to 12 results
+            if artworkURLs.count >= 12 { break }  // Limit to 12 results
           }
         }
       } catch {
@@ -514,9 +515,10 @@ final class MetadataService {
         URLQueryItem(name: "fmt", value: "json"),
         URLQueryItem(name: "limit", value: "10"),
       ]
-      
+
       if let fallbackUrl = fallbackComponents?.url,
-         let data = await performRequest(url: fallbackUrl) {
+        let data = await performRequest(url: fallbackUrl)
+      {
         do {
           let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
           if let releases = response.releases {
@@ -633,33 +635,38 @@ final class MetadataService {
     var needsSave = false
 
     // Update song fields only if they're empty or generic (Preserve user edits)
-    if let title = metadata.title, !title.isEmpty, 
-       !song.userEditedFields.contains("title"),
-       (song.title == song.fileName || song.title.contains("Untitled")) {
+    if let title = metadata.title, !title.isEmpty,
+      !song.userEditedFields.contains("title"),
+      song.title == song.fileName || song.title.contains("Untitled")
+    {
       song.title = title
       needsSave = true
     }
     if let artist = metadata.artist, !artist.isEmpty,
-       !song.userEditedFields.contains("artist"),
-       (song.artist == "Unknown Artist" || song.artist.isEmpty) {
+      !song.userEditedFields.contains("artist"),
+      song.artist == "Unknown Artist" || song.artist.isEmpty
+    {
       song.artist = artist
       needsSave = true
     }
     if let album = metadata.album, !album.isEmpty,
-       !song.userEditedFields.contains("album"),
-       (song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true) {
+      !song.userEditedFields.contains("album"),
+      song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true
+    {
       song.album = album
       needsSave = true
     }
-    if let year = metadata.year, 
-       !song.userEditedFields.contains("year"),
-       (song.year == nil || song.year == 0) {
+    if let year = metadata.year,
+      !song.userEditedFields.contains("year"),
+      song.year == nil || song.year == 0
+    {
       song.year = year
       needsSave = true
     }
-    if let genre = metadata.genre, !genre.isEmpty, 
-       !song.userEditedFields.contains("genre"),
-       (song.genre == nil || song.genre?.isEmpty == true) {
+    if let genre = metadata.genre, !genre.isEmpty,
+      !song.userEditedFields.contains("genre"),
+      song.genre == nil || song.genre?.isEmpty == true
+    {
       song.genre = normalizedGenreLabel(from: genre)
       needsSave = true
     }
@@ -674,11 +681,13 @@ final class MetadataService {
       let prefs = UserPreferences.getOrCreate(in: modelContext)
       let isUserSelected = song.artworkSource == .user
       let hasEmbeddedArt = song.embeddedArtworkPath != nil
-      
+
       // If preferEmbeddedArtwork is true and we have embedded art, don't replace
       let shouldRespectEmbedded = prefs.preferEmbeddedArtwork && hasEmbeddedArt
-      
-      if song.artworkPath == nil || (prefs.preferOnlineArtwork && !isUserSelected && !shouldRespectEmbedded) {
+
+      if song.artworkPath == nil
+        || (prefs.preferOnlineArtwork && !isUserSelected && !shouldRespectEmbedded)
+      {
         if let artworkPath = await downloadArtwork(from: artworkURL) {
           song.artworkPath = artworkPath
           song.isRemoteArtwork = true
@@ -747,9 +756,11 @@ final class MetadataService {
       .sorted { $0.1 > $1.1 }
 
     // Increased threshold from 1.5 to 2.2 for higher confidence
-    guard let best = scored.first, best.1 >= 2.2 else { 
-      print("[DEBUG] MetadataService.bestRecordingMatch: No candidate reached threshold (Best: \(scored.first?.1 ?? 0))")
-      return nil 
+    guard let best = scored.first, best.1 >= 2.2 else {
+      print(
+        "[DEBUG] MetadataService.bestRecordingMatch: No candidate reached threshold (Best: \(scored.first?.1 ?? 0))"
+      )
+      return nil
     }
     return best.0
   }
@@ -784,7 +795,7 @@ final class MetadataService {
     let localAlbum = normalizedSearchText(song.album ?? "")
 
     var score = 0.0
-    
+
     // Title match (Weighted high)
     let titleSimilarity = stringSimilarityScore(normalizedSearchText(recording.title), localTitle)
     score += titleSimilarity * 2.0
@@ -801,7 +812,7 @@ final class MetadataService {
       if !localAlbum.isEmpty && localAlbum != "unknown album" {
         let albumSimilarity = stringSimilarityScore(releaseTitle, localAlbum)
         score += albumSimilarity * 1.2
-        
+
         // Bonus for exact album match
         if releaseTitle == localAlbum {
           score += 0.5
@@ -816,13 +827,13 @@ final class MetadataService {
     if let remoteDuration = recording.length.map({ TimeInterval($0) / 1000.0 }), song.duration > 0 {
       let difference = abs(remoteDuration - song.duration)
       if difference <= 3 {
-        score += 1.0 // Very high confidence
+        score += 1.0  // Very high confidence
       } else if difference <= 8 {
         score += 0.6
       } else if difference <= 20 {
         score += 0.2
       } else if difference >= 60 {
-        score -= 1.0 // Likely a different version or extended mix
+        score -= 1.0  // Likely a different version or extended mix
       }
     }
 

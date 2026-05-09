@@ -83,8 +83,10 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     let actualIsDark: Bool
     switch self {
     case .ampwave: actualIsDark = isDark
-    case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight: actualIsDark = false
-    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula, .nordDark, .everforestDark, .kanagawaWave:
+    case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight:
+      actualIsDark = false
+    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula,
+      .nordDark, .everforestDark, .kanagawaWave:
       actualIsDark = true
     case .custom: actualIsDark = isDark
     }
@@ -266,7 +268,8 @@ final class ThemeManager {
       return raw == "light" ? .light : .dark
     }
     switch currentTheme {
-    case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight: return .light
+    case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight:
+      return .light
     case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula:
       return .dark
     default: return nil

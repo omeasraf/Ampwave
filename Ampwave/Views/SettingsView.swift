@@ -497,9 +497,9 @@ struct SettingsView: View {
     } header: {
       Text("Library")
     } footer: {
-        Text(
-            "Turn off 'Copy Imported Music' to keep files in their original location; the app will reference them instead."
-        )
+      Text(
+        "Turn off 'Copy Imported Music' to keep files in their original location; the app will reference them instead."
+      )
     }
   }
 

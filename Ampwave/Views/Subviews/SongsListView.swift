@@ -63,7 +63,7 @@ struct SongsListView: View {
         }
         .swipeActions(edge: .leading) {
           Button {
-            playback.playNext(song)
+            Task { await playback.playNext(song) }
           } label: {
             Label("Play Next", systemImage: "text.insert")
           }

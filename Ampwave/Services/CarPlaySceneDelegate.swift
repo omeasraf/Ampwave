@@ -281,7 +281,8 @@
       let playlists = playlistManager.playlists
 
       let items = playlists.map { playlist in
-        let item = CPListItem(text: playlist.name, detailText: "\(playlist.orderedSongs.count) songs")
+        let item = CPListItem(
+          text: playlist.name, detailText: "\(playlist.orderedSongs.count) songs")
         item.accessoryType = .disclosureIndicator
         item.handler = { [weak self] _, completion in
           Task { @MainActor in

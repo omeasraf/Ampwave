@@ -160,6 +160,21 @@ struct ExpandedLyricsView: View {
               .foregroundStyle(.white)
             }
           }
+
+          ToolbarItem(placement: .primaryAction) {
+            Button {
+              withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                playback.toggleVocalSlider()
+              }
+            } label: {
+              Image(systemName: playback.isVocalSliderVisible ? "mic.fill" : "mic")
+              .font(.system(size: 18, weight: .semibold))
+              .foregroundStyle(playback.isVocalSliderVisible ? .white : .white.opacity(0.6))
+              .padding(8)
+              .background(playback.isVocalSliderVisible ? Color.white.opacity(0.2) : Color.clear)
+              .clipShape(Circle())
+            }
+          }
         }
       #endif
       .onAppear {
@@ -171,6 +186,20 @@ struct ExpandedLyricsView: View {
         #if os(iOS)
           UIApplication.shared.isIdleTimerDisabled = false
         #endif
+      }
+    }
+    .overlay(alignment: .topTrailing) {
+      if playback.isVocalSliderVisible {
+        VocalSlider(value: $playback.vocalLevel)
+          .padding(.top, 64)  // Safe area + toolbar height
+          .padding(.trailing, 16)
+          .transition(
+            .asymmetric(
+              insertion: .move(edge: .top).combined(with: .opacity),
+              removal: .opacity.combined(with: .scale(scale: 0.9))
+            )
+          )
+          .zIndex(100)
       }
     }
   }

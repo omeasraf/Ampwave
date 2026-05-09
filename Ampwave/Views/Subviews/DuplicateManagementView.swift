@@ -93,7 +93,7 @@ struct DuplicateManagementView: View {
     isLoading = true
     Task {
       let groups = library.findDuplicates()
-      
+
       self.duplicateGroups = groups
       self.isLoading = false
     }
@@ -105,10 +105,10 @@ struct DuplicateManagementView: View {
       let sorted = group.songs.sorted { s1, s2 in
         library.calculateQualityScore(for: s1) > library.calculateQualityScore(for: s2)
       }
-      
+
       let toDelete = Array(sorted.dropFirst())
       deleteSongs(toDelete)
-      
+
       await MainActor.run {
         refreshDuplicates()
         isMerging = false
@@ -126,7 +126,7 @@ struct DuplicateManagementView: View {
         let toDelete = Array(sorted.dropFirst())
         deleteSongs(toDelete)
       }
-      
+
       await MainActor.run {
         refreshDuplicates()
         isMerging = false
@@ -138,7 +138,7 @@ struct DuplicateManagementView: View {
     for song in songsToDelete {
       // Transfer playlist memberships to the version we're keeping (not implemented here for simplicity, but should be)
       // For now, follow the requirement: NEVER auto-delete without explicit user action (this is triggered by user)
-      
+
       let url = library.getFileURL(for: song)
       if song.storageMode == .copied && FileManager.default.fileExists(atPath: url.path) {
         try? FileManager.default.removeItem(at: url)
@@ -158,14 +158,15 @@ struct DuplicateGroupCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 12) {
-        ArtworkImage(artworkPath: group.songs.first?.effectiveArtworkPath, size: 50, cornerRadius: 8)
+        ArtworkImage(
+          artworkPath: group.songs.first?.effectiveArtworkPath, size: 50, cornerRadius: 8)
 
         VStack(alignment: .leading, spacing: 2) {
           HStack(spacing: 6) {
             Text(group.songs.first?.title ?? "Unknown")
               .font(.headline)
               .lineLimit(1)
-            
+
             Text(group.reason)
               .font(.system(size: 8, weight: .bold))
               .padding(.horizontal, 4)
@@ -180,9 +181,9 @@ struct DuplicateGroupCard: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
         }
-        
+
         Spacer()
-        
+
         Text("\(group.songs.count) versions")
           .font(.caption2)
           .padding(.horizontal, 8)
@@ -191,9 +192,9 @@ struct DuplicateGroupCard: View {
           .foregroundStyle(themeManager.accentColor)
           .clipShape(Capsule())
       }
-      
+
       Divider()
-      
+
       HStack {
         Button(action: onKeepBest) {
           Label("Keep Best", systemImage: "sparkles")
@@ -202,14 +203,14 @@ struct DuplicateGroupCard: View {
         }
         .buttonStyle(.bordered)
         .tint(themeManager.accentColor)
-        
+
         Button(action: onManual) {
           Label("Manual", systemImage: "slider.horizontal.3")
             .font(.caption)
             .fontWeight(.medium)
         }
         .buttonStyle(.bordered)
-        
+
         Spacer()
       }
     }
@@ -232,10 +233,11 @@ struct ManualDuplicateSelectionView: View {
   init(group: SongLibrary.DuplicateGroup, onApply: @escaping ([LibrarySong]) -> Void) {
     self.group = group
     self.onApply = onApply
-    
+
     // Default to keep the best one
     let best = group.songs.max { s1, s2 in
-      SongLibrary.shared.calculateQualityScore(for: s1) < SongLibrary.shared.calculateQualityScore(for: s2)
+      SongLibrary.shared.calculateQualityScore(for: s1)
+        < SongLibrary.shared.calculateQualityScore(for: s2)
     }
     _selectedToKeep = State(initialValue: best?.id)
   }
@@ -256,25 +258,25 @@ struct ManualDuplicateSelectionView: View {
                 .background(qualityColor(for: song).opacity(0.2))
                 .foregroundStyle(qualityColor(for: song))
                 .clipShape(RoundedRectangle(cornerRadius: 4))
-              
+
               if let bitRate = song.bitRate {
                 Text("\(bitRate) kbps")
                   .font(.caption2)
                   .foregroundStyle(.secondary)
               }
             }
-            
+
             Text(song.fileName)
               .font(.system(.caption, design: .monospaced))
               .lineLimit(1)
-            
+
             Text("\(formatSize(song.size)) • \(formatDuration(song.duration))")
               .font(.caption2)
               .foregroundStyle(.secondary)
           }
-          
+
           Spacer()
-          
+
           if selectedToKeep == song.id {
             Image(systemName: "checkmark.circle.fill")
               .foregroundStyle(themeManager.accentColor)
@@ -310,7 +312,7 @@ struct ManualDuplicateSelectionView: View {
 
   private func qualityColor(for song: LibrarySong) -> Color {
     let score = library.calculateQualityScore(for: song)
-    if score >= 1000 { return .purple } // Lossless
+    if score >= 1000 { return .purple }  // Lossless
     if score >= 800 { return .blue }
     if score >= 600 { return .green }
     return .orange
@@ -319,7 +321,7 @@ struct ManualDuplicateSelectionView: View {
   private func formatSize(_ bytes: Int) -> String {
     ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
   }
-  
+
   private func formatDuration(_ duration: TimeInterval) -> String {
     let minutes = Int(duration) / 60
     let seconds = Int(duration) % 60

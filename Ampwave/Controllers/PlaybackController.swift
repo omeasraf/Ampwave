@@ -17,26 +17,59 @@ internal import SwiftUI
 
 // MARK: - VocalIsolator
 
-// Sound Isolation subtype 'voic'
-let kAudioUnitSubType_SoundIsolation: OSType = 0x766f_6963
-
 final class VocalIsolator {
   static let shared = VocalIsolator()
 
-  var vocalLevel: Float = 1.0
+  // Use pointers for thread-safe access in the audio callback
+  private let targetVocalLevelPtr: UnsafeMutablePointer<Float>
+  private let currentVocalLevelPtr: UnsafeMutablePointer<Float>
 
-  private init() {}
+  var vocalLevel: Float {
+    get { targetVocalLevelPtr.pointee }
+    set { targetVocalLevelPtr.pointee = newValue }
+  }
 
-  func createAudioMix(for item: AVPlayerItem) -> AVAudioMix? {
-    guard let audioTrack = item.asset.tracks(withMediaType: .audio).first else { return nil }
+  private init() {
+    targetVocalLevelPtr = UnsafeMutablePointer<Float>.allocate(capacity: 1)
+    currentVocalLevelPtr = UnsafeMutablePointer<Float>.allocate(capacity: 1)
+    targetVocalLevelPtr.pointee = 1.0
+    currentVocalLevelPtr.pointee = 1.0
+  }
+
+  deinit {
+    targetVocalLevelPtr.deallocate()
+    currentVocalLevelPtr.deallocate()
+  }
+
+  // Use a class for storage to ensure stable memory and easier management
+  class TapStorage {
+    let targetLevel: UnsafeMutablePointer<Float>
+    let currentLevel: UnsafeMutablePointer<Float>
+    var frameCounter: Int64 = 0
+
+    init(targetLevel: UnsafeMutablePointer<Float>, currentLevel: UnsafeMutablePointer<Float>) {
+      self.targetLevel = targetLevel
+      self.currentLevel = currentLevel
+    }
+  }
+
+  func createAudioMix(for audioTrack: AVAssetTrack) -> AVAudioMix? {
+    let storage = TapStorage(targetLevel: targetVocalLevelPtr, currentLevel: currentVocalLevelPtr)
+
+    print("[VALIDATION] VocalIsolator: Creating tap for track \(audioTrack.trackID)")
 
     var callbacks = MTAudioProcessingTapCallbacks(
       version: kMTAudioProcessingTapCallbacksVersion_0,
-      clientInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
+      clientInfo: UnsafeMutableRawPointer(Unmanaged.passRetained(storage).toOpaque()),
       init: { (tap, clientInfo, tapStorageOut) in
+        print("[VALIDATION] VocalIsolator: Tap init triggered")
         tapStorageOut.pointee = clientInfo
       },
-      finalize: nil,
+      finalize: { (tap) in
+        print("[VALIDATION] VocalIsolator: Tap finalize triggered")
+        let storagePtr = MTAudioProcessingTapGetStorage(tap)
+        Unmanaged<TapStorage>.fromOpaque(storagePtr).release()
+      },
       prepare: nil,
       unprepare: nil,
       process: { (tap, numberFrames, flags, bufferListInOut, numberFramesOut, flagsOut) in
@@ -44,54 +77,95 @@ final class VocalIsolator {
           tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut)
         if status != noErr { return }
 
-        let isolator = Unmanaged<VocalIsolator>.fromOpaque(MTAudioProcessingTapGetStorage(tap))
-          .takeUnretainedValue()
-        let vocalLevel = isolator.vocalLevel
+        let storagePtr = MTAudioProcessingTapGetStorage(tap)
+        let storage = Unmanaged<TapStorage>.fromOpaque(storagePtr).takeUnretainedValue()
 
-        // If vocalLevel is 1.0, we don't need to do anything
-        if vocalLevel >= 0.99 {
-          return
-        }
+        let targetVocalLevel = storage.targetLevel.pointee
+        var currentVocalLevel = storage.currentLevel.pointee
 
         let buffers = UnsafeMutableAudioBufferListPointer(bufferListInOut)
-        let numBuffers = buffers.count
+        let rampSpeed: Float = 0.005
 
-        if numBuffers >= 2 {
-          // Non-interleaved (separate buffers for L and R)
+        // Debug: Track RMS
+        var sumSqBefore: Float = 0
+        var sumSqAfter: Float = 0
+        var sampleCount: Int = 0
+
+        // Determine if we should process
+        let skipProcessing = targetVocalLevel >= 0.999 && currentVocalLevel >= 0.999
+
+        if buffers.count == 1 {
+          // Likely Interleaved Stereo or Mono
+          let buffer = buffers[0]
+          guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { return }
+          let numChannels = Int(buffer.mNumberChannels)
+
+          if numChannels == 2 {
+            for i in 0..<Int(numberFrames) {
+              let L = data[i * 2]
+              let R = data[i * 2 + 1]
+              if !skipProcessing {
+                currentVocalLevel += (targetVocalLevel - currentVocalLevel) * rampSpeed
+                let s = sin(currentVocalLevel * .pi * 0.5)
+                let k1 = (s + 1.0) / 2.0
+                let k2 = (s - 1.2) / 2.0
+
+                let nL = k1 * L + k2 * R
+                let nR = k2 * L + k1 * R
+
+                data[i * 2] = nL
+                data[i * 2 + 1] = nR
+
+                sumSqBefore += (L * L + R * R)
+                sumSqAfter += (nL * nL + nR * nR)
+                sampleCount += 2
+              }
+            }
+          }
+        } else if buffers.count >= 2 {
+          // Likely Non-interleaved (Planar)
           guard let leftData = buffers[0].mData?.assumingMemoryBound(to: Float.self),
             let rightData = buffers[1].mData?.assumingMemoryBound(to: Float.self)
-          else {
-            return
-          }
-
-          let k1 = (vocalLevel + 1.0) / 2.0
-          let k2 = (vocalLevel - 1.0) / 2.0
+          else { return }
 
           for i in 0..<Int(numberFrames) {
             let L = leftData[i]
             let R = rightData[i]
-            leftData[i] = k1 * L + k2 * R
-            rightData[i] = k2 * L + k1 * R
-          }
-        } else if numBuffers == 1 {
-          // Interleaved (L and R in the same buffer: L, R, L, R...)
-          let buffer = buffers[0]
-          guard buffer.mNumberChannels >= 2,
-            let data = buffer.mData?.assumingMemoryBound(to: Float.self)
-          else {
-            return
-          }
+            if !skipProcessing {
+              currentVocalLevel += (targetVocalLevel - currentVocalLevel) * rampSpeed
+              let s = pow(currentVocalLevel, 1.5)
+              let k1 = (s + 1.0) / 2.0
+              let k2 = (s - 1.0) / 2.0
 
-          let k1 = (vocalLevel + 1.0) / 2.0
-          let k2 = (vocalLevel - 1.0) / 2.0
+              let nL = k1 * L + k2 * R
+              let nR = k2 * L + k1 * R
 
-          for i in 0..<Int(numberFrames) {
-            let L = data[i * 2]
-            let R = data[i * 2 + 1]
-            data[i * 2] = k1 * L + k2 * R
-            data[i * 2 + 1] = k2 * L + k1 * R
+              leftData[i] = nL
+              rightData[i] = nR
+
+              sumSqBefore += (L * L + R * R)
+              sumSqAfter += (nL * nL + nR * nR)
+              sampleCount += 2
+            }
           }
         }
+
+        storage.currentLevel.pointee = currentVocalLevel
+
+        // Sampled logging for debug
+        let logInterval: Int64 = 88200  // Every ~2s
+        if (storage.frameCounter / logInterval)
+          != ((storage.frameCounter + Int64(numberFrames)) / logInterval)
+        {
+          let rmsBefore = sampleCount > 0 ? sqrt(sumSqBefore / Float(sampleCount)) : 0
+          let rmsAfter = sampleCount > 0 ? sqrt(sumSqAfter / Float(sampleCount)) : 0
+          let reduction = rmsBefore > 0 ? (20 * log10(rmsAfter / rmsBefore)) : 0
+
+          print(
+            "[VALIDATION] VocalIsolator: target: \(targetVocalLevel), current: \(currentVocalLevel), RMS Diff: \(String(format: "%.2f", reduction)) dB"
+          )
+        }
+        storage.frameCounter += Int64(numberFrames)
       }
     )
 
@@ -101,6 +175,8 @@ final class VocalIsolator {
 
     if status != noErr {
       print("[ERROR] VocalIsolator: Failed to create tap: \(status)")
+      // Release storage since tap creation failed and finalize won't be called
+      Unmanaged.passUnretained(storage).release()
       return nil
     }
 
@@ -109,7 +185,6 @@ final class VocalIsolator {
 
     let audioMix = AVMutableAudioMix()
     audioMix.inputParameters = [inputParams]
-
     return audioMix
   }
 }
@@ -174,10 +249,51 @@ final class PlaybackController {
 
   // MARK: - Vocal Isolation
 
-  var showVocalSlider: Bool = false
-  var vocalLevel: Float = 1.0 {
-    didSet {
-      VocalIsolator.shared.vocalLevel = vocalLevel
+  private(set) var isVocalSliderVisible: Bool = false
+  private(set) var currentVocalLevel: Float = 1.0
+  private var vocalSliderTimer: Timer?
+
+  func toggleVocalSlider() {
+    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+      isVocalSliderVisible.toggle()
+    }
+
+    print("[DEBUG] PlaybackController: toggleVocalSlider - New state: \(isVocalSliderVisible)")
+    persistentState?.isVocalSliderVisible = isVocalSliderVisible
+
+    if isVocalSliderVisible {
+      resetVocalSliderTimer()
+    } else {
+      vocalSliderTimer?.invalidate()
+      vocalSliderTimer = nil
+    }
+
+    saveState()
+  }
+
+  var vocalLevel: Float {
+    get { currentVocalLevel }
+    set {
+      currentVocalLevel = newValue
+      VocalIsolator.shared.vocalLevel = newValue
+      persistentState?.vocalLevel = newValue
+
+      if isVocalSliderVisible {
+        resetVocalSliderTimer()
+      }
+    }
+  }
+
+  private func resetVocalSliderTimer() {
+    vocalSliderTimer?.invalidate()
+    vocalSliderTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) {
+      [weak self] _ in
+      Task { @MainActor in
+        withAnimation(.easeInOut(duration: 0.5)) {
+          self?.isVocalSliderVisible = false
+          self?.persistentState?.isVocalSliderVisible = false
+        }
+      }
     }
   }
 
@@ -547,6 +663,8 @@ final class PlaybackController {
     from source: PlaySource = .library,
     playlistId: UUID? = nil
   ) {
+    print("[VALIDATION] PlaybackController: play triggered for \(song.title)")
+
     if let current = currentItem {
       // Record end of current song before starting new one
       // Count as skip if listened for less than 10 seconds
@@ -562,62 +680,81 @@ final class PlaybackController {
 
     let url = library.getFileURL(for: song)
     guard FileManager.default.fileExists(atPath: url.path) else {
-      print("Audio file not found: \(url.path)")
+      print("[ERROR] PlaybackController: Audio file not found: \(url.path)")
       isLoading = false
       return
     }
 
-    let item = createPlayerItem(for: song)
-
-    if player == nil {
-      player = AVQueuePlayer(items: [item])
-      applyEQPresetForPlayback()
-      applyPlayerOutputVolume()
-      addTimeObserver()
-      observePlayerItemChange()
-    } else {
-      player?.removeAllItems()
-      player?.insert(item, after: nil)
-    }
-
-    currentItem = song
-    duration = song.duration > 0 ? song.duration : 0
-    currentTime = 0
-
-    // Prepare next item for gapless
-    prepareNextItem()
-
-    player?.play()
-    isPlaying = true
-    isLoading = false
-
-    updateUIForNewItem()
-    historyTracker.songStarted(song, source: source, playlistId: playlistId)
-
     Task {
-      await loadLyrics(for: song)
-    }
+      let item = await createPlayerItem(for: song)
 
-    saveState()
+      await MainActor.run {
+        print(
+          "[VALIDATION] PlaybackController: AVPlayerItem ready with audioMix: \(item.audioMix != nil)"
+        )
+
+        if self.player == nil {
+          self.player = AVQueuePlayer(items: [item])
+          self.applyEQPresetForPlayback()
+          self.applyPlayerOutputVolume()
+          self.addTimeObserver()
+          self.observePlayerItemChange()
+        } else {
+          self.player?.pause()
+          self.player?.removeAllItems()
+          self.player?.insert(item, after: nil)
+        }
+
+        self.currentItem = song
+        self.duration = song.duration > 0 ? song.duration : 0
+        self.currentTime = 0
+
+        // Prepare next item for gapless
+        self.prepareNextItem()
+
+        self.player?.play()
+        self.isPlaying = true
+        self.isLoading = false
+
+        self.updateUIForNewItem()
+        self.historyTracker.songStarted(song, source: source, playlistId: playlistId)
+
+        Task {
+          await self.loadLyrics(for: song)
+        }
+
+        self.saveState()
+      }
+    }
   }
 
-  private func createPlayerItem(for song: LibrarySong) -> AVPlayerItem {
+  private func createPlayerItem(for song: LibrarySong) async -> AVPlayerItem {
     let url = library.getFileURL(for: song)
 
-    // Start accessing security-scoped resource if it's a referenced file
     if song.storageMode == .referenced {
       _ = url.startAccessingSecurityScopedResource()
-      // Note: We don't explicitly stop accessing here because AVPlayer needs it.
-      // In a real app, you'd manage this more carefully with ref counting,
-      // but for this implementation, this ensures playback works.
     }
 
     let asset = AVURLAsset(url: url)
     let item = AVPlayerItem(asset: asset)
 
-    // Vocal Isolation
-    if let audioMix = VocalIsolator.shared.createAudioMix(for: item) {
-      item.audioMix = audioMix
+    // Vocal Isolation - Attach tap synchronously once tracks are loaded
+    do {
+      let tracks = try await asset.loadTracks(withMediaType: .audio)
+      if let audioTrack = tracks.first {
+        if let audioMix = VocalIsolator.shared.createAudioMix(for: audioTrack) {
+          item.audioMix = audioMix
+          print(
+            "[VALIDATION] PlaybackController: Assigned AVAudioMix to AVPlayerItem for \(song.title)"
+          )
+        } else {
+          print("[ERROR] PlaybackController: Failed to create audioMix for \(song.title)")
+        }
+      } else {
+        print("[ERROR] PlaybackController: No audio track found for \(song.title)")
+      }
+    } catch {
+      print("[ERROR] PlaybackController: Failed to load tracks: \(error)")
     }
 
     observePlayerItem(item)
@@ -629,11 +766,15 @@ final class PlaybackController {
       [weak self] item, _ in
       Task { @MainActor in
         if item.status == .readyToPlay {
+          print("[VALIDATION] PlaybackController: AVPlayerItem status .readyToPlay")
           let itemDuration = CMTimeGetSeconds(item.duration)
           if itemDuration.isFinite, itemDuration > 0 {
             self?.duration = itemDuration
             self?.updateNowPlaying()
           }
+        } else if item.status == .failed {
+          print(
+            "[ERROR] PlaybackController: AVPlayerItem failed: \(String(describing: item.error))")
         }
       }
     }
@@ -651,8 +792,17 @@ final class PlaybackController {
     let nextIndex = currentQueueIndex + 1
     if nextIndex < queue.count {
       let nextSong = queue[nextIndex]
-      let nextItem = createPlayerItem(for: nextSong)
-      player.insert(nextItem, after: player.currentItem)
+      print("[VALIDATION] PlaybackController: preparing next item \(nextSong.title)")
+
+      Task {
+        let nextItem = await createPlayerItem(for: nextSong)
+        await MainActor.run {
+          if player.items().count < 2 {
+            player.insert(nextItem, after: player.currentItem)
+            print("[VALIDATION] PlaybackController: Inserted next item into player")
+          }
+        }
+      }
     }
   }
 
@@ -873,7 +1023,7 @@ final class PlaybackController {
     saveState()
   }
 
-  func playNext(_ song: LibrarySong) {
+  func playNext(_ song: LibrarySong) async {
     let insertIndex = min(currentQueueIndex + 1, queue.count)
     queue.insert(song, at: insertIndex)
     if shuffleMode != .off {
@@ -882,7 +1032,7 @@ final class PlaybackController {
 
     // Insert into AVQueuePlayer
     if let player = player {
-      let item = createPlayerItem(for: song)
+      let item = await createPlayerItem(for: song)
       player.insert(item, after: player.currentItem)
     }
     saveState()
@@ -1168,6 +1318,8 @@ final class PlaybackController {
     state.lastQueueIndex = currentQueueIndex
     state.lastSourceRaw = currentSource.rawValue
     state.lastPlaylistId = currentPlaylistId
+    state.isVocalSliderVisible = isVocalSliderVisible
+    state.vocalLevel = vocalLevel
 
     do {
       try context.save()
@@ -1186,6 +1338,14 @@ final class PlaybackController {
       )
       return
     }
+
+    // Restore Vocal isolation state
+    self.currentVocalLevel = state.vocalLevel
+    self.isVocalSliderVisible = false  // Always default to hidden on restoration
+    VocalIsolator.shared.vocalLevel = state.vocalLevel
+    print(
+      "[VALIDATION] PlaybackController: Restored VocalSlider state - Level: \(currentVocalLevel) (Visibility forced to false)"
+    )
 
     guard let songId = state.lastSongId else {
       print(
@@ -1252,7 +1412,7 @@ final class PlaybackController {
           self.isPlaying = false
 
           // Prepare player but don't play
-          let item = createPlayerItem(for: song)
+          let item = await createPlayerItem(for: song)
           self.player = AVQueuePlayer(items: [item])
           self.applyEQPresetForPlayback()
           self.applyPlayerOutputVolume()
