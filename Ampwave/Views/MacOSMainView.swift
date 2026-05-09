@@ -44,6 +44,7 @@ struct MacOSMainView: View {
       DetailView(selection: $selection)
         .background(themeManager.backgroundColor)
     }
+    .navigationSplitViewStyle(.balanced)
     .toolbar {
       ToolbarItemGroup(placement: .navigation) {
         playbackControls
@@ -128,7 +129,7 @@ struct MacOSMainView: View {
     VStack(spacing: 4) {
       if let item = playback.currentItem {
         HStack(spacing: 10) {
-          FixedArtworkThumbnail(artworkPath: item.artworkPath, size: 28)
+          FixedArtworkThumbnail(artworkPath: item.effectiveArtworkPath, size: 28)
             .cornerRadius(6)
 
           VStack(alignment: .leading, spacing: 1) {
@@ -142,20 +143,20 @@ struct MacOSMainView: View {
           }
           Spacer(minLength: 0)
         }
-        .frame(width: 280)
+        .frame(maxWidth: .infinity, alignment: .leading)
 
         progressView
+          .frame(maxWidth: .infinity)
       } else {
         Text("Not Playing")
           .font(.system(size: 12, weight: .medium))
           .foregroundStyle(.secondary)
-          .frame(width: 280)
+          .frame(maxWidth: .infinity, alignment: .leading)
           .frame(height: 44)
       }
     }
-    .frame(width: 300)
     .padding(.horizontal, 12)
-    .frame(maxHeight: .infinity)
+    .fixedSize(horizontal: false, vertical: true)
   }
 
   private var progressView: some View {
@@ -260,19 +261,19 @@ struct DetailView: View {
         case .search:
           SearchView()
         case .artists:
-          ArtistsListView(searchText: "")
+          ArtistsGridView()
             .navigationTitle("Artists")
             .toolbar {
               LibrarySortMenu(selectedTab: .artists, appSettings: appSettings)
             }
         case .albums:
-          AlbumsGridView(searchText: "")
+          AlbumsGridView()
             .navigationTitle("Albums")
             .toolbar {
               LibrarySortMenu(selectedTab: .albums, appSettings: appSettings)
             }
         case .songs:
-          SongsListView(searchText: "")
+          SongsListView()
             .navigationTitle("Songs")
             .toolbar {
               LibrarySortMenu(selectedTab: .songs, appSettings: appSettings)

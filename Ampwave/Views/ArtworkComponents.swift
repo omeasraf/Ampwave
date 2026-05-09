@@ -99,7 +99,7 @@ struct LargeArtworkImageView: View {
           )
       }
     }
-    .frame(maxWidth: 320, maxHeight: 320)
+    .frame(maxWidth: .infinity)
     .aspectRatio(1, contentMode: .fit)
     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 10)

@@ -15,10 +15,17 @@ struct PlaylistView: View {
   @State private var showingEditSheet = false
   @State private var showingAddSongsSheet = false
   @State private var showingDeleteConfirmation = false
+  @State private var playlistJSONShareURL: URL?
+  @State private var playlistM3UShareURL: URL?
   @Environment(ThemeManager.self) private var themeManager
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  private var library: SongLibrary { SongLibrary.shared }
+
+  private var playlistExportStamp: String {
+    "\(playlist.id.uuidString)-\(playlist.songCount)"
+  }
 
   var body: some View {
     List {
@@ -28,9 +35,9 @@ struct PlaylistView: View {
       .listRowBackground(Color.clear)
       .listRowInsets(EdgeInsets())
 
-      if !playlist.songs.isEmpty {
+      if !playlist.orderedSongs.isEmpty {
         Section {
-          ForEach(playlist.songs) { song in
+          ForEach(playlist.orderedSongs) { song in
             SongRow(
               song: song,
               isCurrent: playback.currentItem?.id == song.id
@@ -39,7 +46,7 @@ struct PlaylistView: View {
             .onTapGesture {
               playback.playPlaylist(
                 playlist,
-                startingAt: playlist.songs.firstIndex(where: {
+                startingAt: playlist.orderedSongs.firstIndex(where: {
                   $0.id == song.id
                 }) ?? 0
               )
@@ -82,6 +89,38 @@ struct PlaylistView: View {
             showingAddSongsSheet = true
           } label: {
             Label("Add Songs", systemImage: "plus")
+          }
+
+          if !playlist.orderedSongs.isEmpty, let url = playlistJSONShareURL {
+            ShareLink(
+              item: url,
+              subject: Text(playlist.name),
+              message: Text(
+                "Portable playlist export from Ampwave with stable track identifiers and metadata."
+              ),
+              preview: SharePreview(
+                playlist.name,
+                icon: Image(systemName: "music.note.list")
+              )
+            ) {
+              Label("Share JSON Playlist…", systemImage: "square.and.arrow.up")
+            }
+          }
+
+          if !playlist.orderedSongs.isEmpty, let url = playlistM3UShareURL {
+            ShareLink(
+              item: url,
+              subject: Text(playlist.name),
+              message: Text(
+                "Extended M3U playlist from Ampwave with metadata-based track resolution."
+              ),
+              preview: SharePreview(
+                playlist.name,
+                icon: Image(systemName: "music.note.list")
+              )
+            ) {
+              Label("Share M3U Playlist…", systemImage: "music.note.list")
+            }
           }
 
           Button {
@@ -153,6 +192,21 @@ struct PlaylistView: View {
     } message: {
       Text("This action cannot be undone.")
     }
+    .task(id: playlistExportStamp) {
+      guard !playlist.orderedSongs.isEmpty else {
+        playlistJSONShareURL = nil
+        playlistM3UShareURL = nil
+        return
+      }
+      playlistJSONShareURL = try? PlaylistImportExport.writeJSONToTemp(
+        playlist: playlist,
+        library: library
+      )
+      playlistM3UShareURL = try? PlaylistImportExport.writeM3UToTemp(
+        playlist: playlist,
+        library: library
+      )
+    }
   }
 
   private var platformListStyle: some ListStyle {
@@ -201,7 +255,7 @@ struct PlaylistView: View {
         }
       }
 
-      if !playlist.songs.isEmpty {
+      if !playlist.orderedSongs.isEmpty {
         HStack(spacing: 16) {
           Button {
             playback.playPlaylist(playlist)
@@ -221,7 +275,7 @@ struct PlaylistView: View {
           Button {
             playback.shuffleMode = .on
             let randomStartIndex = Int.random(
-              in: 0..<playlist.songs.count
+              in: 0..<playlist.orderedSongs.count
             )
             playback.playPlaylist(
               playlist,

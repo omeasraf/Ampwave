@@ -5,6 +5,7 @@
 //  Main app entry point for Ampwave music player.
 //
 
+import AppIntents
 import SwiftData
 internal import SwiftUI
 
@@ -73,6 +74,11 @@ struct AmpwaveApp: App {
       // Setup preferences and theme
       _ = UserPreferences.getOrCreate(in: context)
 
+      // Update Siri App Shortcuts
+      if #available(iOS 17.0, macOS 14.0, *) {
+        AmpwaveShortcuts.updateAppShortcutParameters()
+      }
+
     } catch {
       fatalError("Could not initialize ModelContainer: \(error)")
     }
@@ -98,6 +104,7 @@ struct AmpwaveApp: App {
         #endif
       }
       .environment(ThemeManager.shared)
+      .onOpenURL { AmpwaveURLRouter.handle($0) }
     }
     .modelContainer(modelContainer)
 

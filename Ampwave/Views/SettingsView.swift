@@ -7,10 +7,16 @@ import SwiftData
 internal import SwiftUI
 import UniformTypeIdentifiers
 
+enum ImportType {
+  case file
+  case folder
+  case playlist
+}
+
 struct SettingsView: View {
   @Environment(\.modelContext) private var modelContext
-  @State private var isPresentingImporter = false
-  @State private var isImportingFolder = false
+  @State private var importType: ImportType?
+  @State private var isShowingImporter = false
   @State private var importError: String?
   @State private var isImporting = false
   @State private var importProgress: Double = 0
@@ -41,6 +47,19 @@ struct SettingsView: View {
 
   @Environment(ThemeManager.self) private var themeManager
 
+  private var allowedContentTypesForImport: [UTType] {
+    switch importType {
+    case .file:
+      return [.audio]
+    case .folder:
+      return [.folder]
+    case .playlist:
+      return PlaylistImportExport.importableContentTypes
+    case .none:
+      return [.audio]
+    }
+  }
+
   var body: some View {
     List {
       importSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -65,16 +84,25 @@ struct SettingsView: View {
     .tint(themeManager.accentColor)
     .navigationTitle("Settings")
     .fileImporter(
-      isPresented: $isPresentingImporter,
-      allowedContentTypes: isImportingFolder ? [.folder] : [.audio],
-      allowsMultipleSelection: !isImportingFolder
+      isPresented: $isShowingImporter,
+      allowedContentTypes: allowedContentTypesForImport,
+      allowsMultipleSelection: importType != .folder && importType != .playlist
     ) { result in
+      let currentType = importType
+
       Task { @MainActor in
-        if isImportingFolder {
-          await handleFolderImport(result)
-        } else {
+        switch currentType {
+        case .file:
           await handleFileImport(result)
+        case .folder:
+          await handleFolderImport(result)
+        case .playlist:
+          await handlePlaylistImport(result)
+        case .none:
+          break
         }
+        importType = nil
+        isShowingImporter = false
       }
     }
     .alert("Clear Cache?", isPresented: $showingClearCacheConfirmation) {
@@ -194,14 +222,30 @@ struct SettingsView: View {
             set: { preferences.fullArtworkBackground = $0 }
           ))
 
-        if preferences.fullArtworkBackground ?? false {
-          Toggle(
-            "Show Background Gradient",
-            isOn: Binding(
-              get: { preferences.showFullArtworkGradient ?? false },
-              set: { preferences.showFullArtworkGradient = $0 }
-            ))
-        }
+        Toggle(
+          "Player Glass Background",
+          isOn: Binding(
+            get: { preferences.openPlayerGlassBackground ?? true },
+            set: { preferences.openPlayerGlassBackground = $0 }
+          ))
+
+        Toggle(
+          "Full App Background",
+          isOn: Binding(
+            get: { preferences.fullAppBackground ?? false },
+            set: { preferences.fullAppBackground = $0 }
+          )
+        )
+        .disabled(true)
+
+        //        if preferences.fullArtworkBackground ?? false {
+        //          Toggle(
+        //            "Show Background Gradient",
+        //            isOn: Binding(
+        //              get: { preferences.showFullArtworkGradient ?? false },
+        //              set: { preferences.showFullArtworkGradient = $0 }
+        //            ))
+        //        }
 
         //        Toggle("Mini Player Floating", isOn: Binding(
         //          get: { preferences.miniPlayerFloating ?? false },
@@ -216,18 +260,26 @@ struct SettingsView: View {
   private var importSection: some View {
     Section {
       Button {
-        isImportingFolder = false
-        isPresentingImporter = true
+        importType = .file
+        isShowingImporter = true
       } label: {
         Label("Import Songs", systemImage: "square.and.arrow.down")
       }
       .disabled(isImporting)
 
       Button {
-        isImportingFolder = true
-        isPresentingImporter = true
+        importType = .folder
+        isShowingImporter = true
       } label: {
         Label("Import Folder", systemImage: "folder.badge.plus")
+      }
+      .disabled(isImporting)
+
+      Button {
+        importType = .playlist
+        isShowingImporter = true
+      } label: {
+        Label("Import Playlist", systemImage: "music.note.list")
       }
       .disabled(isImporting)
 
@@ -238,6 +290,20 @@ struct SettingsView: View {
               .scaleEffect(0.8)
             Text(message)
               .foregroundStyle(.secondary)
+          }
+        }
+      } else if case .fetchingMetadata(let current, let total) = library.indexingStatus {
+        VStack(alignment: .leading, spacing: 8) {
+          HStack {
+            ProgressView()
+              .scaleEffect(0.8)
+            if total > 1 {
+              Text("Fetching metadata (\(current + 1)/\(total))…")
+                .foregroundStyle(.secondary)
+            } else {
+              Text("Fetching metadata…")
+                .foregroundStyle(.secondary)
+            }
           }
         }
       } else if isImporting {
@@ -259,9 +325,15 @@ struct SettingsView: View {
     } header: {
       Text("Import")
     } footer: {
-      Text(
-        "Import audio files (MP3, FLAC, WAV, etc.) to your library. Files are copied to the app's storage."
-      )
+      if userPreferences?.copyMusicToStorage ?? true {
+        Text(
+          "Import audio files (MP3, FLAC, WAV, etc.) to your library. Files are copied to the app's storage."
+        )
+      } else {
+        Text(
+          "Import audio files to your library. Files stay in their original location, and the app stores references to them."
+        )
+      }
     }
   }
 
@@ -330,7 +402,10 @@ struct SettingsView: View {
           "Normalize Volume",
           isOn: Binding(
             get: { preferences.normalizeVolume },
-            set: { preferences.normalizeVolume = $0 }
+            set: {
+              preferences.normalizeVolume = $0
+              PlaybackController.shared.refreshAudioEnhancementsFromSettings()
+            }
           )
         )
 
@@ -357,9 +432,14 @@ struct SettingsView: View {
             Text(mode.displayName).tag(mode)
           }
         }
+
       }
     } header: {
       Text("Playback")
+    } footer: {
+      Text(
+        "Playback stays intentionally simple here: focus is on gapless listening, volume consistency, and reliable queue behavior."
+      )
     }
   }
 
@@ -397,9 +477,29 @@ struct SettingsView: View {
             set: { preferences.showLyricsByDefault = $0 }
           )
         )
+
+        Toggle(
+          "Word-synced Lyrics",
+          isOn: Binding(
+            get: { preferences.wordSyncedLyricsEnabled },
+            set: { preferences.wordSyncedLyricsEnabled = $0 }
+          )
+        )
+
+        Toggle(
+          "Copy Imported Music",
+          isOn: Binding(
+            get: { preferences.copyMusicToStorage },
+            set: { preferences.copyMusicToStorage = $0 }
+          )
+        )
       }
     } header: {
       Text("Library")
+    } footer: {
+        Text(
+            "Turn off 'Copy Imported Music' to keep files in their original location; the app will reference them instead."
+        )
     }
   }
 
@@ -427,6 +527,14 @@ struct SettingsView: View {
           isOn: Binding(
             get: { preferences.preferOnlineArtwork },
             set: { preferences.preferOnlineArtwork = $0 }
+          )
+        )
+
+        Toggle(
+          "Prefer Embedded Artwork",
+          isOn: Binding(
+            get: { preferences.preferEmbeddedArtwork },
+            set: { preferences.preferEmbeddedArtwork = $0 }
           )
         )
 
@@ -515,6 +623,18 @@ struct SettingsView: View {
 
   private var dataManagementSection: some View {
     Section {
+      NavigationLink {
+        DuplicateManagementView()
+      } label: {
+        Label("Manage Duplicates", systemImage: "rectangle.on.rectangle")
+      }
+
+      NavigationLink {
+        MetadataQueueView()
+      } label: {
+        Label("Review Missing Metadata", systemImage: "questionmark.circle")
+      }
+
       Button {
         showingClearCacheConfirmation = true
       } label: {
@@ -681,6 +801,37 @@ struct SettingsView: View {
     }
 
     isImporting = false
+  }
+
+  private func handlePlaylistImport(_ result: Result<[URL], Error>) async {
+    importError = nil
+    switch result {
+    case .success(let urls):
+      guard let url = urls.first else { return }
+      let secured = url.startAccessingSecurityScopedResource()
+      defer {
+        if secured {
+          url.stopAccessingSecurityScopedResource()
+        }
+      }
+      do {
+        let data = try Data(contentsOf: url)
+        if library.modelContext == nil {
+          library.setModelContext(modelContext)
+        }
+        _ = try PlaylistImportExport.importPlaylist(
+          data: data,
+          sourceURL: url,
+          into: modelContext,
+          library: library
+        )
+        try modelContext.save()
+      } catch {
+        importError = error.localizedDescription
+      }
+    case .failure(let error):
+      importError = error.localizedDescription
+    }
   }
 
   private func fetchMetadataForNewSongs() async {
@@ -922,7 +1073,9 @@ struct AddThemeView: View {
     .scrollContentBackground(.hidden)
     .tint(themeManager.accentColor)
     .navigationTitle("Custom Colors")
-    .navigationBarTitleDisplayMode(.inline)
+    #if os(iOS)
+      .navigationBarTitleDisplayMode(.inline)
+    #endif
   }
 }
 

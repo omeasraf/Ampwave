@@ -15,11 +15,11 @@ internal import SwiftUI
 struct OpenPlayerView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(ThemeManager.self) private var themeManager
-  @State private var selectedTab: PlayerTab = .lyrics
   @State private var showingQueue = false
   @State private var isLyricsExpanded = false
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
+  @State private var showingTechnicalInfo = false
   @State private var artworkColor: Color = .clear
 
   private var playback: PlaybackController { PlaybackController.shared }
@@ -27,11 +27,6 @@ struct OpenPlayerView: View {
 
   private var availablePlaylists: [Playlist] {
     playlistManager.playlists.filter { $0.playlistType != .likedSongs }
-  }
-
-  enum PlayerTab: String, CaseIterable {
-    case lyrics = "Lyrics"
-    case queue = "Queue"
   }
 
   @Query private var preferencesList: [UserPreferences]
@@ -42,44 +37,74 @@ struct OpenPlayerView: View {
   var body: some View {
     NavigationStack {
       ZStack {
-        themeManager.backgroundColor.ignoresSafeArea()
+        if userPreferences?.fullArtworkBackground ?? true {
+          playerBackground
+        } else {
+          themeManager.backgroundColor
+            .ignoresSafeArea()
+        }
 
         ScrollView {
           VStack(spacing: 0) {
-            if userPreferences?.fullArtworkBackground ?? false {
-              FullArtworkBackgroundView(artworkPath: playback.currentItem?.artworkPath)
+            if userPreferences?.fullArtworkBackground ?? true {
+              FullArtworkBackgroundView(artworkPath: playback.currentItem?.effectiveArtworkPath)
+                .frame(height: 490)
+                .overlay {
+                  LinearGradient(
+                    stops: [
+                      .init(color: .clear, location: 0),
+                      .init(color: .clear, location: 0.6),
+                      .init(color: themeManager.backgroundColor.opacity(0.8), location: 0.85),
+                      .init(color: themeManager.backgroundColor, location: 1.0),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                  )
+                }
             } else {
-              // Large Artwork
               LargeFixedArtworkView(
-                artworkPath: playback.currentItem?.artworkPath
+                artworkPath: playback.currentItem?.effectiveArtworkPath
               )
-              .padding(.top, 20)
-              .padding(.horizontal, 24)
+              .padding(.top, 10)
+              .padding(.bottom, 10)
+              .padding(.horizontal, 32)
             }
 
-            VStack(spacing: 28) {
-              // Track info
+            VStack(spacing: (userPreferences?.fullArtworkBackground ?? true) ? 24 : 22) {
               trackInfoSection
 
-              // Progress
               PlayerProgressView()
 
-              // Playback controls
               PlayerPlaybackControlsView()
 
-              // Extra controls
               extraControls
 
-              // Lyrics/Queue tabs
+              if !(userPreferences?.fullArtworkBackground ?? true) {
+                Spacer(minLength: 30)
+              }
+
               tabSection
             }
-            .padding(.horizontal, 24)
-            .padding(.top, (userPreferences?.fullArtworkBackground ?? false) ? 20 : 0)
-            .padding(.bottom, 30)
+            .padding(.vertical, (userPreferences?.fullArtworkBackground ?? true) ? 24 : 16)
+            .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 24 : 12)
+            .background(
+              Group {
+                if !(userPreferences?.openPlayerGlassBackground ?? true) {
+                  Color.clear
+                } else {
+                  RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(themeManager.cardBackgroundColor)
+                }
+              }
+            )
+
+            .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 16 : 8)
+            .padding(.bottom, 40)
           }
+          .background(themeManager.backgroundColor)
         }
         .scrollContentBackground(.hidden)
-        .ignoresSafeArea(edges: .top)
+        .ignoresSafeArea(edges: (userPreferences?.fullArtworkBackground ?? true) ? .top : [])
       }
       .navigationTitle("Now Playing")
       #if os(iOS)
@@ -119,7 +144,9 @@ struct OpenPlayerView: View {
           }
         }
       }
-      .toolbarBackground(.hidden, for: .navigationBar)
+      #if os(iOS)
+        .toolbarBackground(.hidden, for: .navigationBar)
+      #endif
       .confirmationDialog(
         "Add Song to Playlist",
         isPresented: $showingAddToPlaylist
@@ -158,13 +185,28 @@ struct OpenPlayerView: View {
     }
   }
 
+  private var playerBackground: some View {
+    ZStack {
+      LinearGradient(
+        colors: [
+          artworkColor.opacity(0.95),
+          themeManager.backgroundColor,
+          themeManager.backgroundColor.opacity(0.96),
+        ],
+        startPoint: .top,
+        endPoint: .bottom
+      )
+      .ignoresSafeArea()
+    }
+  }
+
   private var trackInfoSection: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 14) {
       HStack {
         VStack(alignment: .leading, spacing: 6) {
           Text(playback.currentItem?.title ?? "Not Playing")
-            .font(.system(size: 22, weight: .bold))
-            .lineLimit(1)
+            .font(.system(size: 28, weight: .bold, design: .rounded))
+            .lineLimit(2)
             .foregroundStyle(.primary)
 
           if let song = playback.currentItem,
@@ -172,16 +214,20 @@ struct OpenPlayerView: View {
           {
             NavigationLink(destination: ArtistView(artist: artist)) {
               Text(song.artist)
-                .font(.system(size: 18))
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             }
             .buttonStyle(.plain)
           } else {
             Text(playback.currentItem?.artist ?? "")
-              .font(.system(size: 18))
+              .font(.system(size: 18, weight: .medium))
               .foregroundStyle(.secondary)
               .lineLimit(1)
+          }
+
+          if let song = playback.currentItem {
+            technicalBadge(for: song)
           }
         }
 
@@ -201,18 +247,15 @@ struct OpenPlayerView: View {
               PlaylistManager.shared.isLiked(song: song)
                 ? themeManager.accentColor : .primary
             )
+            .frame(width: 46, height: 46)
+            .background(
+              .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
           }
           .contentTransition(.symbolEffect(.replace))
         }
       }
-
-      if let song = playback.currentItem {
-        technicalBadge(for: song)
-      }
     }
   }
-
-  @State private var showingTechnicalInfo = false
 
   private func technicalBadge(for song: LibrarySong) -> some View {
     Button {
@@ -249,42 +292,40 @@ struct OpenPlayerView: View {
 
   private func formatSampleRate(_ rate: Double) -> String {
     if rate >= 1000 {
-      return String(format: "%.1fkHz", rate / 1000)
+      return String(format: "%.1f kHz", rate / 1000)
     } else {
-      return String(format: "%.0fHz", rate)
+      return String(format: "%.0f Hz", rate)
     }
   }
 
   private var extraControls: some View {
-    VStack(spacing: 24) {
-      HStack(spacing: 48) {
-        Button {
-          playback.toggleShuffle()
-        } label: {
-          Image(systemName: "shuffle")
-            .font(.system(size: 22))
-            .foregroundStyle(
-              playback.shuffleMode != .off ? themeManager.accentColor : .secondary
-            )
-        }
+    HStack(spacing: 12) {
+      playerUtilityButton(
+        icon: "text.quote",
+        isActive: isLyricsExpanded
+      ) {
+        isLyricsExpanded = true
+      }
 
-        Button {
-          playback.cycleRepeatMode()
-        } label: {
-          Image(systemName: repeatIcon)
-            .font(.system(size: 22))
-            .foregroundStyle(repeatColor)
-        }
+      playerUtilityButton(
+        icon: "shuffle",
+        isActive: playback.shuffleMode != .off
+      ) {
+        playback.toggleShuffle()
+      }
 
-        Button {
-          showingQueue = true
-        } label: {
-          Image(systemName: "list.bullet")
-            .font(.system(size: 22))
-        }
-        .sheet(isPresented: $showingQueue) {
-          QueueSheetView()
-        }
+      playerUtilityButton(
+        icon: repeatIcon,
+        isActive: playback.repeatMode != .off
+      ) {
+        playback.cycleRepeatMode()
+      }
+
+      playerUtilityButton(icon: "list.bullet", isActive: false) {
+        showingQueue = true
+      }
+      .sheet(isPresented: $showingQueue) {
+        QueueSheetView()
       }
     }
   }
@@ -308,12 +349,32 @@ struct OpenPlayerView: View {
         onExpand: {
           isLyricsExpanded = true
         }
-      )
+      ).padding(.top, 10)
     }
   }
 
+  private func playerUtilityButton(
+    icon: String,
+    isActive: Bool,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: icon)
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(isActive ? themeManager.accentColor : .primary)
+        .frame(maxWidth: .infinity)
+        .frame(height: 50)
+        .background(
+            (userPreferences?.openPlayerGlassBackground ?? true)
+                ? AnyView(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.thinMaterial))
+                : AnyView(Color.clear)
+        )
+    }
+    .buttonStyle(.plain)
+  }
+
   private func updateArtworkColor() async {
-    guard let path = playback.currentItem?.artworkPath,
+    guard let path = playback.currentItem?.effectiveArtworkPath,
       let url = PathManager.resolve(path)
     else {
       artworkColor = .clear
@@ -361,6 +422,7 @@ private struct PlayerProgressView: View {
         in: 0...1
       )
       .tint(.primary)
+      .padding(.top, 2)
 
       HStack {
         Text(formatTime(playback.currentTime))
@@ -394,6 +456,8 @@ private struct PlayerPlaybackControlsView: View {
       } label: {
         Image(systemName: "backward.fill")
           .font(.system(size: 28))
+          .frame(width: 52, height: 52)
+          .background(.thinMaterial, in: Circle())
       }
 
       Button {
@@ -405,6 +469,7 @@ private struct PlayerPlaybackControlsView: View {
         )
         .font(.system(size: 72))
       }
+      .foregroundStyle(.primary)
       .contentTransition(.symbolEffect(.replace))
 
       Button {
@@ -412,9 +477,10 @@ private struct PlayerPlaybackControlsView: View {
       } label: {
         Image(systemName: "forward.fill")
           .font(.system(size: 28))
+          .frame(width: 52, height: 52)
+          .background(.thinMaterial, in: Circle())
       }
     }
-    .foregroundStyle(.primary)
   }
 }
 
@@ -503,3 +569,4 @@ struct TechnicalInfoSheet: View {
     }
   }
 }
+

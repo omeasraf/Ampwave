@@ -112,7 +112,7 @@ struct ArtistImageView: View {
       }
     }
     .frame(width: size, height: size)
-    .clipShape(Circle())
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     .task(id: artworkPath) {
       await loadImage()
     }

@@ -10,6 +10,7 @@ struct FullArtworkBackgroundView: View {
   let artworkPath: String?
   @State private var image: PlatformImage?
   @Environment(ThemeManager.self) private var themeManager
+  @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
   @Query private var preferencesList: [UserPreferences]
 
   private var userPreferences: UserPreferences? { preferencesList.first }
@@ -21,7 +22,7 @@ struct FullArtworkBackgroundView: View {
   var body: some View {
     GeometryReader { geometry in
       let size = geometry.size
-      ZStack(alignment: .bottom) {
+      ZStack(alignment: .center) {
         if let image = image {
           #if os(iOS)
             Image(uiImage: image)
@@ -44,28 +45,8 @@ struct FullArtworkBackgroundView: View {
                 .foregroundStyle(.secondary)
             )
         }
-
-        if userPreferences?.showFullArtworkGradient ?? true {
-          // Bottom feathering: accent wash then blend into app background
-          LinearGradient(
-            stops: [
-              .init(color: .clear, location: 0),
-              .init(color: .clear, location: 0.2),
-              .init(color: themeManager.accentColor.opacity(0.03), location: 0.4),
-              .init(color: themeManager.accentColor.opacity(0.1), location: 0.6),
-              .init(color: themeManager.backgroundColor.opacity(0.3), location: 0.75),
-              .init(color: themeManager.backgroundColor.opacity(0.6), location: 0.85),
-              .init(color: themeManager.backgroundColor.opacity(0.85), location: 0.93),
-              .init(color: themeManager.backgroundColor.opacity(0.95), location: 0.97),
-              .init(color: themeManager.backgroundColor, location: 1.0),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-          )
-        }
       }
     }
-    .frame(height: 520)
     .task(id: artworkPath) {
       await loadImage()
     }

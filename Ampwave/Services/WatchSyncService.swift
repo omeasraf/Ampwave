@@ -70,7 +70,7 @@ final class WatchSyncService: NSObject {
       if shouldSync {
         sendPlaylistToWatch(playlist)
         // Also sync all songs in the playlist
-        for song in playlist.songs {
+        for song in playlist.orderedSongs {
           if !song.shouldSyncToWatch {
             updateSyncStatus(for: song, shouldSync: true)
           }
@@ -143,7 +143,7 @@ final class WatchSyncService: NSObject {
       ]
       session.transferUserInfo(metadata)
 
-      if let artworkPath = song.artworkPath, let artworkURL = PathManager.resolve(artworkPath) {
+      if let artworkPath = song.effectiveArtworkPath, let artworkURL = PathManager.resolve(artworkPath) {
         if FileManager.default.fileExists(atPath: artworkURL.path) {
           session.transferFile(artworkURL, metadata: ["type": "artwork", "id": song.id.uuidString])
         }
@@ -166,7 +166,7 @@ final class WatchSyncService: NSObject {
         "type": "playlist_metadata",
         "id": playlist.id.uuidString,
         "name": playlist.name,
-        "songIds": playlist.songs.map { $0.id.uuidString },
+        "songIds": playlist.orderedSongs.map { $0.id.uuidString },
       ]
       session.transferUserInfo(metadata)
     }

@@ -192,8 +192,10 @@ final class PlaylistManager {
   }
 
   func removeSongs(at offsets: IndexSet, from playlist: Playlist) {
-    playlist.songs.remove(atOffsets: offsets)
-    playlist.touch()
+    let songsToRemove = offsets.map { playlist.orderedSongs[$0] }
+    for song in songsToRemove {
+      playlist.removeSong(song)
+    }
     save()
   }
 
@@ -307,6 +309,7 @@ final class PlaylistManager {
 
     // Update playlist songs
     playlist.songs = limitedSongs
+    playlist.songOrder = limitedSongs.map { $0.id }
     playlist.touch()
 
     save()

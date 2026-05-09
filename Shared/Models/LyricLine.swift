@@ -5,15 +5,30 @@
 
 import Foundation
 
-public struct LyricLine: Codable, Hashable {
+public struct WordOffset: Codable, Hashable, Sendable {
+  public var timestamp: TimeInterval
+  public var text: String
+
+  public init(timestamp: TimeInterval, text: String) {
+    self.timestamp = timestamp
+    self.text = text
+  }
+}
+
+public struct LyricLine: Codable, Hashable, Sendable {
   public var timestamp: TimeInterval
   public var text: String
   public var translation: String?
+  public var wordOffsets: [WordOffset]?
 
-  public init(timestamp: TimeInterval, text: String, translation: String? = nil) {
+  public init(
+    timestamp: TimeInterval, text: String, translation: String? = nil,
+    wordOffsets: [WordOffset]? = nil
+  ) {
     self.timestamp = timestamp
     self.text = text
     self.translation = translation
+    self.wordOffsets = wordOffsets
   }
 
   public var formattedTime: String {

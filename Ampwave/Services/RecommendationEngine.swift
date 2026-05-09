@@ -80,104 +80,78 @@ final class RecommendationEngine {
   /// Generates personalized "For You" recommendations
   /// Based on: listening history, liked songs, similar artists/genres
   func generateForYouRecommendations(limit: Int = 20) async -> [Recommendation] {
-    var recommendations: [Recommendation] = []
-
-    // Get recently played songs (mix of familiar and new)
     let recentlyPlayed = historyTracker.getRecentlyPlayed(limit: 10)
-
-    // Get most played songs (top 20)
     let mostPlayed = historyTracker.getMostPlayed(limit: 20)
+    let likedSongs = await getLikedSongs() ?? []
+    let favoriteGenres = extractGenres(from: recentlyPlayed + likedSongs + mostPlayed.map(\.song))
+    let favoriteArtists = Set(
+      recentlyPlayed.prefix(6).map(\.artist) + mostPlayed.prefix(10).map { $0.song.artist }
+    )
+    let recentIds = Set(recentlyPlayed.map(\.id))
+    let nowPlayingId = PlaybackController.shared.currentItem?.id
+    let statsBySongId = statisticsBySongID()
 
-    // 1. Find songs similar to recently played
-    if !recentlyPlayed.isEmpty {
-      let similarToRecent = findSimilarSongs(to: recentlyPlayed, exclude: recentlyPlayed, limit: 5)
-      recommendations.append(
-        contentsOf: similarToRecent.map {
-          Recommendation(
-            item: .song($0),
-            reason: .similarToRecent,
-            confidence: 0.85
-          )
-        })
-    }
+    let scoredCandidates = library.songs.compactMap {
+      song -> (song: LibrarySong, score: Double, reason: RecommendationReason)? in
+      guard song.id != nowPlayingId else { return nil }
 
-    // 2. Heavy rotation: Songs played many times
-    if !mostPlayed.isEmpty {
-      let heavyRotation = mostPlayed.prefix(10).map { $0.song }
-      recommendations.append(
-        contentsOf: heavyRotation.map {
-          Recommendation(
-            item: .song($0),
-            reason: .heavyRotation,
-            confidence: 0.9
-          )
-        })
+      var score = baseRecommendationScore(for: song, statsBySongId: statsBySongId)
+      var reason: RecommendationReason = .discovery
 
-      // Also find more from these artists
-      let topArtists = Set(mostPlayed.prefix(5).map { $0.song.artist })
-      let fromFavoriteArtists = library.songs.filter { song in
-        topArtists.contains(song.artist) && !recentlyPlayed.contains(where: { $0.id == song.id })
-      }.prefix(5)
-      recommendations.append(
-        contentsOf: fromFavoriteArtists.map {
-          Recommendation(
-            item: .song($0),
-            reason: .fromFavoriteArtist,
-            confidence: 0.8
-          )
-        })
-    }
-
-    // 3. Find songs from same genres as liked songs
-    if let likedSongs = await getLikedSongs(), !likedSongs.isEmpty {
-      let likedGenres = extractGenres(from: likedSongs)
-      if !likedGenres.isEmpty {
-        let genreMatches = findSongsByGenres(likedGenres, exclude: recentlyPlayed, limit: 5)
-        recommendations.append(
-          contentsOf: genreMatches.map {
-            Recommendation(
-              item: .song($0),
-              reason: .basedOnGenres,
-              confidence: 0.7
-            )
-          })
+      if recentIds.contains(song.id) {
+        score -= 2.8
       }
-    }
 
-    // 4. Add some recently added songs
-    let recentlyAdded = getRecentlyAddedSongs(exclude: recentlyPlayed, limit: 3)
-    recommendations.append(
-      contentsOf: recentlyAdded.map {
-        Recommendation(
-          item: .song($0),
-          reason: .recentlyAdded,
-          confidence: 0.6
-        )
-      })
+      let artistMatch = favoriteArtists.contains(song.artist)
+      let genreOverlap = favoriteGenres.intersection(extractGenres(from: [song])).count
 
-    // 5. Add some random songs from library for variety (if we don't have enough)
-    if recommendations.count < limit {
-      let existingIds = Set(recommendations.compactMap { $0.itemId })
-      let randomSongs = library.songs
-        .filter {
-          !existingIds.contains($0.id) && !recentlyPlayed.contains(where: { $0.id == $0.id })
+      if artistMatch {
+        score += 2.2
+        reason = .fromFavoriteArtist
+      }
+
+      if genreOverlap > 0 {
+        score += Double(genreOverlap) * 1.2
+        if reason == .discovery {
+          reason = .basedOnGenres
         }
-        .shuffled()
-        .prefix(limit - recommendations.count)
+      }
 
-      recommendations.append(
-        contentsOf: randomSongs.map {
-          Recommendation(
-            item: .song($0),
-            reason: .discovery,
-            confidence: 0.5
-          )
-        })
+      let similarity = similarityScore(for: song, references: recentlyPlayed)
+      if similarity > 0 {
+        score += similarity
+        if similarity >= 1.3 {
+          reason = .similarToRecent
+        }
+      }
+
+      let freshnessDays = Date().timeIntervalSince(song.importedDate) / 86_400
+      if freshnessDays <= 21 {
+        score += max(0.15, 1.3 - freshnessDays / 14)
+        if reason == .discovery {
+          reason = .recentlyAdded
+        }
+      }
+
+      if let stats = statsBySongId[song.id], stats.playCount > 12 {
+        score -= min(1.4, Double(stats.playCount) / 18)
+      }
+
+      return score > 0.2 ? (song, score, reason) : nil
     }
 
-    // Sort by confidence and remove duplicates
-    let uniqueRecommendations = removeDuplicates(from: recommendations)
-    return Array(uniqueRecommendations.prefix(limit))
+    let selected = diversify(
+      scoredCandidates.sorted { $0.score > $1.score },
+      limit: limit
+    )
+
+    return selected.map {
+      Recommendation(
+        item: .song($0.song),
+        reason: $0.reason,
+        confidence: min(max($0.score / 7.5, 0.35), 0.98)
+      )
+    }
   }
 
   // MARK: - Similar Songs
@@ -288,8 +262,7 @@ final class RecommendationEngine {
 
     for (genre, count) in favoriteGenres {
       let genreSongs = library.songs.filter { song in
-        guard let songGenre = song.genre else { return false }
-        return songGenre.lowercased().contains(genre.lowercased())
+        extractGenres(from: [song]).contains(genre.lowercased())
       }.prefix(limit / favoriteGenres.count + 1)
 
       recommendations.append(
@@ -343,9 +316,16 @@ final class RecommendationEngine {
     let playedArtists = Set(mostPlayed.map { $0.song.artist })
 
     // Find songs from artists not in most played
-    let discoverySongs = library.songs.filter { song in
-      !playedArtists.contains(song.artist)
-    }.shuffled().prefix(limit)
+    let statsBySongId = statisticsBySongID()
+    let discoverySongs = library.songs
+      .filter { song in
+        !playedArtists.contains(song.artist) && (statsBySongId[song.id]?.skipCount ?? 0) < 4
+      }
+      .sorted {
+        discoveryScore(for: $0, statsBySongId: statsBySongId)
+          > discoveryScore(for: $1, statsBySongId: statsBySongId)
+      }
+      .prefix(limit)
 
     // If we don't have enough, include some from played artists too
     if discoverySongs.count < limit {
@@ -516,7 +496,7 @@ final class RecommendationEngine {
   /// Generates smart playlist recommendations
   func generatePlaylistRecommendations(for playlist: Playlist, limit: Int = 20) -> [Recommendation]
   {
-    let playlistSongs = playlist.songs
+    let playlistSongs = playlist.orderedSongs
 
     guard !playlistSongs.isEmpty else {
       return []
@@ -548,6 +528,13 @@ final class RecommendationEngine {
     return library.songs.filter { likedSongIds.contains($0.id) }
   }
 
+  private func statisticsBySongID() -> [UUID: SongPlayStatistics] {
+    guard let modelContext else { return [:] }
+    let descriptor = FetchDescriptor<SongPlayStatistics>()
+    let stats = (try? modelContext.fetch(descriptor)) ?? []
+    return Dictionary(uniqueKeysWithValues: stats.map { ($0.songId, $0) })
+  }
+
   private func extractGenres(from songs: [LibrarySong]) -> Set<String> {
     var genres: Set<String> = []
     for song in songs {
@@ -572,9 +559,8 @@ final class RecommendationEngine {
     var genreCounts: [String: Int] = [:]
 
     for song in songs {
-      if let genre = song.genre {
-        let normalized = genre.trimmingCharacters(in: .whitespaces).lowercased()
-        genreCounts[normalized, default: 0] += 1
+      for genre in extractGenres(from: [song]) {
+        genreCounts[genre, default: 0] += 1
       }
     }
 
@@ -590,10 +576,8 @@ final class RecommendationEngine {
 
     return library.songs.filter { song in
       guard !excludeIds.contains(song.id) else { return false }
-      guard let songGenre = song.genre else { return false }
-
-      let normalizedGenre = songGenre.trimmingCharacters(in: .whitespaces).lowercased()
-      return genres.contains(normalizedGenre)
+      let songGenres = extractGenres(from: [song])
+      return !songGenres.intersection(genres).isEmpty
     }.prefix(limit).map { $0 }
   }
 
@@ -639,12 +623,125 @@ final class RecommendationEngine {
   private func removeDuplicates(from recommendations: [Recommendation]) -> [Recommendation] {
     var seenIds = Set<UUID>()
     return recommendations.filter { recommendation in
-      let id = recommendation.id
+      guard let id = recommendation.itemId else { return true }
       if seenIds.contains(id) {
         return false
       }
       seenIds.insert(id)
       return true
     }
+  }
+
+  private func baseRecommendationScore(
+    for song: LibrarySong,
+    statsBySongId: [UUID: SongPlayStatistics]
+  ) -> Double {
+    var score = 0.5
+
+    if let stats = statsBySongId[song.id] {
+      score += min(Double(stats.playCount) * 0.08, 1.4)
+      if stats.isLiked { score += 2.0 }
+      if stats.isDisliked { score -= 2.5 }
+      score -= min(Double(stats.skipCount) * 0.35, 1.75)
+
+      if let lastPlayedAt = stats.lastPlayedAt {
+        let daysAgo = Date().timeIntervalSince(lastPlayedAt) / 86_400
+        if daysAgo > 2 && daysAgo < 45 {
+          score += min(daysAgo / 12, 1.2)
+        }
+      }
+    } else {
+      score += 0.8
+    }
+
+    return score
+  }
+
+  private func similarityScore(for song: LibrarySong, references: [LibrarySong]) -> Double {
+    guard !references.isEmpty else { return 0 }
+
+    var score = 0.0
+    let songGenres = extractGenres(from: [song])
+
+    for reference in references {
+      if song.artist.caseInsensitiveCompare(reference.artist) == .orderedSame {
+        score += 1.0
+      }
+
+      if song.album == reference.album, song.album != nil {
+        score += 0.7
+      }
+
+      let overlap = songGenres.intersection(extractGenres(from: [reference])).count
+      score += Double(overlap) * 0.45
+
+      if let year = song.year, let referenceYear = reference.year {
+        let distance = abs(year - referenceYear)
+        if distance <= 4 {
+          score += 0.35
+        }
+      }
+    }
+
+    return min(score, 2.2)
+  }
+
+  private func discoveryScore(
+    for song: LibrarySong,
+    statsBySongId: [UUID: SongPlayStatistics]
+  ) -> Double {
+    var score = 1.0
+    let ageInDays = Date().timeIntervalSince(song.importedDate) / 86_400
+    score += max(0, 1.2 - ageInDays / 30)
+    if let stats = statsBySongId[song.id] {
+      score -= Double(stats.playCount) * 0.04
+      score -= Double(stats.skipCount) * 0.3
+      if stats.isLiked { score += 0.6 }
+    }
+    if song.effectiveArtworkPath != nil { score += 0.2 }
+    if song.genre != nil { score += 0.15 }
+    return score
+  }
+
+  private func diversify(
+    _ candidates: [(song: LibrarySong, score: Double, reason: RecommendationReason)],
+    limit: Int
+  ) -> [(song: LibrarySong, score: Double, reason: RecommendationReason)] {
+    var selected: [(song: LibrarySong, score: Double, reason: RecommendationReason)] = []
+    var artistCounts: [String: Int] = [:]
+    var albumCounts: [String: Int] = [:]
+    var seenSongIDs = Set<UUID>()
+
+    for candidate in candidates {
+      guard !seenSongIDs.contains(candidate.song.id) else { continue }
+      let artistCount = artistCounts[candidate.song.artist, default: 0]
+      let albumKey = "\(candidate.song.artist)|\(candidate.song.album ?? "")"
+      let albumCount = albumCounts[albumKey, default: 0]
+
+      if artistCount >= 2 || albumCount >= 2 {
+        continue
+      }
+
+      selected.append(candidate)
+      seenSongIDs.insert(candidate.song.id)
+      artistCounts[candidate.song.artist, default: 0] += 1
+      albumCounts[albumKey, default: 0] += 1
+
+      if selected.count == limit {
+        return selected
+      }
+    }
+
+    if selected.count < limit {
+      for candidate in candidates where !seenSongIDs.contains(candidate.song.id) {
+        selected.append(candidate)
+        seenSongIDs.insert(candidate.song.id)
+        if selected.count == limit {
+          break
+        }
+      }
+    }
+
+    return selected
   }
 }

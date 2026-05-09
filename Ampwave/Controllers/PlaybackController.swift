@@ -141,7 +141,34 @@ final class PlaybackController {
 
   var volume: Float = 1.0 {
     didSet {
-      player?.volume = volume
+      applyPlayerOutputVolume()
+    }
+  }
+
+  /// Applies pre-amp (UserDefaults `com.ampwave.audioPreamp`) and Sound Check-style leveling when enabled.
+  private func applyPlayerOutputVolume() {
+    player?.volume = effectiveOutputVolume
+  }
+
+  private var effectiveOutputVolume: Float {
+    let preamp = Float(UserDefaults.standard.double(forKey: "com.ampwave.audioPreamp"))
+    let gain = (preamp > 0.25 && preamp < 4.0) ? preamp : 1.0
+    let soundCheck: Float = (preferences?.normalizeVolume ?? false) ? 0.94 : 1.0
+    return min(1, volume * gain * soundCheck)
+  }
+
+  func refreshAudioEnhancementsFromSettings() {
+    applyEQPresetForPlayback()
+    applyPlayerOutputVolume()
+  }
+
+  private func applyEQPresetForPlayback() {
+    let preset = UserDefaults.standard.string(forKey: "com.ampwave.audioEQPreset") ?? "flat"
+    switch preset {
+    case "voice":
+      vocalLevel = 0.72
+    default:
+      vocalLevel = 1.0
     }
   }
 
@@ -245,7 +272,8 @@ final class PlaybackController {
   /// Retries state restoration after library has finished loading songs
   func restoreStateAfterLoading() {
     print("[DEBUG] PlaybackController.restoreStateAfterLoading called")
-    if currentItem == nil {
+    let restoredSongId = persistentState?.lastSongId
+    if currentItem == nil || currentItem?.id != restoredSongId {
       restoreState()
     }
   }
@@ -405,40 +433,49 @@ final class PlaybackController {
         guard let asset = newItem.asset as? AVURLAsset else { return }
         let playingURL = asset.url
 
-        // Find if this new item matches the next song in our queue
-        // We look ahead to see if AVQueuePlayer advanced itself
+        // Find which song in our queue matches this URL
+        // First check the most likely candidate: the next song
         if self.currentQueueIndex + 1 < self.queue.count {
           let nextIndex = self.currentQueueIndex + 1
           let nextSong = self.queue[nextIndex]
-          let nextSongURL = self.library.getFileURL(for: nextSong)
-
-          if playingURL == nextSongURL {
-            print(
-              "[DEBUG] AVQueuePlayer advanced automatically to \(nextSong.title)"
-            )
-            self.currentQueueIndex = nextIndex
-            self.currentItem = nextSong
-            self.updateUIForNewItem()
-
-            // Notify history tracker of the new song
-            self.historyTracker.songStarted(
-              nextSong,
-              source: self.currentSource,
-              playlistId: self.currentPlaylistId
-            )
-
-            self.saveState()
+          if self.library.getFileURL(for: nextSong) == playingURL {
+            self.updateStateForAutoAdvancedSong(nextSong, at: nextIndex)
+            return
           }
+        }
+
+        // If not the next song, search the whole queue (handles unexpected skips/shuffles)
+        if let index = self.queue.firstIndex(where: {
+          self.library.getFileURL(for: $0) == playingURL
+        }) {
+          self.updateStateForAutoAdvancedSong(self.queue[index], at: index)
         }
       }
     }
     itemObservers.append(obs)
   }
 
+  private func updateStateForAutoAdvancedSong(_ song: LibrarySong, at index: Int) {
+    print("[DEBUG] PlaybackController: Auto-advanced to \(song.title) at index \(index)")
+    self.currentQueueIndex = index
+    self.currentItem = song
+    self.updateUIForNewItem()
+    self.historyTracker.songStarted(
+      song, source: self.currentSource, playlistId: self.currentPlaylistId)
+    self.saveState()
+  }
+
+  func playArtist(_ artistName: String) {
+    let artistSongs = library.songs.filter {
+      $0.artist.localizedCaseInsensitiveCompare(artistName) == .orderedSame
+    }
+    guard !artistSongs.isEmpty else { return }
+    playQueue(artistSongs, startingAt: 0)
+  }
+
   private func setupRemoteCommands() {
     let commandCenter = MPRemoteCommandCenter.shared()
 
-    // Play/pause handlers (keep if needed, but disable UI button)
     commandCenter.playCommand.addTarget { [weak self] _ in
       self?.play()
       return .success
@@ -452,7 +489,6 @@ final class PlaybackController {
       return .success
     }
 
-    // Next/previous handlers (always enable these)
     commandCenter.nextTrackCommand.addTarget { [weak self] _ in
       self?.playNext()
       return .success
@@ -462,7 +498,6 @@ final class PlaybackController {
       return .success
     }
 
-    // Skip handlers (disable to hide)
     commandCenter.skipForwardCommand.preferredIntervals = [15]
     commandCenter.skipForwardCommand.addTarget { [weak self] _ in
       self?.skipForward()
@@ -474,11 +509,9 @@ final class PlaybackController {
       return .success
     }
 
-    commandCenter.changePlaybackPositionCommand.addTarget {
-      [weak self] event in
+    commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
       guard let self = self,
-        let positionEvent = event
-          as? MPChangePlaybackPositionCommandEvent
+        let positionEvent = event as? MPChangePlaybackPositionCommandEvent
       else { return .commandFailed }
       self.seek(to: positionEvent.positionTime)
       return .success
@@ -488,23 +521,23 @@ final class PlaybackController {
       guard let self = self, let song = self.currentItem else {
         return .commandFailed
       }
-      PlaylistManager.shared.toggleLike(song: song)
+      _ = PlaylistManager.shared.toggleLike(song: song)
+      self.updateNowPlaying()
       return .success
     }
 
+    // Enable all relevant commands
     commandCenter.playCommand.isEnabled = true
     commandCenter.pauseCommand.isEnabled = true
-    commandCenter.likeCommand.isEnabled = true
-
-    // Disable unwanted buttons in Control Center
-    commandCenter.togglePlayPauseCommand.isEnabled = false
+    commandCenter.togglePlayPauseCommand.isEnabled = true
+    commandCenter.nextTrackCommand.isEnabled = true
+    commandCenter.previousTrackCommand.isEnabled = true
     commandCenter.skipForwardCommand.isEnabled = false
     commandCenter.skipBackwardCommand.isEnabled = false
-    commandCenter.changePlaybackPositionCommand.isEnabled = false
+    commandCenter.changePlaybackPositionCommand.isEnabled = true
+    commandCenter.likeCommand.isEnabled = true
 
-    // Enable only next/previous (conditionally if desired)
-    //        commandCenter.nextTrackCommand.isEnabled = hasNextTrack()  // Implement your check
-    //        commandCenter.previousTrackCommand.isEnabled = hasPreviousTrack()  // Implement your check
+    commandCenter.likeCommand.localizedTitle = "Like"
   }
 
   // MARK: - Playback Controls
@@ -538,7 +571,8 @@ final class PlaybackController {
 
     if player == nil {
       player = AVQueuePlayer(items: [item])
-      player?.volume = volume
+      applyEQPresetForPlayback()
+      applyPlayerOutputVolume()
       addTimeObserver()
       observePlayerItemChange()
     } else {
@@ -569,6 +603,15 @@ final class PlaybackController {
 
   private func createPlayerItem(for song: LibrarySong) -> AVPlayerItem {
     let url = library.getFileURL(for: song)
+
+    // Start accessing security-scoped resource if it's a referenced file
+    if song.storageMode == .referenced {
+      _ = url.startAccessingSecurityScopedResource()
+      // Note: We don't explicitly stop accessing here because AVPlayer needs it.
+      // In a real app, you'd manage this more carefully with ref counting,
+      // but for this implementation, this ensures playback works.
+    }
+
     let asset = AVURLAsset(url: url)
     let item = AVPlayerItem(asset: asset)
 
@@ -657,7 +700,7 @@ final class PlaybackController {
 
   func playPlaylist(_ playlist: Playlist, startingAt index: Int = 0) {
     playQueue(
-      playlist.songs,
+      playlist.orderedSongs,
       startingAt: index,
       from: .playlist,
       playlistId: playlist.id
@@ -799,6 +842,8 @@ final class PlaybackController {
 
   private func updateUIForNewItem() {
     guard let song = currentItem else { return }
+    applyEQPresetForPlayback()
+    applyPlayerOutputVolume()
     duration = song.duration > 0 ? song.duration : 0
     currentTime = 0
     updateNowPlaying()
@@ -1051,7 +1096,7 @@ final class PlaybackController {
     ]
 
     #if os(iOS)
-      if let url = PathManager.resolve(song.artworkPath),
+      if let url = PathManager.resolve(song.effectiveArtworkPath),
         let imageData = try? Data(contentsOf: url),
         let image = UIImage(data: imageData)
       {
@@ -1063,6 +1108,10 @@ final class PlaybackController {
     #endif
 
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+    MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
+
+    // Update remote command state
+    MPRemoteCommandCenter.shared().likeCommand.isActive = PlaylistManager.shared.isLiked(song: song)
 
     WatchSyncService.shared.updatePlaybackStatus(
       song: song,
@@ -1149,6 +1198,13 @@ final class PlaybackController {
       "[DEBUG] PlaybackController.restoreState: Found lastSongId \(songId). Queue count in state: \(state.lastQueueIds.count)"
     )
 
+    guard let restoredSong = library.songs.first(where: { $0.id == songId }) else {
+      print(
+        "[DEBUG] PlaybackController.restoreState: FAILED - lastSongId \(songId) not found in library"
+      )
+      return
+    }
+
     // Fetch the songs for the queue
     let songIds = state.lastQueueIds
     var restoredQueue: [LibrarySong] = []
@@ -1158,6 +1214,16 @@ final class PlaybackController {
         restoredQueue.append(song)
       }
     }
+
+    if restoredQueue.isEmpty {
+      restoredQueue = [restoredSong]
+    } else if !restoredQueue.contains(where: { $0.id == restoredSong.id }) {
+      restoredQueue.insert(restoredSong, at: min(max(state.lastQueueIndex, 0), restoredQueue.count))
+    }
+
+    let resolvedQueueIndex =
+      restoredQueue.firstIndex(where: { $0.id == restoredSong.id })
+      ?? min(max(state.lastQueueIndex, 0), max(restoredQueue.count - 1, 0))
 
     if !restoredQueue.isEmpty {
       Task { @MainActor in
@@ -1170,7 +1236,7 @@ final class PlaybackController {
 
         self.queue = restoredQueue
         self.originalQueue = restoredQueue
-        self.currentQueueIndex = state.lastQueueIndex
+        self.currentQueueIndex = resolvedQueueIndex
         self.currentSource =
           PlaySource(rawValue: state.lastSourceRaw ?? "library")
           ?? .library
@@ -1188,7 +1254,8 @@ final class PlaybackController {
           // Prepare player but don't play
           let item = createPlayerItem(for: song)
           self.player = AVQueuePlayer(items: [item])
-          self.player?.volume = self.volume
+          self.applyEQPresetForPlayback()
+          self.applyPlayerOutputVolume()
           item.seek(
             to: CMTime(
               seconds: state.lastTime,

@@ -13,7 +13,7 @@ internal struct NowPlayingArtworkView: View {
 
   internal var body: some View {
     Group {
-      if let path = playback.currentItem?.artworkPath {
+      if let path = playback.currentItem?.effectiveArtworkPath {
         AlbumArtworkView(artworkPath: path, size: 260)
       } else {
         RoundedRectangle(cornerRadius: 16, style: .continuous)

@@ -43,6 +43,25 @@ final class Playlist: Identifiable, Hashable {
 
   // MARK: - Relationships
   @Relationship(deleteRule: .nullify) var songs: [LibrarySong] = []
+  var songOrder: [UUID] = []
+
+  var orderedSongs: [LibrarySong] {
+    let songMap = Dictionary(uniqueKeysWithValues: songs.map { ($0.id, $0) })
+    
+    // First, get songs in the saved order
+    var ordered = songOrder.compactMap { songMap[$0] }
+    
+    // Handle any songs that are in the 'songs' relationship but not in 'songOrder'
+    // (e.g. from a previous version or external sync)
+    let orderedIDs = Set(songOrder)
+    let missingSongs = songs.filter { !orderedIDs.contains($0.id) }
+    
+    if !missingSongs.isEmpty {
+      ordered.append(contentsOf: missingSongs)
+    }
+    
+    return ordered
+  }
 
   // MARK: - Smart Playlist Rules (for smart playlists)
   var smartRules: SmartPlaylistRules?
@@ -73,6 +92,7 @@ final class Playlist: Identifiable, Hashable {
     self.isPinned = false
     self.sortOrder = .manual
     self.shouldSyncToWatch = shouldSyncToWatch
+    self.songOrder = []
   }
 
   /// Returns the song count for this playlist
@@ -94,6 +114,7 @@ final class Playlist: Identifiable, Hashable {
   func addSong(_ song: LibrarySong) {
     guard !songs.contains(where: { $0.id == song.id }) else { return }
     songs.append(song)
+    songOrder.append(song.id)
     touch()
   }
 
@@ -101,14 +122,34 @@ final class Playlist: Identifiable, Hashable {
   func removeSong(_ song: LibrarySong) {
     if let index = songs.firstIndex(where: { $0.id == song.id }) {
       songs.remove(at: index)
-      touch()
     }
+    songOrder.removeAll { $0 == song.id }
+    touch()
   }
 
   /// Moves a song from one index to another
   func moveSong(from source: IndexSet, to destination: Int) {
-    songs.move(fromOffsets: source, toOffset: destination)
+    // We must move in songOrder, not songs relationship
+    // First ensure songOrder is up to date with all songs
+    syncOrderWithSongs()
+    
+    songOrder.move(fromOffsets: source, toOffset: destination)
     touch()
+  }
+
+  private func syncOrderWithSongs() {
+    let currentIDs = Set(songs.map { $0.id })
+    
+    // Remove IDs that are no longer in songs
+    songOrder.removeAll { !currentIDs.contains($0) }
+    
+    // Add IDs that are in songs but not in songOrder
+    let existingIDs = Set(songOrder)
+    for song in songs {
+      if !existingIDs.contains(song.id) {
+        songOrder.append(song.id)
+      }
+    }
   }
 
   /// Checks if the playlist contains a specific song
@@ -124,7 +165,7 @@ final class Playlist: Identifiable, Hashable {
     }
 
     // Get unique artwork paths from songs
-    let allPaths = songs.compactMap { $0.artworkPath }
+    let allPaths = songs.compactMap { $0.effectiveArtworkPath }
     let uniquePaths = allPaths.uniqued()
 
     if artworkType == .single || uniquePaths.isEmpty {

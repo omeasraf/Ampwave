@@ -15,6 +15,7 @@ struct OpenTabView: View {
   @Binding var isPlayerExpanded: Bool
   @State private var selectedTab: AppTab = .home
   @State private var servicesInitialized = false
+  @State private var showOnboarding = OnboardingState.shouldShow
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -93,12 +94,12 @@ struct OpenTabView: View {
         .background(themeManager.backgroundColor)
       }
 
-      // Search tab (special role)
-      //      Tab(value: AppTab.search, role: .search) {
-      //        NavigationStack {
-      //          SearchView()
-      //        }
-      //      }
+      //       Search tab (special role)
+      Tab(value: AppTab.search, role: .search) {
+        NavigationStack {
+          SearchView()
+        }
+      }
     }
 
     #if os(iOS)
@@ -113,7 +114,10 @@ struct OpenTabView: View {
       }
     #endif
     .ignoresSafeArea(.keyboard)
-    .safeAreaInset(edge: .top, spacing: 0) {
+    //    .safeAreaInset(edge: .top, spacing: 0) {
+    //      IndexingStatusView()
+    //    }
+    .overlay(alignment: .top) {
       IndexingStatusView()
     }
     .onAppear {
@@ -164,9 +168,26 @@ struct OpenTabView: View {
         print("[DEBUG] Starting indexOnStartup")
         await library.indexOnStartup()
 
+        await library.runGenreBackfillOncePerInstall()
+
         print("[DEBUG] Service initialization complete")
       }
     }
+    #if os(iOS)
+      .fullScreenCover(isPresented: $showOnboarding) {
+        Group {
+          OnboardingView()
+        }
+        .environment(ThemeManager.shared)
+      }
+    #else
+      .sheet(isPresented: $showOnboarding) {
+        Group {
+          OnboardingView()
+        }
+        .environment(ThemeManager.shared)
+      }
+    #endif
   }
 }
 

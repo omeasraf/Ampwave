@@ -25,6 +25,7 @@ struct HomeView: View {
   }
 
   @State private var forYouRecommendations: [Recommendation] = []
+  @State private var genreRecommendations: [Recommendation] = []
   @State private var recentlyPlayedSongs: [LibrarySong] = []
   @State private var mostPlayedSongs: [(song: LibrarySong, count: Int)] = []
   @State private var isLoading = true
@@ -38,9 +39,15 @@ struct HomeView: View {
 
   private var indexingMessage: String? {
     switch library.indexingStatus {
+    case .indexing(let message):
+      return message
+    case .fetchingMetadata(let current, let total):
+      if total > 1 {
+        return "Fetching metadata (\(current + 1)/\(total))…"
+      } else {
+        return "Fetching metadata…"
+      }
     case .complete, .idle:
-      return "Loading your library..."
-    @unknown default:
       return nil
     }
   }
@@ -103,6 +110,10 @@ struct HomeView: View {
             )
           }
 
+          if !genreRecommendations.isEmpty {
+            GenrePicksSection(recommendations: genreRecommendations)
+          }
+
           // Most Played section
           if !mostPlayedSongs.isEmpty {
             HorizontalSongSection(
@@ -152,6 +163,8 @@ struct HomeView: View {
         await recommendationEngine.generateAllRecommendations()
         forYouRecommendations =
           recommendationEngine.forYouRecommendations
+        genreRecommendations =
+          recommendationEngine.genreRecommendations
       }
     }
     .refreshable {
@@ -166,6 +179,8 @@ struct HomeView: View {
         await recommendationEngine.generateAllRecommendations()
         forYouRecommendations =
           recommendationEngine.forYouRecommendations
+        genreRecommendations =
+          recommendationEngine.genreRecommendations
       }
     }
     .onChange(of: scenePhase) {
@@ -185,20 +200,33 @@ struct HomeView: View {
   }
 
   private var welcomeHeader: some View {
-    HStack {
-      VStack(alignment: .leading, spacing: 4) {
-        Text(greeting)
-          .font(.system(size: 28, weight: .bold))
-
-        if !library.songs.isEmpty {
-          Text("\(library.songs.count) songs in your library")
-            .font(.system(size: 15))
-            .foregroundStyle(.secondary)
+    ZStack(alignment: .bottomLeading) {
+      RoundedRectangle(cornerRadius: 30, style: .continuous)
+        .fill(.ultraThinMaterial)
+        .overlay(alignment: .topTrailing) {
+          Circle()
+            .fill(themeManager.accentColor.opacity(0.22))
+            .frame(width: 140, height: 140)
+            .blur(radius: 18)
+            .offset(x: 28, y: -20)
         }
-      }
+        .overlay {
+          RoundedRectangle(cornerRadius: 30, style: .continuous)
+            .stroke(.white.opacity(0.08), lineWidth: 1)
+        }
 
-      Spacer()
+      VStack(alignment: .leading, spacing: 8) {
+        Text(greeting)
+          .font(.system(size: 30, weight: .bold, design: .rounded))
+
+        Text(headerSummary)
+          .font(.system(size: 15, weight: .medium))
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+      .padding(24)
     }
+    .frame(maxWidth: .infinity, minHeight: 164, alignment: .bottomLeading)
     .padding(.horizontal, 20)
   }
 
@@ -209,6 +237,21 @@ struct HomeView: View {
     case 12..<17: return "Good afternoon"
     default: return "Good evening"
     }
+  }
+
+  private var headerSummary: String {
+    if library.songs.isEmpty {
+      return
+        "Import your library to unlock personalized discovery, smart search, and offline playback."
+    }
+
+    let recentCount = recentlyPlayedSongs.count
+    if recentCount > 0 {
+      return
+        "\(library.songs.count) songs ready. \(recentCount) recent favorites are shaping your recommendations."
+    }
+
+    return "\(library.songs.count) songs ready for smarter discovery."
   }
 
   private var emptyState: some View {
@@ -277,6 +320,7 @@ struct HomeView: View {
         forceRefresh: forceRefresh
       )
       forYouRecommendations = recommendationEngine.forYouRecommendations
+      genreRecommendations = recommendationEngine.genreRecommendations
       refreshHomeSections()
     } catch {
       errorMessage = error.localizedDescription
@@ -306,7 +350,7 @@ struct HorizontalSongSection: View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
         Text(title)
-          .font(.system(size: 22, weight: .bold))
+          .font(.system(size: 24, weight: .bold, design: .rounded))
 
         Spacer()
       }
@@ -339,24 +383,49 @@ struct HorizontalSongSection: View {
 
 struct SongCard: View {
   let song: LibrarySong
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      AlbumArtworkView(artworkPath: song.artworkPath, size: 140)
+      AlbumArtworkView(artworkPath: song.effectiveArtworkPath, size: 140)
+        .accessibilityHidden(true)
 
       VStack(alignment: .leading, spacing: 2) {
         Text(song.title)
-          .font(.system(size: 14, weight: .semibold))
+          .font(.system(size: 15, weight: .semibold))
           .lineLimit(1)
 
         Text(song.artist)
-          .font(.system(size: 12))
+          .font(.system(size: 13, weight: .medium))
           .foregroundStyle(.secondary)
           .lineLimit(1)
       }
       .frame(width: 140, alignment: .leading)
     }
+    .padding(10)
+    .background(
+      RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .fill(songCardBackground)
+        .overlay {
+          RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .stroke(.white.opacity(0.06), lineWidth: 1)
+        }
+    )
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("\(song.title), \(song.artist)")
+    .accessibilityHint("Plays this song")
     .songContextMenu(song: song)
+  }
+
+  private var songCardBackground: some ShapeStyle {
+    LinearGradient(
+      colors: [
+        themeManager.cardBackgroundColor.opacity(0.94),
+        themeManager.backgroundColor.opacity(0.82),
+      ],
+      startPoint: .topLeading,
+      endPoint: .bottomTrailing
+    )
   }
 }
 
@@ -378,49 +447,8 @@ struct RecommendationsSection: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      //      Text("Made For You")
-      //        .font(.system(size: 22, weight: .bold))
-      //        .padding(.horizontal, 20)
-      //
-      //      ScrollView(.horizontal, showsIndicators: false) {
-      //        LazyHStack(spacing: 16) {
-      //          ForEach(recommendations.prefix(10)) { recommendation in
-      //            RecommendationCard(recommendation: recommendation)
-      //              .onTapGesture {
-      //                switch recommendation.item {
-      //                case .song(let song):
-      //                  if let index = recommendationSongs.firstIndex(where: { $0.id == song.id }) {
-      //                    playback.playQueue(
-      //                      recommendationSongs,
-      //                      startingAt: index,
-      //                      from: .recommendation
-      //                    )
-      //                    onSongPlayed()
-      //                  } else {
-      //                    playback.play(song, from: .recommendation)
-      //                    onSongPlayed()
-      //                  }
-      //                case .album(let album):
-      //                  playback.playAlbum(album)
-      //                case .artist(let artist):
-      //                  // Play artist's songs (including featured artists)
-      //                  let artistSongs = SongLibrary.shared.getSongs(byArtist: artist.name)
-      //                  if !artistSongs.isEmpty {
-      //                    playback.playQueue(artistSongs)
-      //                  }
-      //                case .playlist(let playlist):
-      //                  playback.playPlaylist(playlist)
-      //                }
-      //              }
-      //          }
-      //        }
-      //        .padding(.horizontal, 20)
-      //      }
-
-      // MARK: Made for you
-
       Text("Made For You")
-        .font(.system(size: 22, weight: .bold))
+        .font(.system(size: 24, weight: .bold, design: .rounded))
         .padding(.horizontal, 20)
 
       ScrollView(.horizontal, showsIndicators: false) {
@@ -465,8 +493,6 @@ struct RecommendationsSection: View {
         }
         .padding(.horizontal, 20)
       }
-
-      // End Made for you
     }
   }
 }
@@ -516,7 +542,7 @@ struct RecommendationCard: View {
       Group {
         switch recommendation.item {
         case .song(let song):
-          AlbumArtworkView(artworkPath: song.artworkPath, size: 160)
+          AlbumArtworkView(artworkPath: song.effectiveArtworkPath, size: 160)
         case .album(let album):
           AlbumArtworkView(artworkPath: album.artworkPath, size: 160)
         case .artist(let artist):
@@ -531,7 +557,7 @@ struct RecommendationCard: View {
 
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.system(size: 14, weight: .semibold))
+          .font(.system(size: 15, weight: .semibold))
           .lineLimit(1)
 
         Text(recommendation.reason.displayText)
@@ -543,6 +569,94 @@ struct RecommendationCard: View {
       }
       .frame(width: 160, height: 60, alignment: .topLeading)
     }
+    .padding(10)
+    .background(
+      RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .fill(.ultraThinMaterial)
+        .overlay {
+          RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .stroke(.white.opacity(0.06), lineWidth: 1)
+        }
+    )
+  }
+}
+
+// MARK: - Genre picks (Home)
+
+struct GenrePicksSection: View {
+  let recommendations: [Recommendation]
+  @Environment(ThemeManager.self) private var themeManager
+
+  private var genreRows: [(display: String, key: String)] {
+    var seen = Set<String>()
+    var out: [(String, String)] = []
+    for r in recommendations {
+      if case .basedOnGenre(let g) = r.reason {
+        let key = g.lowercased()
+        if !seen.contains(key) {
+          seen.insert(key)
+          out.append((g, key))
+        }
+      }
+    }
+    return out
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Genre picks for you")
+        .font(.title2.weight(.bold))
+        .padding(.horizontal, 20)
+
+      Text("Based on what you play")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 20)
+        .padding(.top, -6)
+
+      ScrollView(.horizontal, showsIndicators: false) {
+        LazyHStack(spacing: 14) {
+          ForEach(genreRows, id: \.key) { row in
+            NavigationLink {
+              GenreSongsView(genre: row.display)
+            } label: {
+              genreTile(title: row.display)
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .padding(.horizontal, 20)
+      }
+    }
+    .padding(.vertical, 8)
+    .background(themeManager.backgroundColor)
+  }
+
+  private func genreTile(title: String) -> some View {
+    let colors = GenrePalette.gradient(for: title)
+    return ZStack(alignment: .bottomLeading) {
+      LinearGradient(
+        colors: colors,
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+      LinearGradient(
+        colors: [.black.opacity(0.05), .black.opacity(0.38)],
+        startPoint: .top,
+        endPoint: .bottom
+      )
+      Text(title)
+        .font(.title3.weight(.bold))
+        .foregroundStyle(.white)
+        .lineLimit(2)
+        .minimumScaleFactor(0.75)
+        .padding(14)
+    }
+    .frame(width: 168, height: 112)
+    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
+    .accessibilityLabel("\(title), genre")
+    .accessibilityHint("View songs in this genre")
   }
 }
 
@@ -558,7 +672,7 @@ struct QuickAccessSection: View {
     print("[DEBUG] QuickAccessSection.body rendering")
     return VStack(alignment: .leading, spacing: 12) {
       Text("Quick Access")
-        .font(.system(size: 22, weight: .bold))
+        .font(.system(size: 24, weight: .bold, design: .rounded))
         .padding(.horizontal, 20)
 
       if !isLoadingQuickAccess {
@@ -633,13 +747,11 @@ struct QuickAccessButton: View {
     Button(action: action) {
       HStack(spacing: 12) {
         Image(systemName: icon)
-          .font(.system(size: 20))
-          .foregroundStyle(color)
-          .frame(width: 40, height: 40)
-          .background(color.opacity(0.15))
-          .clipShape(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-          )
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(width: 42, height: 42)
+          .background(color.gradient)
+          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
         VStack(alignment: .leading, spacing: 2) {
           Text(title)
@@ -651,9 +763,15 @@ struct QuickAccessButton: View {
 
         Spacer()
       }
-      .padding()
-      .background(.ultraThinMaterial)
-      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .padding(16)
+      .background(
+        RoundedRectangle(cornerRadius: 20, style: .continuous)
+          .fill(.ultraThinMaterial)
+          .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+              .stroke(.white.opacity(0.06), lineWidth: 1)
+          }
+      )
     }
     .buttonStyle(.plain)
   }
@@ -665,7 +783,7 @@ struct BrowseSection: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Browse")
-        .font(.system(size: 22, weight: .bold))
+        .font(.system(size: 24, weight: .bold, design: .rounded))
         .padding(.horizontal, 20)
 
       Text("Jump to albums, artists, playlists, or genres")
@@ -685,7 +803,7 @@ struct BrowseSection: View {
             PlaylistsListView()
           }
           BrowseCard(title: "Genres", icon: "tag", color: .indigo) {
-            GenresBrowseView()
+            LibraryView(initialTab: .genres)
           }
         }
         .padding(.horizontal, 20)
@@ -707,75 +825,25 @@ struct BrowseCard<Destination: View>: View {
       VStack(spacing: 8) {
         Image(systemName: icon)
           .font(.system(size: 28))
-          .foregroundStyle(color)
+          .foregroundStyle(.white)
+          .frame(width: 52, height: 52)
+          .background(color.gradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
         Text(title)
           .font(.system(size: 14, weight: .semibold))
           .multilineTextAlignment(.center)
       }
       .frame(width: 100, height: 100)
-      .background(color.opacity(0.12))
-      .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .background(
+        RoundedRectangle(cornerRadius: 20, style: .continuous)
+          .fill(.ultraThinMaterial)
+          .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+              .stroke(.white.opacity(0.06), lineWidth: 1)
+          }
+      )
     }
     .buttonStyle(.plain)
-  }
-}
-
-// MARK: - Genres Browse
-
-struct GenresBrowseView: View {
-  @Environment(ThemeManager.self) private var themeManager
-  private var library: SongLibrary { SongLibrary.shared }
-
-  private var genres: [String] {
-    var unique = Set<String>()
-    for song in library.songs {
-      guard let raw = song.genre?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty
-      else { continue }
-      for part in raw.split(separator: "/") {
-        let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { unique.insert(trimmed) }
-      }
-    }
-    return unique.sorted {
-      $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-    }
-  }
-
-  var body: some View {
-    Group {
-      if genres.isEmpty {
-        ContentUnavailableView(
-          "No Genres Yet",
-          systemImage: "tag",
-          description: Text(
-            "Genres appear when your tracks have genre metadata. Try editing a song or enabling metadata fetch in Settings."
-          )
-        )
-      } else {
-        List {
-          ForEach(genres, id: \.self) { genre in
-            NavigationLink(destination: GenreSongsView(genre: genre)) {
-              HStack {
-                Image(systemName: "tag.fill")
-                  .foregroundStyle(themeManager.accentColor)
-                  .frame(width: 28)
-                Text(genre)
-                  .font(.system(size: 16, weight: .medium))
-              }
-            }
-            .listRowBackground(themeManager.backgroundColor)
-          }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-      }
-    }
-    .background(themeManager.backgroundColor)
-    .navigationTitle("Genres")
-    #if os(iOS)
-      .navigationBarTitleDisplayMode(.inline)
-    #endif
   }
 }
 
@@ -796,11 +864,10 @@ struct GenreSongsView: View {
   private func songMatchesGenre(_ song: LibrarySong) -> Bool {
     guard let g = song.genre, !g.isEmpty else { return false }
     let needle = genre.lowercased()
-    let parts = g.split(separator: "/").map {
-      $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-    if parts.contains(needle) { return true }
-    return g.lowercased().contains(needle)
+    let parts = g.components(separatedBy: CharacterSet(charactersIn: "/;,"))
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+    return parts.contains(needle) || g.lowercased().contains(needle)
   }
 
   var body: some View {

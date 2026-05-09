@@ -39,7 +39,10 @@ struct AlbumArtworkView: View {
     .frame(width: size, height: size)
     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     .shadow(color: .black.opacity(0.1), radius: 6, x: 0, y: 3)
-    .task {
+    .task(id: artworkPath) {
+      await MainActor.run {
+        self.image = nil
+      }
       await loadImage()
     }
   }
@@ -62,18 +65,31 @@ struct AlbumArtworkView: View {
   }
 
   private func loadImage() async {
-    guard let url = PathManager.resolve(artworkPath) else { return }
+    guard let path = artworkPath, !path.isEmpty else { return }
+
+    // Check memory cache first
+    if let cached = await ImageCache.shared.image(for: path) {
+      await MainActor.run {
+        self.image = cached
+      }
+      return
+    }
+
+    // Resolve path and load from disk
+    guard let url = PathManager.resolve(path) else { return }
 
     do {
       let data = try Data(contentsOf: url)
       #if os(iOS)
         if let loadedImage = UIImage(data: data) {
+          await ImageCache.shared.insert(loadedImage, for: path)
           await MainActor.run {
             self.image = loadedImage
           }
         }
       #else
         if let loadedImage = NSImage(data: data) {
+          await ImageCache.shared.insert(loadedImage, for: path)
           await MainActor.run {
             self.image = loadedImage
           }

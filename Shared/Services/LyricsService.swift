@@ -71,11 +71,13 @@ final class LyricsService {
     if let synced = lrclibResult.synced {
       let cached = cacheLyrics(synced)
       song.lyrics = LRCParser.toLRC(cached.lines)
+      song.updateSearchIndex()
       return cached
     }
 
     if let plain = lrclibResult.plain {
       song.lyrics = plain
+      song.updateSearchIndex()
       // Clear any old cached synced lyrics since we now have plain text
       clearCachedLyrics(for: song)
       return nil
@@ -84,6 +86,7 @@ final class LyricsService {
     // Fallback to lyrics.ovh if LRCLIB has nothing
     if let plain = await fetchFromLyricsOVH(song: song) {
       song.lyrics = plain
+      song.updateSearchIndex()
       clearCachedLyrics(for: song)
       return nil
     }
@@ -181,10 +184,12 @@ final class LyricsService {
   func getCachedLyrics(for song: LibrarySong) -> SyncedLyric? {
     guard let modelContext = modelContext else { return nil }
 
-    let descriptor = FetchDescriptor<SyncedLyric>()
+    let songId = song.id
+    let descriptor = FetchDescriptor<SyncedLyric>(
+      predicate: #Predicate<SyncedLyric> { $0.songId == songId }
+    )
 
-    guard let allLyrics = try? modelContext.fetch(descriptor) else { return nil }
-    return allLyrics.first(where: { $0.songId == song.id })
+    return try? modelContext.fetch(descriptor).first
   }
 
   @discardableResult
@@ -247,6 +252,7 @@ final class LyricsService {
     }
 
     song.lyrics = content
+    song.updateSearchIndex()
     try? modelContext.save()
   }
 }

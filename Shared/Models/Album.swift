@@ -18,7 +18,21 @@ final class Album: Identifiable, Hashable {
   // MARK: - Album Metadata
   var year: Int?
   var artworkPath: String?
+  var embeddedArtworkPath: String?
+  var artworkSourceRaw: String = "embedded"
+  @Attribute(.externalStorage) var userEditedFields: [String] = []
   @Relationship(deleteRule: .cascade) var songs: [LibrarySong] = []
+
+  enum ArtworkSource: String, Codable {
+    case embedded
+    case online
+    case user
+  }
+
+  var artworkSource: ArtworkSource {
+    get { ArtworkSource(rawValue: artworkSourceRaw) ?? .embedded }
+    set { artworkSourceRaw = newValue.rawValue }
+  }
   var createdDate: Date
   var isExplicit: Bool = false
   var genre: [String]?
@@ -27,13 +41,15 @@ final class Album: Identifiable, Hashable {
     name: String,
     artist: String? = nil,
     year: Int? = nil,
-    artworkPath: String? = nil
+    artworkPath: String? = nil,
+    embeddedArtworkPath: String? = nil
   ) {
     self.id = UUID()
     self.name = name
     self.artist = artist
     self.year = year
     self.artworkPath = artworkPath
+    self.embeddedArtworkPath = embeddedArtworkPath
     self.createdDate = Date()
     self.isExplicit = false
     self.genre = nil
@@ -48,6 +64,9 @@ final class Album: Identifiable, Hashable {
   func updateArtwork(from song: LibrarySong) {
     if artworkPath == nil, let songArtwork = song.artworkPath {
       artworkPath = songArtwork
+    }
+    if embeddedArtworkPath == nil, let songEmbedded = song.embeddedArtworkPath {
+      embeddedArtworkPath = songEmbedded
     }
   }
 

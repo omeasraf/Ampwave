@@ -16,7 +16,6 @@ struct ExpandedLyricsView: View {
   @State private var isUserScrolling = false
   @State private var isProgrammaticScroll = false
   @State private var scrollTimeout: Timer?
-  @State private var sliderHideTimer: Timer?
   @Environment(ThemeManager.self) private var themeManager
 
   @Bindable private var playback = PlaybackController.shared
@@ -25,7 +24,7 @@ struct ExpandedLyricsView: View {
     NavigationStack {
       ZStack {
         // Background blur with artwork
-        if let artworkPath = playback.currentItem?.artworkPath {
+        if let artworkPath = playback.currentItem?.effectiveArtworkPath {
           ArtworkBackgroundView(artworkPath: artworkPath)
         } else {
           themeManager.backgroundColor.ignoresSafeArea()
@@ -49,6 +48,8 @@ struct ExpandedLyricsView: View {
                       line: line,
                       index: index,
                       isCurrent: isCurrentLine(index),
+                      nextLineTimestamp: index < lyrics.lines.count - 1
+                        ? lyrics.lines[index + 1].timestamp : nil,
                       playback: playback
                     )
                   }
@@ -148,18 +149,19 @@ struct ExpandedLyricsView: View {
       .navigationTitle(playback.currentItem?.title ?? "")
       #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
-      #endif
-      .toolbar {
-        ToolbarItem(placement: .navigation) {
-          Button {
-            isExpanded = false
-          } label: {
-            Image(systemName: "chevron.down")
+
+        .toolbar {
+          ToolbarItem(placement: .navigation) {
+            Button {
+              isExpanded = false
+            } label: {
+              Image(systemName: "chevron.down")
               .font(.system(size: 18, weight: .semibold))
               .foregroundStyle(.white)
+            }
           }
         }
-      }
+      #endif
       .onAppear {
         #if os(iOS)
           UIApplication.shared.isIdleTimerDisabled = true
@@ -171,76 +173,12 @@ struct ExpandedLyricsView: View {
         #endif
       }
     }
-    // Overlay is now outside NavigationStack so it floats freely over the full screen
-    .overlay(vocalControlOverlay, alignment: .bottomTrailing)
   }
 
   private func isCurrentLine(_ index: Int) -> Bool {
     playback.currentLyricIndex == index
   }
 
-  private var vocalControlOverlay: some View {
-    let hasSyncedLyrics = playback.currentLyrics?.hasLyrics == true
-    let isVocalReduced = hasSyncedLyrics && playback.vocalLevel < 0.99
-    let showSlider = hasSyncedLyrics && playback.showVocalSlider
-
-    return VStack(spacing: 20) {
-      if showSlider {
-        VocalSlider(value: $playback.vocalLevel)
-          .transition(
-            .asymmetric(
-              insertion: .move(edge: .bottom).combined(with: .opacity).combined(
-                with: .scale(scale: 0.8, anchor: .bottom)),
-              removal: .move(edge: .bottom).combined(with: .opacity).combined(
-                with: .scale(scale: 0.8, anchor: .bottom))
-            )
-          )
-          .onChange(of: playback.vocalLevel) {
-            resetSliderTimer()
-          }
-      }
-
-      Button {
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-          playback.showVocalSlider.toggle()
-          if playback.showVocalSlider {
-            resetSliderTimer()
-          } else {
-            sliderHideTimer?.invalidate()
-          }
-        }
-      } label: {
-        Image(systemName: isVocalReduced ? "mic.fill" : "mic")
-          .font(.system(size: 24, weight: .semibold))
-          .foregroundStyle(
-            !hasSyncedLyrics
-              ? .white.opacity(0.3)
-              : (isVocalReduced ? .pink : .white)
-          )
-          .padding(16)
-          .background(.ultraThinMaterial)
-          .clipShape(Circle())
-          .overlay(
-            Circle()
-              .stroke(.white.opacity(0.1), lineWidth: 0.5)
-          )
-          .shadow(color: .black.opacity(0.4), radius: 15)
-      }
-      .disabled(!hasSyncedLyrics)
-    }
-    .padding(.trailing, 28)
-    .padding(.bottom, 44)
-    .zIndex(100)
-  }
-
-  private func resetSliderTimer() {
-    sliderHideTimer?.invalidate()
-    sliderHideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
-      withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-        self.playback.showVocalSlider = false
-      }
-    }
-  }
 }
 
 // MARK: - String+LRC
@@ -496,9 +434,55 @@ struct LyricLineView: View {
   let line: LyricLine
   let index: Int
   let isCurrent: Bool
+  let nextLineTimestamp: TimeInterval?
   @Bindable var playback: PlaybackController
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
+    Group {
+      if isCurrent, themeManager.userPreferences?.wordSyncedLyricsEnabled ?? true {
+        let words = line.wordOffsets ?? generateWordOffsets()
+        if !words.isEmpty {
+          WordByWordLyricView(
+            words: words,
+            currentTime: playback.currentTime,
+            isCurrent: true
+          )
+        } else {
+          plainLineText
+        }
+      } else {
+        plainLineText
+      }
+    }
+    .multilineTextAlignment(.center)
+    .lineLimit(nil)
+    .fixedSize(horizontal: false, vertical: true)
+    .lineSpacing(4)
+    .padding(.horizontal, 32)
+    #if os(iOS)
+      .frame(maxWidth: UIScreen.main.bounds.width - 64)
+    #else
+      .frame(maxWidth: .infinity)
+    #endif
+    .scaleEffect(
+      isCurrent ? 1.05 : 1.0,
+      anchor: .center
+    )
+    .id(index)
+    .onTapGesture {
+      playback.seek(to: line.timestamp)
+      if !playback.isPlaying {
+        playback.play()
+      }
+    }
+    .animation(
+      .spring(response: 0.3, dampingFraction: 0.7),
+      value: playback.currentLyricIndex
+    )
+  }
+
+  private var plainLineText: some View {
     Text(line.text)
       .font(
         .system(
@@ -509,30 +493,99 @@ struct LyricLineView: View {
       .foregroundStyle(
         isCurrent ? .white : .white.opacity(0.35)
       )
-      .multilineTextAlignment(.center)
-      .lineLimit(nil)
-      .fixedSize(horizontal: false, vertical: true)
-      .lineSpacing(4)
-      .padding(.horizontal, 32)
-      #if os(iOS)
-        .frame(maxWidth: UIScreen.main.bounds.width - 64)
-      #else
-        .frame(maxWidth: .infinity)
-      #endif
-      .scaleEffect(
-        isCurrent ? 1.05 : 1.0,
-        anchor: .center
+  }
+
+  private func generateWordOffsets() -> [WordOffset] {
+    let rawWords = line.text.components(separatedBy: .whitespaces)
+      .filter { !$0.isEmpty }
+    guard !rawWords.isEmpty else { return [] }
+
+    let duration: TimeInterval
+    if let next = nextLineTimestamp {
+      duration = max(0.5, next - line.timestamp)
+    } else if let total = playback.currentItem?.duration, total > line.timestamp {
+      duration = max(0.5, total - line.timestamp)
+    } else {
+      duration = 3.0  // Fallback
+    }
+
+    let wordDuration = duration / Double(rawWords.count)
+    return rawWords.enumerated().map { i, word in
+      WordOffset(
+        timestamp: line.timestamp + (Double(i) * wordDuration),
+        text: word + (i < rawWords.count - 1 ? " " : "")
       )
-      .id(index)
-      .onTapGesture {
-        playback.seek(to: line.timestamp)
-        if !playback.isPlaying {
-          playback.play()
-        }
+    }
+  }
+}
+
+struct WordByWordLyricView: View {
+  let words: [WordOffset]
+  let currentTime: TimeInterval
+  let isCurrent: Bool
+
+  var body: some View {
+    // We use a simpler but effective progressive highlight:
+    // We render the full text twice, one dim and one bright.
+    // The bright one is masked by a rectangle that moves according to time.
+
+    let fullText = words.map { $0.text }.joined()
+
+    ZStack(alignment: .leading) {
+      Text(fullText)
+        .font(.system(size: 24, weight: .bold))
+        .foregroundStyle(.white.opacity(0.35))
+
+      Text(fullText)
+        .font(.system(size: 24, weight: .bold))
+        .foregroundStyle(.white)
+        .mask(
+          GeometryReader { geo in
+            HStack(spacing: 0) {
+              Rectangle()
+                .frame(width: calculateProgressWidth(totalWidth: geo.size.width))
+              Spacer(minLength: 0)
+            }
+          }
+        )
+    }
+  }
+
+  private func calculateProgressWidth(totalWidth: Double) -> Double {
+    guard !words.isEmpty else { return 0 }
+
+    // Find which word we are currently on
+    if let currentIndex = words.lastIndex(where: { currentTime >= $0.timestamp }) {
+      // Calculate progress through words
+      let wordProgress = Double(currentIndex + 1) / Double(words.count)
+
+      // If we are on the last word, we might want to animate its completion
+      // but without word-specific widths, we just use word-count progress.
+      // This is "progressive" enough for a generated timing.
+
+      // For a smoother look, we can interpolate between words
+      let nextTimestamp: TimeInterval
+      if currentIndex < words.count - 1 {
+        nextTimestamp = words[currentIndex + 1].timestamp
+      } else {
+        nextTimestamp = words[currentIndex].timestamp + 0.5
       }
-      .animation(
-        .spring(response: 0.3, dampingFraction: 0.7),
-        value: playback.currentLyricIndex
-      )
+
+      let duration = nextTimestamp - words[currentIndex].timestamp
+      let elapsed = currentTime - words[currentIndex].timestamp
+      let internalProgress = duration > 0 ? min(1.0, elapsed / duration) : 1.0
+
+      let totalProgress = (Double(currentIndex) + internalProgress) / Double(words.count)
+      return totalWidth * min(1.0, totalProgress)
+    } else {
+      // Before first word
+      guard let first = words.first else { return 0 }
+      let timeToFirst = first.timestamp - currentTime
+      if timeToFirst < 0.5 && timeToFirst > 0 {
+        // Optional: pre-roll animation
+        return 0
+      }
+      return 0
+    }
   }
 }

@@ -38,7 +38,7 @@ final class MetadataService {
 
   // MARK: - Internal Request Helper
 
-  private func performRequest(url: URL, retries: Int = 3) async -> Data? {
+  func performRequest(url: URL, retries: Int = 3) async -> Data? {
     var attempt = 0
     var backoffDelay: TimeInterval = 1.5
 
@@ -123,7 +123,9 @@ final class MetadataService {
       discNumber: nil,
       duration: recording.length.map { TimeInterval($0) / 1000.0 },
       musicBrainzId: recording.id,
-      artworkURL: nil
+      artworkURL: nil,
+      songDescription: song.songDescription,
+      albumArtist: nil  // Recording release ref doesn't have artist credit, will fetch via release if needed
     )
 
     // Fetch artwork if we have a release
@@ -132,7 +134,51 @@ final class MetadataService {
       metadata.artworkURL = await fetchArtworkURL(forRelease: releaseId)
     }
 
+    // Fallback: If no artwork found via recording, but we have an album title, search for the release specifically
+    if metadata.artworkURL == nil, let albumTitle = metadata.album {
+      print(
+        "[DEBUG] MetadataService.fetchMetadata: No artwork found via recording, searching release for \(albumTitle)"
+      )
+      let searchArtist = metadata.artist ?? song.artist
+      if let release = await searchRelease(albumTitle: albumTitle, artist: searchArtist) {
+        metadata.artworkURL = await fetchArtworkURL(forRelease: release.id)
+        if metadata.year == nil || metadata.year == 0 {
+          metadata.year = parseReleaseDate(release.date)
+        }
+        if metadata.albumArtist == nil {
+          metadata.albumArtist = release.artistCredit?.first?.name
+        }
+      }
+    }
+
+    if metadata.genre == nil || metadata.genre?.isEmpty == true {
+      metadata.genre = await fetchGenreTagsForRecording(mbid: recording.id)
+    }
+
     return metadata
+  }
+
+  /// Lightweight genre lookup (MusicBrainz recording tags) for backfill and partial updates.
+  func fetchGenreTags(for song: LibrarySong) async -> String? {
+    await respectRateLimit()
+    guard let recording = await searchRecording(song: song) else { return nil }
+    return await fetchGenreTagsForRecording(mbid: recording.id)
+  }
+
+  private func fetchGenreTagsForRecording(mbid: String) async -> String? {
+    let urlString = "\(musicBrainzDefaultURL)/recording/\(mbid)?inc=tags&fmt=json"
+    guard let url = URL(string: urlString) else { return nil }
+    guard let data = await performRequest(url: url) else { return nil }
+    do {
+      let detail = try JSONDecoder().decode(MusicBrainzRecordingDetailResponse.self, from: data)
+      guard let tags = detail.tags, !tags.isEmpty else { return nil }
+      let sorted = tags.sorted { ($0.count ?? 0) > ($1.count ?? 0) }
+      let genres = sorted.prefix(3).compactMap { normalizeGenreName($0.name) }
+      return genres.isEmpty ? nil : genres.joined(separator: " / ")
+    } catch {
+      print("[DEBUG] MetadataService.fetchGenreTagsForRecording: decode error \(error)")
+      return nil
+    }
   }
 
   /// Fetches metadata for an album
@@ -211,26 +257,6 @@ final class MetadataService {
     return nil
   }
 
-  /// Downloads and caches artwork
-  func downloadArtwork(from url: URL) async -> String? {
-    do {
-      let (data, _) = try await URLSession.shared.data(from: url)
-
-      // Validate that data is valid image
-      //      #if os(iOS)
-      //        guard UIImage(data: data) != nil else { return nil }
-      //      #else
-      //        guard NSImage(data: data) != nil else { return nil }
-      //      #endif
-
-      // Cache the artwork
-      return await cacheArtwork(data, for: nil)
-    } catch {
-      print("Failed to download artwork: \(error)")
-      return nil
-    }
-  }
-
   /// Refreshes metadata for a song
   @MainActor
   func refreshMetadata(for song: LibrarySong) async {
@@ -277,7 +303,12 @@ final class MetadataService {
   // MARK: - MusicBrainz Search
 
   private func searchRecording(song: LibrarySong) async -> MusicBrainzRecording? {
-    let query = "recording:\"\(song.title)\" AND artist:\"\(song.artist)\""
+    // Escape double quotes for Lucene query
+    let title = song.title.replacingOccurrences(of: "\"", with: "\\\"")
+    let artist = song.artist.replacingOccurrences(of: "\"", with: "\\\"")
+
+    // Primary query: strict recording + artist
+    let query = "recording:\"\(title)\" AND artist:\"\(artist)\""
 
     var components = URLComponents(string: "\(musicBrainzDefaultURL)/recording")
     components?.queryItems = [
@@ -289,15 +320,85 @@ final class MetadataService {
     guard let url = components?.url else { return nil }
     print("[DEBUG] MetadataService.searchRecording: URL: \(url.absoluteString)")
 
-    guard let data = await performRequest(url: url) else { return nil }
-
-    do {
-      let response = try JSONDecoder().decode(MusicBrainzRecordingSearchResponse.self, from: data)
-      return response.recordings?.first
-    } catch {
-      print("[DEBUG] MetadataService.searchRecording: Decoding error: \(error)")
-      return nil
+    if let data = await performRequest(url: url) {
+      do {
+        let response = try JSONDecoder().decode(MusicBrainzRecordingSearchResponse.self, from: data)
+        if let match = bestRecordingMatch(for: song, in: response.recordings ?? []),
+          !response.recordings!.isEmpty
+        {
+          return match
+        }
+      } catch {
+        print("[DEBUG] MetadataService.searchRecording: Decoding error: \(error)")
+      }
     }
+
+    // Fallback query: just search text (less strict)
+    print("[DEBUG] MetadataService.searchRecording: Strict search failed, trying fallback")
+    let fallbackQuery = "\(title) \(artist)"
+    var fallbackComponents = URLComponents(string: "\(musicBrainzDefaultURL)/recording")
+    fallbackComponents?.queryItems = [
+      URLQueryItem(name: "query", value: fallbackQuery),
+      URLQueryItem(name: "fmt", value: "json"),
+      URLQueryItem(name: "limit", value: "5"),
+    ]
+
+    if let fallbackUrl = fallbackComponents?.url,
+      let data = await performRequest(url: fallbackUrl)
+    {
+      do {
+        let response = try JSONDecoder().decode(MusicBrainzRecordingSearchResponse.self, from: data)
+        return bestRecordingMatch(for: song, in: response.recordings ?? [])
+      } catch {
+        print("[DEBUG] MetadataService.searchRecording Fallback: Decoding error: \(error)")
+      }
+    }
+
+    return nil
+  }
+
+  private func searchRelease(albumTitle: String, artist: String) async -> MusicBrainzRelease? {
+    let cleanTitle = albumTitle.replacingOccurrences(of: "\"", with: "\\\"")
+    let cleanArtist = artist.replacingOccurrences(of: "\"", with: "\\\"")
+    let query = "release:\"\(cleanTitle)\" AND artist:\"\(cleanArtist)\""
+
+    var components = URLComponents(string: "\(musicBrainzDefaultURL)/release")
+    components?.queryItems = [
+      URLQueryItem(name: "query", value: query),
+      URLQueryItem(name: "fmt", value: "json"),
+      URLQueryItem(name: "limit", value: "5"),
+    ]
+
+    guard let url = components?.url else { return nil }
+
+    if let data = await performRequest(url: url) {
+      do {
+        let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
+        if let match = response.releases?.first {
+          return match
+        }
+      } catch {}
+    }
+
+    // Fallback
+    let fallbackQuery = "\(cleanTitle) \(cleanArtist)"
+    var fallbackComponents = URLComponents(string: "\(musicBrainzDefaultURL)/release")
+    fallbackComponents?.queryItems = [
+      URLQueryItem(name: "query", value: fallbackQuery),
+      URLQueryItem(name: "fmt", value: "json"),
+      URLQueryItem(name: "limit", value: "5"),
+    ]
+
+    if let fallbackUrl = fallbackComponents?.url,
+      let data = await performRequest(url: fallbackUrl)
+    {
+      do {
+        let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
+        return response.releases?.first
+      } catch {}
+    }
+
+    return nil
   }
 
   private func searchRelease(album: Album) async -> MusicBrainzRelease? {
@@ -318,7 +419,7 @@ final class MetadataService {
 
     do {
       let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
-      return response.releases?.first
+      return bestReleaseMatch(for: album, in: response.releases ?? [])
     } catch {
       print("[DEBUG] MetadataService.searchRelease: Decoding error: \(error)")
       return nil
@@ -369,6 +470,72 @@ final class MetadataService {
     }
   }
 
+  /// Searches for multiple artwork options for a song or album
+  func searchArtworkOptions(title: String, artist: String) async -> [URL] {
+    print("[DEBUG] MetadataService.searchArtworkOptions: Searching for \(title) by \(artist)")
+    
+    // 1. Search for releases on MusicBrainz
+    let query = "release:\"\(title.replacingOccurrences(of: "\"", with: "\\\""))\" AND artist:\"\(artist.replacingOccurrences(of: "\"", with: "\\\""))\""
+    var components = URLComponents(string: "\(musicBrainzDefaultURL)/release")
+    components?.queryItems = [
+      URLQueryItem(name: "query", value: query),
+      URLQueryItem(name: "fmt", value: "json"),
+      URLQueryItem(name: "limit", value: "10"),
+    ]
+
+    guard let url = components?.url else { return [] }
+    
+    var artworkURLs: [URL] = []
+    if let data = await performRequest(url: url) {
+      do {
+        let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
+        if let releases = response.releases {
+          // Fetch artwork for each release ID
+          for release in releases {
+            if let artworkURL = await fetchArtworkURL(forRelease: release.id) {
+              if !artworkURLs.contains(artworkURL) {
+                artworkURLs.append(artworkURL)
+              }
+            }
+            if artworkURLs.count >= 12 { break } // Limit to 12 results
+          }
+        }
+      } catch {
+        print("[DEBUG] MetadataService.searchArtworkOptions: Decoding error: \(error)")
+      }
+    }
+
+    // 2. If we have very few results, try a broader search
+    if artworkURLs.count < 3 {
+      let fallbackQuery = "\(title) \(artist)"
+      var fallbackComponents = URLComponents(string: "\(musicBrainzDefaultURL)/release")
+      fallbackComponents?.queryItems = [
+        URLQueryItem(name: "query", value: fallbackQuery),
+        URLQueryItem(name: "fmt", value: "json"),
+        URLQueryItem(name: "limit", value: "10"),
+      ]
+      
+      if let fallbackUrl = fallbackComponents?.url,
+         let data = await performRequest(url: fallbackUrl) {
+        do {
+          let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
+          if let releases = response.releases {
+            for release in releases {
+              if let artworkURL = await fetchArtworkURL(forRelease: release.id) {
+                if !artworkURLs.contains(artworkURL) {
+                  artworkURLs.append(artworkURL)
+                }
+              }
+              if artworkURLs.count >= 12 { break }
+            }
+          }
+        } catch {}
+      }
+    }
+
+    return artworkURLs
+  }
+
   // MARK: - Cover Art Archive
 
   private func fetchArtworkURL(forRelease releaseId: String) async -> URL? {
@@ -376,22 +543,64 @@ final class MetadataService {
 
     guard let url = URL(string: urlString) else { return nil }
 
+    if let data = await performRequest(url: url) {
+      do {
+        // If data starts with '<', it's likely HTML/XML (e.g. error page)
+        if let firstByte = data.first, firstByte == 60 {  // '<' character
+          print(
+            "[DEBUG] MetadataService.fetchArtworkURL: Received non-JSON response for release \(releaseId)"
+          )
+          return nil
+        }
+
+        let response = try JSONDecoder().decode(CoverArtArchiveResponse.self, from: data)
+
+        // Prefer a reasonably sized front cover thumbnail before falling back to originals.
+        let frontImages = response.images.filter { $0.types.contains("Front") }
+        let bestImage = frontImages.max { $0.image.width ?? 0 < $1.image.width ?? 0 }
+
+        let artworkURL =
+          bestImage?.thumbnails.thumb500
+          ?? bestImage?.thumbnails.large
+          ?? bestImage?.image.url
+          ?? response.images.first?.thumbnails.thumb500
+          ?? response.images.first?.image.url
+
+        return artworkURL.flatMap { forceHTTPS($0) }
+      } catch {
+        print("Failed to decode artwork JSON: \(error)")
+        return nil
+      }
+    }
+    return nil
+  }
+
+  // MARK: - Artwork Caching
+
+  /// Downloads and caches artwork
+  func downloadArtwork(from url: URL) async -> String? {
+    let secureURL = forceHTTPS(url)
+    print("[DEBUG] MetadataService.downloadArtwork: Downloading from \(secureURL.absoluteString)")
+
     do {
-      let (data, _) = try await URLSession.shared.data(from: url)
-      let response = try JSONDecoder().decode(CoverArtArchiveResponse.self, from: data)
-
-      // Find the front cover with the highest resolution
-      let frontImages = response.images.filter { $0.types.contains("Front") }
-      let bestImage = frontImages.max { $0.image.width ?? 0 < $1.image.width ?? 0 }
-
-      return bestImage?.image.url ?? response.images.first?.image.url
+      // Use performRequest for consistent User-Agent and retry logic
+      if let data = await performRequest(url: secureURL) {
+        // Cache the artwork
+        return await cacheArtwork(data, for: nil)
+      }
+      return nil
     } catch {
-      print("Failed to fetch artwork: \(error)")
+      print("Failed to download artwork: \(error)")
       return nil
     }
   }
 
-  // MARK: - Artwork Caching
+  private func forceHTTPS(_ url: URL) -> URL {
+    guard url.scheme == "http" else { return url }
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.scheme = "https"
+    return components?.url ?? url
+  }
 
   private func cacheArtwork(_ data: Data, for song: LibrarySong?) async -> String? {
     let hash = data.sha256()
@@ -421,36 +630,68 @@ final class MetadataService {
   private func applyMetadata(_ metadata: FetchedMetadata, to song: LibrarySong) async {
     guard let modelContext = modelContext else { return }
 
-    // Update song fields
-    if let title = metadata.title, !title.isEmpty {
+    var needsSave = false
+
+    // Update song fields only if they're empty or generic (Preserve user edits)
+    if let title = metadata.title, !title.isEmpty, 
+       !song.userEditedFields.contains("title"),
+       (song.title == song.fileName || song.title.contains("Untitled")) {
       song.title = title
+      needsSave = true
     }
-    if let artist = metadata.artist, !artist.isEmpty {
+    if let artist = metadata.artist, !artist.isEmpty,
+       !song.userEditedFields.contains("artist"),
+       (song.artist == "Unknown Artist" || song.artist.isEmpty) {
       song.artist = artist
+      needsSave = true
     }
-    if let album = metadata.album, !album.isEmpty {
+    if let album = metadata.album, !album.isEmpty,
+       !song.userEditedFields.contains("album"),
+       (song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true) {
       song.album = album
+      needsSave = true
     }
-    if let year = metadata.year {
+    if let year = metadata.year, 
+       !song.userEditedFields.contains("year"),
+       (song.year == nil || song.year == 0) {
       song.year = year
+      needsSave = true
     }
-    if let genre = metadata.genre, !genre.isEmpty {
-      song.genre = genre
+    if let genre = metadata.genre, !genre.isEmpty, 
+       !song.userEditedFields.contains("genre"),
+       (song.genre == nil || song.genre?.isEmpty == true) {
+      song.genre = normalizedGenreLabel(from: genre)
+      needsSave = true
     }
-    if let duration = metadata.duration, duration > 0 {
+    if let duration = metadata.duration, duration > 0, song.duration <= 0 {
       song.duration = duration
+      needsSave = true
     }
 
     // Download and cache artwork if available
     if let artworkURL = metadata.artworkURL {
-      if let artworkPath = await downloadArtwork(from: artworkURL) {
-        song.artworkPath = artworkPath
-        song.isRemoteArtwork = true
+      // Only replace if no artwork or if remote artwork is preferred and not user-selected
+      let prefs = UserPreferences.getOrCreate(in: modelContext)
+      let isUserSelected = song.artworkSource == .user
+      let hasEmbeddedArt = song.embeddedArtworkPath != nil
+      
+      // If preferEmbeddedArtwork is true and we have embedded art, don't replace
+      let shouldRespectEmbedded = prefs.preferEmbeddedArtwork && hasEmbeddedArt
+      
+      if song.artworkPath == nil || (prefs.preferOnlineArtwork && !isUserSelected && !shouldRespectEmbedded) {
+        if let artworkPath = await downloadArtwork(from: artworkURL) {
+          song.artworkPath = artworkPath
+          song.isRemoteArtwork = true
+          song.artworkSource = .online
+          needsSave = true
+        }
       }
     }
 
-    song.metadataCheckAttempted = true
-    try? modelContext.save()
+    if needsSave {
+      song.metadataCheckAttempted = true
+      try? modelContext.save()
+    }
   }
 
   @MainActor
@@ -494,6 +735,186 @@ final class MetadataService {
     }
 
     return nil
+  }
+
+  private func bestRecordingMatch(
+    for song: LibrarySong,
+    in candidates: [MusicBrainzRecording]
+  ) -> MusicBrainzRecording? {
+    let scored =
+      candidates
+      .map { ($0, scoreRecording($0, against: song)) }
+      .sorted { $0.1 > $1.1 }
+
+    // Increased threshold from 1.5 to 2.2 for higher confidence
+    guard let best = scored.first, best.1 >= 2.2 else { 
+      print("[DEBUG] MetadataService.bestRecordingMatch: No candidate reached threshold (Best: \(scored.first?.1 ?? 0))")
+      return nil 
+    }
+    return best.0
+  }
+
+  private func bestReleaseMatch(
+    for album: Album,
+    in candidates: [MusicBrainzRelease]
+  ) -> MusicBrainzRelease? {
+    let albumTitle = normalizedSearchText(album.name)
+    let albumArtist = normalizedSearchText(album.artist ?? "")
+
+    let scored =
+      candidates
+      .map { release -> (MusicBrainzRelease, Double) in
+        var score = stringSimilarityScore(normalizedSearchText(release.title), albumTitle)
+        if let releaseArtist = release.artistCredit?.first?.name {
+          score += stringSimilarityScore(normalizedSearchText(releaseArtist), albumArtist)
+        }
+        return (release, score)
+      }
+      .sorted { $0.1 > $1.1 }
+
+    guard let best = scored.first, best.1 >= 1.3 else { return nil }
+    return best.0
+  }
+
+  private func scoreRecording(_ recording: MusicBrainzRecording, against song: LibrarySong)
+    -> Double
+  {
+    let localTitle = normalizedSearchText(song.title)
+    let localArtist = normalizedSearchText(song.artist)
+    let localAlbum = normalizedSearchText(song.album ?? "")
+
+    var score = 0.0
+    
+    // Title match (Weighted high)
+    let titleSimilarity = stringSimilarityScore(normalizedSearchText(recording.title), localTitle)
+    score += titleSimilarity * 2.0
+
+    // Artist match (Weighted high)
+    if let artistName = recording.artistCredit.first?.name {
+      let artistSimilarity = stringSimilarityScore(normalizedSearchText(artistName), localArtist)
+      score += artistSimilarity * 1.5
+    }
+
+    // Album match (Weighted medium - very important to avoid wrong artwork)
+    if let release = recording.releases?.first {
+      let releaseTitle = normalizedSearchText(release.title)
+      if !localAlbum.isEmpty && localAlbum != "unknown album" {
+        let albumSimilarity = stringSimilarityScore(releaseTitle, localAlbum)
+        score += albumSimilarity * 1.2
+        
+        // Bonus for exact album match
+        if releaseTitle == localAlbum {
+          score += 0.5
+        }
+      } else {
+        // If we don't have a local album, we can't be as sure, but we don't penalize
+        score += 0.2
+      }
+    }
+
+    // Duration match (Crucial for identifying correct version/track)
+    if let remoteDuration = recording.length.map({ TimeInterval($0) / 1000.0 }), song.duration > 0 {
+      let difference = abs(remoteDuration - song.duration)
+      if difference <= 3 {
+        score += 1.0 // Very high confidence
+      } else if difference <= 8 {
+        score += 0.6
+      } else if difference <= 20 {
+        score += 0.2
+      } else if difference >= 60 {
+        score -= 1.0 // Likely a different version or extended mix
+      }
+    }
+
+    return score
+  }
+
+  private func stringSimilarityScore(_ lhs: String, _ rhs: String) -> Double {
+    guard !lhs.isEmpty, !rhs.isEmpty else { return 0 }
+    if lhs == rhs { return 1.0 }
+    if lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs) { return 0.85 }
+    if lhs.contains(rhs) || rhs.contains(lhs) { return 0.65 }
+
+    let lhsTokens = Set(lhs.split(separator: " ").map(String.init))
+    let rhsTokens = Set(rhs.split(separator: " ").map(String.init))
+    let overlap = lhsTokens.intersection(rhsTokens).count
+    let union = lhsTokens.union(rhsTokens).count
+    guard union > 0 else { return 0 }
+    return Double(overlap) / Double(union)
+  }
+
+  private func normalizedSearchText(_ value: String) -> String {
+    value
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(
+        of: "[^a-z0-9 ]",
+        with: " ",
+        options: .regularExpression
+      )
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+  }
+
+  private func normalizeGenreName(_ value: String) -> String? {
+    let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleaned.isEmpty else { return nil }
+
+    let normalized = cleaned.lowercased()
+
+    // Blacklist common non-genre MusicBrainz tags
+    let blacklist: Set<String> = [
+      "favorite", "seen live", "good", "best", "awesome", "classic", "beautiful",
+      "amazing", "great", "love", "chill", "relax", "mellow", "fast", "slow",
+      "instrumental", "vocal", "female vocalists", "male vocalists", "canadian",
+      "british", "american", "japanese", "german", "french", "swedish", "under 2000 listeners",
+      "top", "playlist", "spotify", "apple music", "itunes", "2010s", "2020s", "90s", "80s", "70s",
+      "60s",
+      "remix", "cover", "bootleg", "live", "recording", "studio", "independent", "indie",
+      "heard on pandora", "heard on xm", "heard on radio", "heard on tv", "soundtrack",
+    ]
+
+    if blacklist.contains(normalized) {
+      return nil
+    }
+
+    let mapped: String
+    switch normalized {
+    case "hip hop", "hip-hop", "rap":
+      mapped = "Hip-Hop"
+    case "rnb", "r&b":
+      mapped = "R&B"
+    case "alt rock", "alternative rock":
+      mapped = "Alternative"
+    case "electronica":
+      mapped = "Electronic"
+    case "j pop", "j-pop":
+      mapped = "J-Pop"
+    case "k pop", "k-pop":
+      mapped = "K-Pop"
+    case "heavy metal", "death metal", "black metal", "thrash metal":
+      mapped = "Metal"
+    default:
+      mapped =
+        cleaned
+        .split(separator: " ")
+        .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
+        .joined(separator: " ")
+    }
+
+    return mapped
+  }
+
+  private func normalizedGenreLabel(from label: String) -> String {
+    let parts =
+      label
+      .split(separator: "/")
+      .flatMap { $0.split(separator: ",") }
+      .compactMap { normalizeGenreName(String($0)) }
+
+    var seen = Set<String>()
+    let unique = parts.filter { seen.insert($0).inserted }
+    return unique.joined(separator: " / ")
   }
 }
 

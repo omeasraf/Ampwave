@@ -43,6 +43,8 @@ public class WidgetSyncService {
     }
   }
 
+  private static let widgetArtFileName = "widget_now_playing_art.jpg"
+
   private func performSync(
     song: LibrarySong?,
     isPlaying: Bool,
@@ -50,11 +52,25 @@ public class WidgetSyncService {
     duration: TimeInterval,
     lyrics: SyncedLyric? = nil
   ) {
+    var artName: String?
+    if let song = song, let rel = song.effectiveArtworkPath, let src = PathManager.resolve(rel),
+      let container = sharedContainer
+    {
+      let dest = container.appendingPathComponent(Self.widgetArtFileName)
+      try? FileManager.default.removeItem(at: dest)
+      try? FileManager.default.copyItem(at: src, to: dest)
+      artName = Self.widgetArtFileName
+    } else if let container = sharedContainer {
+      let dest = container.appendingPathComponent(Self.widgetArtFileName)
+      try? FileManager.default.removeItem(at: dest)
+    }
+
     let info = SharedPlaybackInfo(
       songId: song?.id,
       title: song?.title ?? "Not Playing",
       artist: song?.artist ?? "No Artist",
       album: song?.album,
+      artworkRelativePath: artName,
       isPlaying: isPlaying,
       currentTime: currentTime,
       duration: duration,

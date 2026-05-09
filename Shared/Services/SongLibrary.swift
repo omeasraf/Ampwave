@@ -29,10 +29,17 @@ final class SongLibrary {
       updateIndexingStatusForMetadata()
     }
   }
+  private var totalMetadataFetches: Int = 0
+  private var isGenreBackfillActive: Bool = false
 
   var modelContext: ModelContext? {
     didSet {
-      // Don't trigger indexing here - let views control timing
+      if modelContext != nil {
+        // Automatically check for songs needing metadata on startup
+        Task {
+          await fetchMetadataForNewSongs()
+        }
+      }
     }
   }
 
@@ -52,6 +59,232 @@ final class SongLibrary {
     let fm = FileManager.default
     try? fm.createDirectory(at: songsDir, withIntermediateDirectories: true)
     try? fm.createDirectory(at: artworkDir, withIntermediateDirectories: true)
+  }
+
+  // MARK: - Duplicate Detection
+
+  private func normalizeForMatching(_ text: String) -> String {
+    var normalized = text.lowercased()
+    
+    // Remove common parenthetical additions and featured artists
+    let patterns = [
+      "\\(.*?remastered.*?\\)", "\\[.*?remastered.*?\\]",
+      "\\(.*?radio edit.*?\\)", "\\[.*?radio edit.*?\\]",
+      "\\(.*?live.*?\\)", "\\[.*?live.*?\\]",
+      "\\(.*?deluxe.*?\\)", "\\[.*?deluxe.*?\\]",
+      "\\(.*?feat\\..*?\\)", "\\[.*?feat\\..*?\\]",
+      "\\(.*?ft\\..*?\\)", "\\[.*?ft\\..*?\\]",
+      "\\(.*?featuring.*?\\)", "\\[.*?featuring.*?\\]",
+      "\\(.*?official.*?\\)", "\\[.*?official.*?\\]",
+      "\\(.*?lyrics.*?\\)", "\\[.*?lyrics.*?\\]",
+      "\\(.*?hq.*?\\)", "\\[.*?hq.*?\\]",
+      "\\(.*?high quality.*?\\)", "\\[.*?high quality.*?\\]",
+      "remastered", "radio edit", "deluxe edition",
+      "feat\\.", "ft\\.", "featuring", "official video", "official audio"
+    ]
+    
+    for pattern in patterns {
+      normalized = normalized.replacingOccurrences(of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
+    }
+    
+    return normalized
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  struct DuplicateGroup: Identifiable {
+    let id = UUID()
+    let songs: [LibrarySong]
+    let reason: String
+  }
+
+  /// Finds potential duplicate songs in the library.
+  nonisolated func findDuplicates() -> [DuplicateGroup] {
+    // We need to run this on a background context or ensure we're not blocking MainActor
+    // for long periods, but since it's nonisolated, we must fetch the data ourselves.
+    
+    // For safety and simplicity, let's keep it isolated to the actor that owns the data
+    // but ensure we're using it correctly.
+    
+    // Re-evaluating: If I make it nonisolated, I can't access `self.songs`.
+    // The crash happened because of cross-thread access to external storage.
+    // The safest way is to run it on MainActor (where songs live) but keep it efficient.
+    return MainActor.assumeIsolated {
+      var groups: [DuplicateGroup] = []
+
+      // 1. Group by file hash (100% confidence)
+      var hashGroups: [String: [LibrarySong]] = [:]
+      for song in songs {
+        hashGroups[song.fileHash, default: []].append(song)
+      }
+
+      var accountedForIds = Set<UUID>()
+      for (_, group) in hashGroups where group.count > 1 {
+        groups.append(DuplicateGroup(songs: group, reason: "Identical File Hash"))
+        accountedForIds.formUnion(group.map(\.id))
+      }
+
+      // 2. Group by metadata (High confidence: Fuzzy Title + Artist + Album + Duration)
+      let remainingSongs = songs.filter { !accountedForIds.contains($0.id) }
+      var metaGroups: [String: [LibrarySong]] = [:]
+
+      for song in remainingSongs {
+        let title = normalizeForMatching(song.title)
+        // Access artists.first safely on MainActor
+        let artist = normalizeForMatching(song.artists.first ?? song.artist)
+        let album = normalizeForMatching(song.album ?? "")
+        
+        let key = "\(title)|\(artist)|\(album)"
+        metaGroups[key, default: []].append(song)
+      }
+
+      for (_, candidates) in metaGroups where candidates.count > 1 {
+        // Further refine by duration tolerance (± 5 seconds)
+        let refined = refineByDuration(candidates, tolerance: 5.0)
+        for subgroup in refined where subgroup.count > 1 {
+          groups.append(DuplicateGroup(songs: subgroup, reason: "Matching Metadata & Duration"))
+          accountedForIds.formUnion(subgroup.map(\.id))
+        }
+      }
+
+      // 3. Group by loose metadata (Title + Artist + Duration, ignoring Album)
+      let looseRemaining = songs.filter { !accountedForIds.contains($0.id) }
+      var looseGroups: [String: [LibrarySong]] = [:]
+
+      for song in looseRemaining {
+        let title = normalizeForMatching(song.title)
+        let artist = normalizeForMatching(song.artists.first ?? song.artist)
+        let key = "\(title)|\(artist)"
+        looseGroups[key, default: []].append(song)
+      }
+
+      for (_, candidates) in looseGroups where candidates.count > 1 {
+        // Use a stricter duration tolerance when album doesn't match (± 2 seconds)
+        let refined = refineByDuration(candidates, tolerance: 2.0)
+        for subgroup in refined where subgroup.count > 1 {
+          groups.append(DuplicateGroup(songs: subgroup, reason: "Matching Title & Artist"))
+          accountedForIds.formUnion(subgroup.map(\.id))
+        }
+      }
+
+      return groups
+    }
+  }
+
+  private func refineByDuration(_ songs: [LibrarySong], tolerance: TimeInterval) -> [[LibrarySong]] {
+    var subgroups: [[LibrarySong]] = []
+    for song in songs {
+      var found = false
+      for i in 0..<subgroups.count {
+        if abs(subgroups[i][0].duration - song.duration) <= tolerance {
+          subgroups[i].append(song)
+          found = true
+          break
+        }
+      }
+      if !found {
+        subgroups.append([song])
+      }
+    }
+    return subgroups
+  }
+
+  /// Calculates a quality score for a song to determine which version to keep.
+  func calculateQualityScore(for song: LibrarySong) -> Int {
+    var score = 0
+    
+    // Format priority
+    let format = song.format?.lowercased() ?? ""
+    if format.contains("flac") {
+      score += 1000
+    } else if format.contains("alac") || format.contains("wav") || format.contains("aiff") {
+      score += 800
+    } else if format.contains("m4a") || format.contains("aac") {
+      score += 600
+    } else if format.contains("mp3") {
+      score += 400
+    }
+    
+    // Bitrate contribution (secondary)
+    if let bitRate = song.bitRate {
+      score += bitRate / 10 // e.g., 320kbps adds 32 points
+    }
+    
+    // Sample rate and bit depth contribution
+    if let sampleRate = song.sampleRate {
+      score += Int(sampleRate / 1000)
+    }
+    if let bitDepth = song.bitDepth {
+      score += bitDepth
+    }
+    
+    // Metadata completeness
+    if song.artworkPath != nil { score += 10 }
+    if song.lyrics != nil { score += 5 }
+    
+    return score
+  }
+
+  /// Automatically merges duplicate songs if they match with high confidence.
+  private func mergeSongDuplicates(in modelContext: ModelContext) async {
+    let duplicateGroups = findDuplicates()
+    guard !duplicateGroups.isEmpty else { return }
+
+    print("[DEBUG] SongLibrary.mergeSongDuplicates: Found \(duplicateGroups.count) duplicate groups")
+
+    var deletedCount = 0
+    for group in duplicateGroups {
+      // Only auto-merge if identical hash or extremely high confidence metadata match
+      // For metadata matches, we only auto-merge if both have the same album name (not "Unknown Album")
+      let isHashMatch = group.reason == "Identical File Hash"
+      let isHighConfMeta = group.reason == "Matching Metadata & Duration" && 
+                          group.songs.first?.album != nil && 
+                          group.songs.first?.album != "Unknown Album"
+
+      guard isHashMatch || isHighConfMeta else { continue }
+
+      // Keep the "best" song based on quality score
+      let sortedGroup = group.songs.sorted { s1, s2 in
+        let s1Score = calculateQualityScore(for: s1)
+        let s2Score = calculateQualityScore(for: s2)
+        if s1Score != s2Score { return s1Score > s2Score }
+        return s1.importedDate < s2.importedDate // Prefer older if scores are equal
+      }
+
+      let primary = sortedGroup[0]
+      for duplicate in sortedGroup.dropFirst() {
+        // Transfer playlist memberships
+        if let playlists = duplicate.playlists {
+          for playlist in playlists {
+            if !(primary.playlists?.contains(playlist) ?? false) {
+              primary.playlists?.append(playlist)
+              if !(playlist.songs.contains(primary)) {
+                playlist.songs.append(primary)
+              }
+            }
+          }
+        }
+
+        // Delete file if it's in the managed directory and not referenced by others
+        let url = getFileURL(for: duplicate)
+        if duplicate.storageMode == .copied && FileManager.default.fileExists(atPath: url.path) {
+          // Check if any other song uses this exact file path (rare but possible)
+          let otherUsingFile = songs.contains { $0.id != duplicate.id && getFileURL(for: $0).path == url.path }
+          if !otherUsingFile {
+            try? FileManager.default.removeItem(at: url)
+          }
+        }
+
+        modelContext.delete(duplicate)
+        deletedCount += 1
+      }
+    }
+
+    if deletedCount > 0 {
+      try? modelContext.save()
+      print("[DEBUG] SongLibrary.mergeSongDuplicates: Deleted \(deletedCount) duplicate songs")
+    }
   }
 
   // MARK: - Artists
@@ -232,6 +465,15 @@ final class SongLibrary {
       )
       songs = try modelContext.fetch(descriptor)
       print("[DEBUG] SongLibrary.loadSongs: Fetched \(songs.count) songs")
+
+      // Merge duplicate songs if setting is enabled
+      let appSettings = AppSettings.getOrCreate(in: modelContext)
+      if appSettings.mergeSongDuplicates {
+        print("[DEBUG] SongLibrary.loadSongs: Merging duplicate songs")
+        await mergeSongDuplicates(in: modelContext)
+        // Refresh songs after merge
+        songs = try modelContext.fetch(descriptor)
+      }
     } catch {
       print("[DEBUG] SongLibrary.loadSongs: Error fetching songs: \(error)")
       songs = []
@@ -319,6 +561,16 @@ final class SongLibrary {
     var deletedSongs: [LibrarySong] = []
 
     for song in existingSongs {
+      if song.storageModeRaw == LibrarySong.StorageMode.referenced.rawValue {
+        let url = getFileURL(for: song)
+        if FileManager.default.fileExists(atPath: url.path) {
+          continue
+        } else {
+          deletedSongs.append(song)
+          continue
+        }
+      }
+
       let expectedURL = getFileURL(for: song).standardizedFileURL
       let expectedPath = expectedURL.path
 
@@ -490,6 +742,11 @@ final class SongLibrary {
       print("[DEBUG] SongLibrary.importFiles: Final save and reloading library")
       saveContext()
       await loadSongs()
+
+      // Start background metadata fetch for everything imported
+      Task {
+        await fetchMetadataForNewSongs()
+      }
     }
     print(
       "[DEBUG] SongLibrary.importFiles: Completed. Imported \(importedCount)/\(totalCount) files")
@@ -532,49 +789,60 @@ final class SongLibrary {
 
     // Offload remaining heavy I/O to a background task
     print("[DEBUG] SongLibrary.importFile: Offloading remaining I/O to background task")
+    let preferences = UserPreferences.getOrCreate(in: modelContext)
+    let shouldCopy = preferences.copyMusicToStorage
+
     let ioResult = await Task.detached(priority: .userInitiated) {
       // Extract metadata (this also does I/O)
       print(
         "[DEBUG] SongLibrary.importFile.detached: Extracting metadata for \(url.lastPathComponent)")
       let metadata = await AudioMetadataExtractor.extract(from: url)
 
-      // Prepare destination
-      let fileName = self.generateFileName(
-        artist: metadata.artist,
-        title: metadata.title,
-        trackNumber: metadata.trackNumber,
-        originalExtension: url.pathExtension
-      )
-
-      let albumDir = self.getAlbumDirectory(
-        album: metadata.album, artist: metadata.artist, groupByAlbum: groupByAlbum)
-
-      // Create directory on background
-      print("[DEBUG] SongLibrary.importFile.detached: Creating directory \(albumDir.path)")
-      try? FileManager.default.createDirectory(at: albumDir, withIntermediateDirectories: true)
-
-      let uniqueFileName = self.getUniqueFileName(baseName: fileName, in: albumDir)
-      let destinationURL = albumDir.appendingPathComponent(uniqueFileName)
-
-      // Copy file on background
-      print("[DEBUG] SongLibrary.importFile.detached: Copying file to \(destinationURL.path)")
-      do {
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-          try FileManager.default.removeItem(at: destinationURL)
-        }
-        try FileManager.default.copyItem(at: url, to: destinationURL)
-      } catch {
-        print("[DEBUG] SongLibrary.importFile.detached: Failed to copy file: \(error)")
-        return nil as (ExtractedAudioMetadata, URL, Int)?
-      }
-
       let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-      print("[DEBUG] SongLibrary.importFile.detached: I/O completed for \(url.lastPathComponent)")
 
-      return (metadata, destinationURL, fileSize)
+      if shouldCopy {
+        // Prepare destination
+        let fileName = self.generateFileName(
+          artist: metadata.artist,
+          title: metadata.title,
+          trackNumber: metadata.trackNumber,
+          originalExtension: url.pathExtension
+        )
+
+        let albumDir = self.getAlbumDirectory(
+          album: metadata.album, artist: metadata.artist, groupByAlbum: groupByAlbum)
+
+        // Create directory on background
+        print("[DEBUG] SongLibrary.importFile.detached: Creating directory \(albumDir.path)")
+        try? FileManager.default.createDirectory(at: albumDir, withIntermediateDirectories: true)
+
+        let uniqueFileName = self.getUniqueFileName(baseName: fileName, in: albumDir)
+        let destinationURL = albumDir.appendingPathComponent(uniqueFileName)
+
+        // Copy file on background
+        print("[DEBUG] SongLibrary.importFile.detached: Copying file to \(destinationURL.path)")
+        do {
+          if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+          }
+          try FileManager.default.copyItem(at: url, to: destinationURL)
+        } catch {
+          print("[DEBUG] SongLibrary.importFile.detached: Failed to copy file: \(error)")
+          return nil as (ExtractedAudioMetadata, URL, Int, LibrarySong.StorageMode, Data?)?
+        }
+        print("[DEBUG] SongLibrary.importFile.detached: I/O completed for \(url.lastPathComponent)")
+        return (metadata, destinationURL, fileSize, LibrarySong.StorageMode.copied, nil)
+      } else {
+        // Referenced mode
+        print(
+          "[DEBUG] SongLibrary.importFile.detached: Using referenced mode for \(url.lastPathComponent)"
+        )
+        let bookmark = PathManager.createBookmark(for: url)
+        return (metadata, url, fileSize, LibrarySong.StorageMode.referenced, bookmark)
+      }
     }.value
 
-    guard let (metadata, destinationURL, fileSize) = ioResult else {
+    guard let (metadata, destinationURL, fileSize, storageMode, bookmarkData) = ioResult else {
       print("[DEBUG] SongLibrary.importFile: I/O task failed for \(url.lastPathComponent)")
       return nil
     }
@@ -596,9 +864,12 @@ final class SongLibrary {
     if FileManager.default.fileExists(atPath: lrcURL.path) {
       if let lrcContent = try? String(contentsOf: lrcURL, encoding: .utf8) {
         songLyrics = lrcContent
-        // Optionally copy the .lrc file to destination too
-        let destLrcURL = destinationURL.deletingPathExtension().appendingPathExtension("lrc")
-        try? FileManager.default.copyItem(at: lrcURL, to: destLrcURL)
+
+        if storageMode == .copied {
+          // Optionally copy the .lrc file to destination too
+          let destLrcURL = destinationURL.deletingPathExtension().appendingPathExtension("lrc")
+          try? FileManager.default.copyItem(at: lrcURL, to: destLrcURL)
+        }
       }
     }
 
@@ -620,12 +891,22 @@ final class SongLibrary {
       year: metadata.year,
       composer: metadata.composer,
       artworkPath: artworkPath,
+      embeddedArtworkPath: artworkPath,
       sampleRate: metadata.sampleRate,
       bitDepth: metadata.bitDepth,
       bitRate: metadata.bitRate,
       channels: metadata.channels,
-      format: metadata.format
+      format: metadata.format,
+      storageMode: storageMode,
+      bookmarkData: bookmarkData
     )
+
+    // Set initial artwork source
+    if artworkPath != nil {
+      song.artworkSource = .embedded
+    }
+
+    song.updateSearchIndex()
 
     print("[DEBUG] SongLibrary.importFile: Inserting song into modelContext")
     modelContext.insert(song)
@@ -656,16 +937,12 @@ final class SongLibrary {
       artist: primaryArtistName,
       year: metadata.year,
       artworkPath: artworkPath,
+      embeddedArtworkPath: artworkPath,
       in: modelContext
     ) {
       song.albumReference = album
       album.songs.append(song)
       if album.songs.count == 1 { artist.albumCount += 1 }
-    }
-
-    // Background fetch online metadata and assets
-    Task {
-      await fetchMetadataForSong(song)
     }
 
     print("[DEBUG] SongLibrary.importFile: Finished successfully for \(url.lastPathComponent)")
@@ -709,6 +986,15 @@ final class SongLibrary {
       }
     }()
 
+    // For in-place indexing (e.g. startup scan of Songs/ folder), it's always .copied
+    // because it's already in the app's managed directory.
+    // However, if we're importing from elsewhere via Files app, it follows the setting.
+    // This method is primarily used by indexOnStartup which scans self.songsDirectory.
+    let isAlreadyInLibraryDir = url.path.hasPrefix(songsDirectory.path)
+    let storageMode: LibrarySong.StorageMode =
+      isAlreadyInLibraryDir ? LibrarySong.StorageMode.copied : LibrarySong.StorageMode.referenced
+    let bookmarkData = isAlreadyInLibraryDir ? nil : PathManager.createBookmark(for: url)
+
     let song = LibrarySong(
       title: metadata.title,
       artist: metadata.artist,
@@ -726,12 +1012,22 @@ final class SongLibrary {
       year: metadata.year,
       composer: metadata.composer,
       artworkPath: artworkPath,
+      embeddedArtworkPath: artworkPath,
       sampleRate: metadata.sampleRate,
       bitDepth: metadata.bitDepth,
       bitRate: metadata.bitRate,
       channels: metadata.channels,
-      format: metadata.format
+      format: metadata.format,
+      storageMode: storageMode,
+      bookmarkData: bookmarkData
     )
+
+    // Set initial artwork source
+    if artworkPath != nil {
+      song.artworkSource = .embedded
+    }
+
+    song.updateSearchIndex()
 
     modelContext.insert(song)
 
@@ -760,16 +1056,12 @@ final class SongLibrary {
       artist: primaryArtistName,
       year: metadata.year,
       artworkPath: artworkPath,
+      embeddedArtworkPath: artworkPath,
       in: modelContext
     ) {
       song.albumReference = album
       album.songs.append(song)
       if album.songs.count == 1 { artist.albumCount += 1 }
-    }
-
-    // Background fetch online metadata and assets
-    Task {
-      await fetchMetadataForSong(song)
     }
 
     return song
@@ -826,16 +1118,26 @@ final class SongLibrary {
   }
 
   private func updateIndexingStatusForMetadata() {
+    // Don't update status during genre backfill to avoid interference
+    if isGenreBackfillActive { return }
+
     if pendingMetadataFetches > 0 {
       // Only set to fetchingMetadata if not already indexing something else (like file import)
       switch indexingStatus {
       case .idle, .complete, .fetchingMetadata:
-        indexingStatus = .fetchingMetadata(pendingMetadataFetches)
+        let total = max(totalMetadataFetches, pendingMetadataFetches)
+        let current = total - pendingMetadataFetches
+        Task { @MainActor in
+          indexingStatus = .fetchingMetadata(current: current, total: total)
+        }
       default:
         break
       }
     } else if case .fetchingMetadata = indexingStatus {
-      indexingStatus = .complete
+      Task { @MainActor in
+        indexingStatus = .complete
+      }
+      totalMetadataFetches = 0
     }
   }
 
@@ -850,14 +1152,47 @@ final class SongLibrary {
 
     let preferences = UserPreferences.getOrCreate(in: modelContext)
 
+    // 0. Genre tags when full metadata already ran but genre is still empty
+    if preferences.autoFetchMetadata && !preferences.isOfflineMode
+      && song.metadataCheckAttempted
+      && (song.genre == nil || song.genre?.isEmpty == true)
+    {
+      let metadataService = MetadataService.shared
+      if metadataService.modelContext == nil {
+        metadataService.setModelContext(modelContext)
+      }
+      if let genre = await metadataService.fetchGenreTags(for: song), !genre.isEmpty {
+        await MainActor.run {
+          song.genre = genre
+          try? modelContext.save()
+        }
+      }
+    }
+
     // 1. Online Metadata & Artwork
     // Only fetch if metadata is missing/incomplete AND we haven't already tried.
+    // IMPROVED: Be more thorough. Fetch if any key field is missing or generic.
+    let isGenericAlbum =
+      song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true
+    let isGenericArtist = song.artist == "Unknown Artist" || song.artist.isEmpty
+    let isMissingKeyInfo =
+      song.genre == nil || song.genre?.isEmpty == true || song.year == nil || song.year == 0
+
     let needsMetadata =
-      song.artworkPath == nil || song.album == nil || song.album == "Unknown Album"
+      song.artworkPath == nil || isGenericAlbum || isGenericArtist || isMissingKeyInfo
+
     if preferences.autoFetchMetadata && needsMetadata && !song.metadataCheckAttempted {
-      pendingMetadataFetches += 1
+      // Only increment if not already part of a batch fetch
+      if totalMetadataFetches <= 1 {
+        totalMetadataFetches = 1
+        pendingMetadataFetches += 1
+      }
+
+      // Mark as attempted early to prevent race conditions or repeats on restart
+      song.metadataCheckAttempted = true
+      saveContext()
+
       defer {
-        song.metadataCheckAttempted = true
         pendingMetadataFetches -= 1
         saveContext()
       }
@@ -900,18 +1235,44 @@ final class SongLibrary {
     print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Starting batch fetch")
     guard let modelContext = modelContext else { return }
 
-    // Fetch for songs that have no artwork and haven't been attempted yet
+    // Simplify predicate to avoid compiler timeout.
+    // We'll filter for specific missing metadata fields in memory.
     let descriptor = FetchDescriptor<LibrarySong>(
-      predicate: #Predicate<LibrarySong> { $0.artworkPath == nil && !$0.metadataCheckAttempted }
+      predicate: #Predicate<LibrarySong> { song in
+        song.metadataCheckAttempted == false
+      }
     )
 
     do {
-      let songsToFetch = try modelContext.fetch(descriptor).prefix(10)
-      if songsToFetch.isEmpty { return }
+      let uncheckedSongs = try modelContext.fetch(descriptor)
+      let songsToFetch = uncheckedSongs.filter { song in
+        let isGeneric = song.album == "Unknown Album" || song.artist == "Unknown Artist"
+        let isMissingInfo =
+          song.artworkPath == nil || song.genre == nil || song.year == nil || song.year == 0
+        return isGeneric || isMissingInfo
+      }
+
+      if songsToFetch.isEmpty {
+        print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: No songs needing metadata fetch")
+        return
+      }
+
+      print(
+        "[DEBUG] SongLibrary.fetchMetadataForNewSongs: Fetching for \(songsToFetch.count) songs")
+
+      totalMetadataFetches = songsToFetch.count
+      pendingMetadataFetches = songsToFetch.count
 
       for song in songsToFetch {
+        // Double check if context is still valid
+        guard self.modelContext != nil else { break }
         await fetchMetadataForSong(song)
+
+        // Brief pause between songs to allow system to breathe
+        try? await Task.sleep(nanoseconds: 200_000_000)  // 0.2s
       }
+
+      print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Finished batch fetch")
     } catch {
       print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Error: \(error)")
     }
@@ -946,6 +1307,37 @@ final class SongLibrary {
     }
 
     indexingStatus = .complete
+  }
+
+  func refreshMetadata(for album: Album) async {
+    print("[DEBUG] SongLibrary.refreshMetadata: Refreshing album \(album.name)")
+    let metadataService = MetadataService.shared
+    if let modelContext = modelContext, metadataService.modelContext == nil {
+      metadataService.setModelContext(modelContext)
+    }
+    await metadataService.refreshMetadata(for: album)
+    
+    // Also refresh all songs in the album
+    for song in album.songs {
+      await metadataService.refreshMetadata(for: song)
+    }
+  }
+
+  func refreshMetadata(for artist: Artist) async {
+    print("[DEBUG] SongLibrary.refreshMetadata: Refreshing artist \(artist.name)")
+    let metadataService = MetadataService.shared
+    if let modelContext = modelContext, metadataService.modelContext == nil {
+      metadataService.setModelContext(modelContext)
+    }
+    
+    // Refresh artist info
+    await metadataService.fetchMetadata(for: artist)
+    
+    // Refresh all songs by this artist
+    let artistSongs = getSongs(byArtist: artist.name)
+    for song in artistSongs {
+      await metadataService.refreshMetadata(for: song)
+    }
   }
 
   @MainActor
@@ -998,6 +1390,14 @@ final class SongLibrary {
       needsSave = true
     }
 
+    if let albumArtist = metadata.albumArtist, !albumArtist.isEmpty,
+      song.albumArtist == nil || song.albumArtist?.isEmpty == true
+    {
+      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating albumArtist to \(albumArtist)")
+      song.albumArtist = albumArtist
+      needsSave = true
+    }
+
     if let duration = metadata.duration, duration > 0, song.duration <= 0 {
       print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating duration to \(duration)")
       song.duration = duration
@@ -1019,6 +1419,7 @@ final class SongLibrary {
           print("[DEBUG] SongLibrary.applyFetchedMetadata: Artwork downloaded to \(artworkPath)")
           song.artworkPath = artworkPath
           song.isRemoteArtwork = true
+          song.artworkSource = .online
           needsSave = true
 
           // Update album artwork too
@@ -1033,6 +1434,8 @@ final class SongLibrary {
     }
 
     if needsSave {
+      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating search index")
+      song.updateSearchIndex()
       print("[DEBUG] SongLibrary.applyFetchedMetadata: Saving changes")
       try? modelContext.save()
     }
@@ -1042,7 +1445,8 @@ final class SongLibrary {
   // MARK: - Album Management
 
   private func getOrCreateAlbum(
-    name: String?, artist: String?, year: Int?, artworkPath: String?, in modelContext: ModelContext
+    name: String?, artist: String?, year: Int?, artworkPath: String?,
+    embeddedArtworkPath: String?, in modelContext: ModelContext
   ) -> Album? {
     guard let albumName = name, !albumName.isEmpty else { return nil }
 
@@ -1057,6 +1461,9 @@ final class SongLibrary {
         if existingAlbum.artworkPath == nil, let newArtworkPath = artworkPath {
           existingAlbum.artworkPath = newArtworkPath
         }
+        if existingAlbum.embeddedArtworkPath == nil, let newEmbeddedPath = embeddedArtworkPath {
+          existingAlbum.embeddedArtworkPath = newEmbeddedPath
+        }
         return existingAlbum
       }
     } catch {
@@ -1067,7 +1474,8 @@ final class SongLibrary {
       name: albumName,
       artist: artistName,
       year: year,
-      artworkPath: artworkPath
+      artworkPath: artworkPath,
+      embeddedArtworkPath: embeddedArtworkPath
     )
     modelContext.insert(album)
     return album
@@ -1148,6 +1556,12 @@ final class SongLibrary {
   // MARK: - File Management
 
   func getFileURL(for song: LibrarySong) -> URL {
+    if song.storageMode == .referenced, let data = song.bookmarkData {
+      if let resolved = PathManager.resolveBookmark(data) {
+        return resolved
+      }
+    }
+
     guard let modelContext = modelContext else {
       return songsDirectory.appendingPathComponent(song.fileName)
     }
@@ -1293,6 +1707,94 @@ final class SongLibrary {
     } catch {
       print("[DEBUG] SongLibrary.saveContext: Error saving: \(error)")
     }
+  }
+
+  /// One-time MusicBrainz tag pass for songs missing `genre` (runs after library load).
+  func runGenreBackfillOncePerInstall() async {
+    let key = "Ampwave.genreBackfill.v1"
+    guard !UserDefaults.standard.bool(forKey: key) else { return }
+    guard let modelContext = modelContext else { return }
+    let prefs = UserPreferences.getOrCreate(in: modelContext)
+    guard prefs.autoFetchMetadata, !prefs.isOfflineMode else {
+      UserDefaults.standard.set(true, forKey: key)
+      return
+    }
+    defer { UserDefaults.standard.set(true, forKey: key) }
+
+    MetadataService.shared.setModelContext(modelContext)
+    let targets = songs.filter { $0.genre == nil || $0.genre?.isEmpty == true }
+    print("[DEBUG] Genre backfill: Found \(targets.count) songs without genres")
+    if targets.isEmpty { return }
+
+    let songsToFetch = Array(targets.prefix(120))
+    totalMetadataFetches = songsToFetch.count
+    isGenreBackfillActive = true
+    await MainActor.run {
+      indexingStatus = .fetchingMetadata(current: 0, total: songsToFetch.count)
+    }
+    print("[DEBUG] Genre backfill: Starting fetch for \(songsToFetch.count) songs")
+
+    for (index, song) in songsToFetch.enumerated() {
+      pendingMetadataFetches += 1
+      defer {
+        pendingMetadataFetches -= 1
+      }
+
+      if let genre = await MetadataService.shared.fetchGenreTags(for: song), !genre.isEmpty {
+        song.genre = genre
+        try? modelContext.save()
+      }
+
+      // Update status with remaining count
+      if index < songsToFetch.count - 1 {
+        await MainActor.run {
+          indexingStatus = .fetchingMetadata(current: index + 1, total: songsToFetch.count)
+        }
+      }
+
+      try? await Task.sleep(nanoseconds: 1_600_000_000)
+    }
+
+    print("[DEBUG] Genre backfill: Completed")
+    // Mark as complete
+    await MainActor.run {
+      indexingStatus = .complete
+    }
+    totalMetadataFetches = 0
+    isGenreBackfillActive = false
+  }
+
+  /// Distinct genre labels with song counts. Splits compound tags (e.g. `Rock/Pop`) on `/` and `,`.
+  func genreEntriesSortedByPopularity() -> [(name: String, count: Int)] {
+    var counts: [String: Int] = [:]
+    for song in songs {
+      guard let raw = song.genre?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty
+      else {
+        continue
+      }
+
+      // Split by common separators: /, ;, ,
+      let parts = raw.components(separatedBy: CharacterSet(charactersIn: "/;,"))
+
+      var seenInThisSong = Set<String>()
+
+      for part in parts {
+        let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { continue }
+
+        // Use consistent capitalization for counting
+        let normalized = trimmed.capitalized
+        if !seenInThisSong.contains(normalized) {
+          counts[normalized, default: 0] += 1
+          seenInThisSong.insert(normalized)
+        }
+      }
+    }
+    return counts.map { (name: $0.key, count: $0.value) }
+      .sorted {
+        if $0.count != $1.count { return $0.count > $1.count }
+        return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+      }
   }
 
   func setModelContext(_ context: ModelContext) {

@@ -21,7 +21,7 @@ struct MiniPlayerView: View {
     HStack(spacing: 12) {
       // Artwork
       FixedArtworkThumbnail(
-        artworkPath: playback.currentItem?.artworkPath,
+        artworkPath: playback.currentItem?.effectiveArtworkPath,
         size: 40
       )
       .clipShape(RoundedRectangle(cornerRadius: 8))

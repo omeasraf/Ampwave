@@ -83,4 +83,50 @@ public enum PathManager {
 
     return relativeURL  // Return the relative one even if it doesn't exist yet (for writing)
   }
+
+  // MARK: - Security Bookmarks
+
+  /// Creates a security-scoped bookmark for an external URL.
+  static func createBookmark(for url: URL) -> Data? {
+    do {
+      return try url.bookmarkData(
+        options: .minimalBookmark,
+        includingResourceValuesForKeys: nil,
+        relativeTo: nil
+      )
+    } catch {
+      print("[DEBUG] PathManager.createBookmark: Failed to create bookmark: \(error)")
+      return nil
+    }
+  }
+
+  /// Resolves a security-scoped bookmark into a URL.
+  static func resolveBookmark(_ data: Data) -> URL? {
+    do {
+      var isStale = false
+      #if os(macOS)
+        let options: URL.BookmarkResolutionOptions = .withSecurityScope
+      #else
+        let options: URL.BookmarkResolutionOptions = []
+      #endif
+
+      let url = try URL(
+        resolvingBookmarkData: data,
+        options: options,
+        relativeTo: nil,
+        bookmarkDataIsStale: &isStale
+      )
+
+      if isStale {
+        print("[DEBUG] PathManager.resolveBookmark: Bookmark is stale")
+        // We could try to recreate it if we had the original URL,
+        // but for now we just return the resolved one.
+      }
+
+      return url
+    } catch {
+      print("[DEBUG] PathManager.resolveBookmark: Failed to resolve bookmark: \(error)")
+      return nil
+    }
+  }
 }
