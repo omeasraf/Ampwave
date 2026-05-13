@@ -204,10 +204,11 @@ struct OpenPlayerView: View {
     VStack(alignment: .leading, spacing: 14) {
       HStack {
         VStack(alignment: .leading, spacing: 6) {
-          Text(playback.currentItem?.title ?? "Not Playing")
-            .font(.system(size: 28, weight: .bold, design: .rounded))
-            .lineLimit(2)
-            .foregroundStyle(.primary)
+          MarqueeText(
+            text: playback.currentItem?.title ?? "Not Playing",
+            font: .system(size: 28, weight: .bold, design: .rounded),
+            color: .primary
+          )
 
           if let song = playback.currentItem,
             let artist = SongLibrary.shared.getArtist(named: song.artist)

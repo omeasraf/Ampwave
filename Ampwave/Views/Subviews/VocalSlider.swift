@@ -34,7 +34,7 @@ struct VocalSlider: View {
             Image(systemName: "waveform.path")
               .font(.system(size: 20, weight: .bold))
               .foregroundStyle(value > 0.3 ? .black : .white)
-              .padding(.bottom, 12)
+              .padding(.bottom, 80)
           }
         }
         .clipShape(Capsule())

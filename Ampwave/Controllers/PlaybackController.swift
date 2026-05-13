@@ -15,187 +15,13 @@ import MediaToolbox
 import SwiftData
 internal import SwiftUI
 
-// MARK: - VocalIsolator
-
-final class VocalIsolator {
-  static let shared = VocalIsolator()
-
-  // Use pointers for thread-safe access in the audio callback
-  private let targetVocalLevelPtr: UnsafeMutablePointer<Float>
-  private let currentVocalLevelPtr: UnsafeMutablePointer<Float>
-
-  var vocalLevel: Float {
-    get { targetVocalLevelPtr.pointee }
-    set { targetVocalLevelPtr.pointee = newValue }
-  }
-
-  private init() {
-    targetVocalLevelPtr = UnsafeMutablePointer<Float>.allocate(capacity: 1)
-    currentVocalLevelPtr = UnsafeMutablePointer<Float>.allocate(capacity: 1)
-    targetVocalLevelPtr.pointee = 1.0
-    currentVocalLevelPtr.pointee = 1.0
-  }
-
-  deinit {
-    targetVocalLevelPtr.deallocate()
-    currentVocalLevelPtr.deallocate()
-  }
-
-  // Use a class for storage to ensure stable memory and easier management
-  class TapStorage {
-    let targetLevel: UnsafeMutablePointer<Float>
-    let currentLevel: UnsafeMutablePointer<Float>
-    var frameCounter: Int64 = 0
-
-    init(targetLevel: UnsafeMutablePointer<Float>, currentLevel: UnsafeMutablePointer<Float>) {
-      self.targetLevel = targetLevel
-      self.currentLevel = currentLevel
-    }
-  }
-
-  func createAudioMix(for audioTrack: AVAssetTrack) -> AVAudioMix? {
-    let storage = TapStorage(targetLevel: targetVocalLevelPtr, currentLevel: currentVocalLevelPtr)
-
-    print("[VALIDATION] VocalIsolator: Creating tap for track \(audioTrack.trackID)")
-
-    var callbacks = MTAudioProcessingTapCallbacks(
-      version: kMTAudioProcessingTapCallbacksVersion_0,
-      clientInfo: UnsafeMutableRawPointer(Unmanaged.passRetained(storage).toOpaque()),
-      init: { (tap, clientInfo, tapStorageOut) in
-        print("[VALIDATION] VocalIsolator: Tap init triggered")
-        tapStorageOut.pointee = clientInfo
-      },
-      finalize: { (tap) in
-        print("[VALIDATION] VocalIsolator: Tap finalize triggered")
-        let storagePtr = MTAudioProcessingTapGetStorage(tap)
-        Unmanaged<TapStorage>.fromOpaque(storagePtr).release()
-      },
-      prepare: nil,
-      unprepare: nil,
-      process: { (tap, numberFrames, flags, bufferListInOut, numberFramesOut, flagsOut) in
-        let status = MTAudioProcessingTapGetSourceAudio(
-          tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut)
-        if status != noErr { return }
-
-        let storagePtr = MTAudioProcessingTapGetStorage(tap)
-        let storage = Unmanaged<TapStorage>.fromOpaque(storagePtr).takeUnretainedValue()
-
-        let targetVocalLevel = storage.targetLevel.pointee
-        var currentVocalLevel = storage.currentLevel.pointee
-
-        let buffers = UnsafeMutableAudioBufferListPointer(bufferListInOut)
-        let rampSpeed: Float = 0.005
-
-        // Debug: Track RMS
-        var sumSqBefore: Float = 0
-        var sumSqAfter: Float = 0
-        var sampleCount: Int = 0
-
-        // Determine if we should process
-        let skipProcessing = targetVocalLevel >= 0.999 && currentVocalLevel >= 0.999
-
-        if buffers.count == 1 {
-          // Likely Interleaved Stereo or Mono
-          let buffer = buffers[0]
-          guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { return }
-          let numChannels = Int(buffer.mNumberChannels)
-
-          if numChannels == 2 {
-            for i in 0..<Int(numberFrames) {
-              let L = data[i * 2]
-              let R = data[i * 2 + 1]
-              if !skipProcessing {
-                currentVocalLevel += (targetVocalLevel - currentVocalLevel) * rampSpeed
-                let s = sin(currentVocalLevel * .pi * 0.5)
-                let k1 = (s + 1.0) / 2.0
-                let k2 = (s - 1.2) / 2.0
-
-                let nL = k1 * L + k2 * R
-                let nR = k2 * L + k1 * R
-
-                data[i * 2] = nL
-                data[i * 2 + 1] = nR
-
-                sumSqBefore += (L * L + R * R)
-                sumSqAfter += (nL * nL + nR * nR)
-                sampleCount += 2
-              }
-            }
-          }
-        } else if buffers.count >= 2 {
-          // Likely Non-interleaved (Planar)
-          guard let leftData = buffers[0].mData?.assumingMemoryBound(to: Float.self),
-            let rightData = buffers[1].mData?.assumingMemoryBound(to: Float.self)
-          else { return }
-
-          for i in 0..<Int(numberFrames) {
-            let L = leftData[i]
-            let R = rightData[i]
-            if !skipProcessing {
-              currentVocalLevel += (targetVocalLevel - currentVocalLevel) * rampSpeed
-              let s = pow(currentVocalLevel, 1.5)
-              let k1 = (s + 1.0) / 2.0
-              let k2 = (s - 1.0) / 2.0
-
-              let nL = k1 * L + k2 * R
-              let nR = k2 * L + k1 * R
-
-              leftData[i] = nL
-              rightData[i] = nR
-
-              sumSqBefore += (L * L + R * R)
-              sumSqAfter += (nL * nL + nR * nR)
-              sampleCount += 2
-            }
-          }
-        }
-
-        storage.currentLevel.pointee = currentVocalLevel
-
-        // Sampled logging for debug
-        let logInterval: Int64 = 88200  // Every ~2s
-        if (storage.frameCounter / logInterval)
-          != ((storage.frameCounter + Int64(numberFrames)) / logInterval)
-        {
-          let rmsBefore = sampleCount > 0 ? sqrt(sumSqBefore / Float(sampleCount)) : 0
-          let rmsAfter = sampleCount > 0 ? sqrt(sumSqAfter / Float(sampleCount)) : 0
-          let reduction = rmsBefore > 0 ? (20 * log10(rmsAfter / rmsBefore)) : 0
-
-          print(
-            "[VALIDATION] VocalIsolator: target: \(targetVocalLevel), current: \(currentVocalLevel), RMS Diff: \(String(format: "%.2f", reduction)) dB"
-          )
-        }
-        storage.frameCounter += Int64(numberFrames)
-      }
-    )
-
-    var tap: MTAudioProcessingTap?
-    let status = MTAudioProcessingTapCreate(
-      kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap)
-
-    if status != noErr {
-      print("[ERROR] VocalIsolator: Failed to create tap: \(status)")
-      // Release storage since tap creation failed and finalize won't be called
-      Unmanaged.passUnretained(storage).release()
-      return nil
-    }
-
-    let inputParams = AVMutableAudioMixInputParameters(track: audioTrack)
-    inputParams.audioTapProcessor = tap
-
-    let audioMix = AVMutableAudioMix()
-    audioMix.inputParameters = [inputParams]
-    return audioMix
-  }
-}
-
 @Observable
 @MainActor
 final class PlaybackController {
   static let shared = PlaybackController()
 
   private var player: AVQueuePlayer?
-  private var timeObserver: Any?
+  private var timeObserver: (observer: Any, player: AVPlayer)?
   private var itemObservers: [NSKeyValueObservation] = []
   private let library = SongLibrary.shared
   private let historyTracker = ListeningHistoryTracker.shared
@@ -259,7 +85,6 @@ final class PlaybackController {
     }
 
     print("[DEBUG] PlaybackController: toggleVocalSlider - New state: \(isVocalSliderVisible)")
-    persistentState?.isVocalSliderVisible = isVocalSliderVisible
 
     if isVocalSliderVisible {
       resetVocalSliderTimer()
@@ -276,7 +101,6 @@ final class PlaybackController {
     set {
       currentVocalLevel = newValue
       VocalIsolator.shared.vocalLevel = newValue
-      persistentState?.vocalLevel = newValue
 
       if isVocalSliderVisible {
         resetVocalSliderTimer()
@@ -291,7 +115,6 @@ final class PlaybackController {
       Task { @MainActor in
         withAnimation(.easeInOut(duration: 0.5)) {
           self?.isVocalSliderVisible = false
-          self?.persistentState?.isVocalSliderVisible = false
         }
       }
     }
@@ -348,8 +171,8 @@ final class PlaybackController {
   }
 
   private func cleanupPlayer() {
-    if let observer = timeObserver {
-      player?.removeTimeObserver(observer)
+    if let (observer, obsPlayer) = timeObserver {
+      obsPlayer.removeTimeObserver(observer)
       timeObserver = nil
     }
     player?.pause()
@@ -994,9 +817,14 @@ final class PlaybackController {
     guard let song = currentItem else { return }
     applyEQPresetForPlayback()
     applyPlayerOutputVolume()
-    duration = song.duration > 0 ? song.duration : 0
-    currentTime = 0
+    
+    // Reset time immediately to prevent scrubber lag from previous track
+    self.currentTime = 0
+    self.duration = song.duration > 0 ? song.duration : 0
+    
+    // Force immediate remote command and lock screen update
     updateNowPlaying()
+    
     prepareNextItem()
     Task {
       await loadLyrics(for: song)
@@ -1241,8 +1069,8 @@ final class PlaybackController {
       MPMediaItemPropertyPlaybackDuration: duration,
       MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
       MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
-      MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio
-        .rawValue,
+      MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
+      MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
     ]
 
     #if os(iOS)
@@ -1318,8 +1146,6 @@ final class PlaybackController {
     state.lastQueueIndex = currentQueueIndex
     state.lastSourceRaw = currentSource.rawValue
     state.lastPlaylistId = currentPlaylistId
-    state.isVocalSliderVisible = isVocalSliderVisible
-    state.vocalLevel = vocalLevel
 
     do {
       try context.save()
@@ -1338,14 +1164,6 @@ final class PlaybackController {
       )
       return
     }
-
-    // Restore Vocal isolation state
-    self.currentVocalLevel = state.vocalLevel
-    self.isVocalSliderVisible = false  // Always default to hidden on restoration
-    VocalIsolator.shared.vocalLevel = state.vocalLevel
-    print(
-      "[VALIDATION] PlaybackController: Restored VocalSlider state - Level: \(currentVocalLevel) (Visibility forced to false)"
-    )
 
     guard let songId = state.lastSongId else {
       print(
@@ -1455,13 +1273,13 @@ final class PlaybackController {
   private func addTimeObserver() {
     guard let player = player else { return }
 
-    if let observer = timeObserver {
-      player.removeTimeObserver(observer)
+    if let (observer, obsPlayer) = timeObserver {
+      obsPlayer.removeTimeObserver(observer)
       timeObserver = nil
     }
 
     let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
-    timeObserver = player.addPeriodicTimeObserver(
+    let observer = player.addPeriodicTimeObserver(
       forInterval: interval,
       queue: .main
     ) {
@@ -1475,5 +1293,6 @@ final class PlaybackController {
         self.saveState()
       }
     }
+    timeObserver = (observer, player)
   }
 }

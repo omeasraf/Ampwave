@@ -57,6 +57,8 @@ final class LibrarySong: Identifiable, Hashable {
   var isRemoteArtwork: Bool = false
   var artworkSourceRaw: String = "embedded"
   @Attribute(.externalStorage) var userEditedFields: [String] = []
+  
+  @Relationship(inverse: \Album.songs)
   var albumReference: Album?
 
   var artworkSource: ArtworkSource {

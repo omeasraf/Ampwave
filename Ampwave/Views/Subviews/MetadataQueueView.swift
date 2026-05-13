@@ -50,7 +50,9 @@ struct MetadataQueueView: View {
             .listRowBackground(themeManager.cardBackgroundColor)
           }
         }
+#if os(iOS)
         .listStyle(.insetGrouped)
+          #endif
       }
     }
     .background(themeManager.backgroundColor)

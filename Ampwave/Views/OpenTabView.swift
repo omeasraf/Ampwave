@@ -127,48 +127,32 @@ struct OpenTabView: View {
 
       print("[DEBUG] OpenTabView.onAppear - Starting on thread: \(Thread.current.name)")
 
-      // Minimal deferred setup - avoid blocking UI
-      Task.detached(priority: .userInitiated) { [self] in
-        print("[DEBUG] Background task started on thread: \(Thread.current.name)")
-
-        // 1. Initial Context Setup
-        await MainActor.run {
-          print("[DEBUG] Setting model contexts on MainActor...")
-          if self.library.modelContext == nil {
-            self.library.setModelContext(self.modelContext)
-          }
-          if self.playlistManager.modelContext == nil {
-            self.playlistManager.setModelContext(self.modelContext)
-          }
-          if self.historyTracker.modelContext == nil {
-            self.historyTracker.setModelContext(self.modelContext)
-          }
-          if self.lyricsService.modelContext == nil {
-            self.lyricsService.setModelContext(self.modelContext)
-          }
-          if self.metadataService.modelContext == nil {
-            self.metadataService.setModelContext(self.modelContext)
-          }
-          if self.recommendationEngine.modelContext == nil {
-            self.recommendationEngine.setModelContext(self.modelContext)
-          }
-        }
-
+      // Structured initialization sequence
+      Task {
+        // 1. Initial Context Setup (MainActor)
+        print("[DEBUG] Setting model contexts...")
+        self.library.setModelContext(self.modelContext)
+        self.playlistManager.setModelContext(self.modelContext)
+        self.historyTracker.setModelContext(self.modelContext)
+        self.lyricsService.setModelContext(self.modelContext)
+        self.metadataService.setModelContext(self.modelContext)
+        self.recommendationEngine.setModelContext(self.modelContext)
+        
         // 2. Load songs first (needed for restoration)
-        print("[DEBUG] Performing initial song load...")
+        print("[DEBUG] Loading songs...")
         await library.loadSongs()
 
-        // 3. Restore playback state on MainActor
-        await MainActor.run {
-          print("[DEBUG] Setting playbackController context and restoring state...")
-          self.playbackController.setModelContext(self.modelContext)
+        // 3. Restore playback state
+        print("[DEBUG] Restoring playback state...")
+        self.playbackController.setModelContext(self.modelContext)
+
+        // 4. Perform indexing in background
+        Task.detached(priority: .background) {
+          print("[DEBUG] Starting background index...")
+          await SongLibrary.shared.indexOnStartup()
+          await SongLibrary.shared.runGenreBackfillOncePerInstall()
+          print("[DEBUG] Background indexing complete")
         }
-
-        // 4. Perform indexing
-        print("[DEBUG] Starting indexOnStartup")
-        await library.indexOnStartup()
-
-        await library.runGenreBackfillOncePerInstall()
 
         print("[DEBUG] Service initialization complete")
       }

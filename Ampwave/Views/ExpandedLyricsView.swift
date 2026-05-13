@@ -167,12 +167,13 @@ struct ExpandedLyricsView: View {
                 playback.toggleVocalSlider()
               }
             } label: {
-              Image(systemName: playback.isVocalSliderVisible ? "mic.fill" : "mic")
-              .font(.system(size: 18, weight: .semibold))
-              .foregroundStyle(playback.isVocalSliderVisible ? .white : .white.opacity(0.6))
-              .padding(8)
-              .background(playback.isVocalSliderVisible ? Color.white.opacity(0.2) : Color.clear)
-              .clipShape(Circle())
+                Image(systemName: "waveform.path")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(
+                        (playback.isVocalSliderVisible || playback.vocalLevel < 1.0)
+                        ? themeManager.accentColor
+                        : .white.opacity(0.6)
+                    )
             }
           }
         }
