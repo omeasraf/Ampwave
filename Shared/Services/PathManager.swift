@@ -12,6 +12,10 @@ public enum PathManager {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
   }
 
+  static var sharedContainerURL: URL? {
+    FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.ome.ampwave")
+  }
+
   /// Converts an absolute path to a relative path starting from the documents directory.
   static func relativePath(from absolutePath: String) -> String {
     let absoluteURL = URL(fileURLWithPath: absolutePath)

@@ -8,10 +8,11 @@
 import AVFoundation
 import Foundation
 
-/// All metadata extracted from an audio file (AVFoundation).
+/// All metadata extracted from an audio file.
 struct ExtractedAudioMetadata: Sendable {
   var title: String
   var artist: String
+  var artists: [String] = []
   var duration: TimeInterval
   var lyrics: String?
   var album: String?
@@ -24,6 +25,16 @@ struct ExtractedAudioMetadata: Sendable {
   var composer: String?
   var artwork: Data?
 
+  // Confidence & Sources
+  var titleConfidence: Double = 0.0
+  var artistConfidence: Double = 0.0
+  var albumConfidence: Double = 0.0
+  var metadataSourceTitle: String = "unknown"
+  var metadataSourceArtist: String = "unknown"
+  var metadataSourceAlbum: String = "unknown"
+  var isLive: Bool = false
+  var isMedley: Bool = false
+
   // Technical
   var sampleRate: Double?
   var bitDepth: Int?
@@ -32,39 +43,32 @@ struct ExtractedAudioMetadata: Sendable {
   var format: String?
 }
 
-/// Extracts metadata using AVFoundation (supports major formats and full metadata).
+/// Extracts metadata using AVFoundation, Filename Parsing, and Folder Context.
 enum AudioMetadataExtractor: Sendable {
 
   static func extract(from url: URL) async -> ExtractedAudioMetadata {
     print("[DEBUG] AudioMetadataExtractor.extract: Starting for \(url.lastPathComponent)")
     let asset = AVURLAsset(url: url)
-    let fallbackTitle = url.deletingPathExtension().lastPathComponent
-
-    // Use modern load API for properties and metadata
-    print("[DEBUG] AudioMetadataExtractor.extract: Loading duration and metadata...")
+    
+    // 1. Technical & Embedded Metadata
     async let durationTask = loadDuration(from: asset)
     async let metadataTask = try? asset.load(.commonMetadata)
     async let formatsTask = try? asset.load(.availableMetadataFormats)
     async let technicalTask = loadTechnicalMetadata(from: asset)
 
     let duration = await durationTask
-    print("[DEBUG] AudioMetadataExtractor.extract: Duration loaded: \(duration)")
     var allMetadata = (await metadataTask) ?? []
     let formats = (await formatsTask) ?? []
     let technical = await technicalTask
-    print("[DEBUG] AudioMetadataExtractor.extract: Found \(formats.count) metadata formats")
 
     for format in formats {
-      print("[DEBUG] AudioMetadataExtractor.extract: Loading metadata for format \(format)")
       if let metadata = try? await asset.loadMetadata(for: format) {
         allMetadata.append(contentsOf: metadata)
       }
     }
 
-    print(
-      "[DEBUG] AudioMetadataExtractor.extract: Total metadata items found: \(allMetadata.count)")
-    var title = fallbackTitle
-    var artist = "Unknown Artist"
+    var embeddedTitle: String?
+    var embeddedArtist: String?
     var lyrics: String?
     var album: String?
     var albumArtist: String?
@@ -76,104 +80,127 @@ enum AudioMetadataExtractor: Sendable {
     var composer: String?
     var artwork: Data?
 
-    for (index, item) in allMetadata.enumerated() {
-      // Load key and value asynchronously
+    for item in allMetadata {
+      let value = try? await item.load(.value)
       guard let key = item.commonKey else {
-        // Format-specific key
         if let id = item.identifier?.rawValue {
-          // print("[DEBUG] AudioMetadataExtractor.extract: Processing format-specific key \(id)")
-          let value = try? await item.load(.value)
-          if id.contains("lyrics") || id.contains("Lyrics") {
-            lyrics = (value as? String) ?? lyrics
-          } else if id.contains("comment") || id.contains("Comment") || id.contains("description") {
-            songDescription = (value as? String) ?? songDescription
-          } else if id.contains("year") || id.contains("Year") || id.contains("date") {
-            if let num = value as? NSNumber {
-              year = num.intValue
-            } else if let str = value as? String {
-              year = parseYear(str)
-            }
-          } else if id.contains("track") || id.contains("Track") {
-            if let num = value as? NSNumber {
-              trackNumber = num.intValue
-            } else if let str = value as? String {
-              trackNumber = parseTrackNumber(str)
-            }
-          } else if id.contains("disc") || id.contains("Disc") {
-            discNumber = (value as? NSNumber)?.intValue ?? discNumber
+          if id.contains("lyrics") || id.contains("Lyrics") { lyrics = (value as? String) ?? lyrics }
+          else if id.contains("comment") || id.contains("Comment") || id.contains("description") { songDescription = (value as? String) ?? songDescription }
+          else if id.contains("year") || id.contains("Year") || id.contains("date") {
+            if let num = value as? NSNumber { year = num.intValue }
+            else if let str = value as? String { year = parseYear(str) }
           }
+          else if id.contains("track") || id.contains("Track") {
+            if let num = value as? NSNumber { trackNumber = num.intValue }
+            else if let str = value as? String { trackNumber = parseTrackNumber(str) }
+          }
+          else if id.contains("disc") || id.contains("Disc") { discNumber = (value as? NSNumber)?.intValue ?? discNumber }
         }
         continue
       }
 
-      // print("[DEBUG] AudioMetadataExtractor.extract: Processing common key \(key.rawValue)")
-      let value = try? await item.load(.value)
       let raw = key.rawValue.lowercased()
-
-      if raw == "title" || raw.contains("title") {
-        if let v = value as? String, !v.isEmpty { title = v }
-      } else if raw == "artist" || raw.contains("artist"), !raw.contains("album") {
-        if let v = value as? String, !v.isEmpty { artist = v }
-      } else if raw.contains("albumname") || raw == "album" {
-        album = (value as? String) ?? album
-      } else if raw.contains("lyrics") || raw == "lyr" {
-        lyrics = (value as? String) ?? lyrics
-      } else if raw.contains("description") || raw.contains("comment") {
-        songDescription = (value as? String) ?? songDescription
-      } else if raw == "type" || raw.contains("genre") {
-        genre = (value as? String) ?? genre
-      } else if raw.contains("creator") || raw.contains("composer") {
-        composer = (value as? String) ?? composer
-      } else if raw.contains("artwork") || raw.contains("art") {
-        artwork = value as? Data ?? artwork
-      } else if raw.contains("albumartist") || raw.contains("album artist") {
-        albumArtist = (value as? String) ?? albumArtist
-      }
+      if raw == "title" || raw.contains("title") { if let v = value as? String, !v.isEmpty { embeddedTitle = v } }
+      else if raw == "artist" || raw.contains("artist"), !raw.contains("album") { if let v = value as? String, !v.isEmpty { embeddedArtist = v } }
+      else if raw.contains("albumname") || raw == "album" { album = (value as? String) ?? album }
+      else if raw.contains("lyrics") || raw == "lyr" { lyrics = (value as? String) ?? lyrics }
+      else if raw == "type" || raw.contains("genre") { genre = (value as? String) ?? genre }
+      else if raw.contains("creator") || raw.contains("composer") { composer = (value as? String) ?? composer }
+      else if raw.contains("artwork") || raw.contains("art") { artwork = value as? Data ?? artwork }
+      else if raw.contains("albumartist") || raw.contains("album artist") { albumArtist = (value as? String) ?? albumArtist }
     }
 
-    print("[DEBUG] AudioMetadataExtractor.extract: Finished processing all metadata items")
-
-    // Format-specific fallbacks
-    if trackNumber == nil || discNumber == nil || year == nil {
-      for item in allMetadata {
-        guard item.commonKey == nil else { continue }
-        if let id = item.identifier?.rawValue {
-          let value = try? await item.load(.value)
-          if trackNumber == nil && (id.contains("track") || id.contains("Track")) {
-            if let num = value as? NSNumber {
-              trackNumber = num.intValue
-            } else if let str = value as? String {
-              trackNumber = parseTrackNumber(str)
-            }
-          }
-          if discNumber == nil && (id.contains("disc") || id.contains("Disc")) {
-            discNumber = (value as? NSNumber)?.intValue
-          }
-          if year == nil && (id.contains("year") || id.contains("Year") || id.contains("date")) {
-            if let num = value as? NSNumber {
-              year = num.intValue
-            } else if let str = value as? String {
-              year = parseYear(str)
-            }
-          }
+    // 2. Filename Parsing
+    let filename = url.lastPathComponent
+    let filenameMetadata = FilenameParser.parse(filename)
+    
+    // 3. Broken Path Reconstruction & Folder Context
+    let folderName = url.deletingLastPathComponent().lastPathComponent
+    let folderMetadata = FilenameParser.parse(folderName + ".mp3") // Use folder as a "virtual" file for parsing
+    
+    // Resolve Title
+    var finalTitle = embeddedTitle ?? filenameMetadata.title
+    var titleConfidence = MetadataConfidenceScorer.scoreEmbedded(value: embeddedTitle, field: "title")
+    var titleSource = "embedded"
+    
+    if titleConfidence < 0.5 {
+        // Filename is likely better if embedded is generic
+        let fileTitleConfidence = MetadataConfidenceScorer.scoreFilename(value: filenameMetadata.title)
+        if fileTitleConfidence > titleConfidence {
+            finalTitle = filenameMetadata.title
+            titleConfidence = fileTitleConfidence
+            titleSource = "filename"
         }
-      }
     }
+    
+    // Handle "Broken Path": If filename is just a number/short string and folder has a high confidence title
+    if finalTitle.count <= 3 || finalTitle.range(of: "^[0-9]+$", options: String.CompareOptions.regularExpression) != nil {
+        if folderMetadata.confidence > 0.6 {
+            finalTitle = folderMetadata.title
+            titleConfidence = folderMetadata.confidence
+            titleSource = "folder"
+        }
+    }
+
+    // Resolve Artist
+    var finalArtist = embeddedArtist ?? filenameMetadata.artists.joined(separator: " & ")
+    if finalArtist == "Unknown Artist" && !filenameMetadata.artists.isEmpty {
+        finalArtist = filenameMetadata.artists.joined(separator: " & ")
+    }
+    var artistConfidence = MetadataConfidenceScorer.scoreEmbedded(value: embeddedArtist, field: "artist")
+    var artistSource = "embedded"
+    
+    if artistConfidence < 0.5 && !filenameMetadata.artists.isEmpty {
+        finalArtist = filenameMetadata.artists.joined(separator: " & ")
+        artistConfidence = MetadataConfidenceScorer.scoreFilename(value: finalArtist)
+        artistSource = "filename"
+    }
+    
+    if artistConfidence < 0.5 && !folderMetadata.artists.isEmpty {
+        finalArtist = folderMetadata.artists.joined(separator: " & ")
+        artistConfidence = folderMetadata.confidence
+        artistSource = "folder"
+    }
+
+    // Resolve Album
+    var finalAlbum = album ?? folderName
+    var albumConfidence = MetadataConfidenceScorer.scoreEmbedded(value: album, field: "album")
+    var albumSource = "embedded"
+    
+    if albumConfidence < 0.4 {
+        finalAlbum = folderName
+        albumConfidence = 0.5
+        albumSource = "folder"
+    }
+
+    // Final Normalization
+    finalTitle = UnicodeCleanup.clean(finalTitle)
+    finalArtist = UnicodeCleanup.clean(finalArtist)
+    finalAlbum = UnicodeCleanup.clean(finalAlbum)
 
     return ExtractedAudioMetadata(
-      title: title,
-      artist: artist,
+      title: finalTitle,
+      artist: finalArtist,
+      artists: artistSource == "filename" ? filenameMetadata.artists : ArtistParser.parseArtists(from: finalArtist),
       duration: duration,
       lyrics: lyrics,
-      album: album,
+      album: finalAlbum,
       albumArtist: albumArtist,
       genre: genre,
       songDescription: songDescription,
       trackNumber: trackNumber,
       discNumber: discNumber,
-      year: year,
+      year: year ?? filenameMetadata.year ?? folderMetadata.year,
       composer: composer,
       artwork: artwork,
+      titleConfidence: titleConfidence,
+      artistConfidence: artistConfidence,
+      albumConfidence: albumConfidence,
+      metadataSourceTitle: titleSource,
+      metadataSourceArtist: artistSource,
+      metadataSourceAlbum: albumSource,
+      isLive: filenameMetadata.isLive || folderMetadata.isLive,
+      isMedley: filenameMetadata.isMedley || folderMetadata.isMedley,
       sampleRate: technical.sampleRate,
       bitDepth: technical.bitDepth,
       bitRate: technical.bitRate,

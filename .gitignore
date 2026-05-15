@@ -192,6 +192,9 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
+# Agents
+agent.md
+
 # Pyre type checker
 .pyre/
 

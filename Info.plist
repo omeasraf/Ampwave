@@ -57,6 +57,8 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Ampwave uses Apple Music to fetch metadata and artwork for your library.</string>
 	<key>NSBonjourServices</key>
 	<array/>
 	<key>NSLocalNetworkUsageDescription</key>

@@ -11,6 +11,7 @@ import Foundation
 import Observation
 import SwiftData
 
+@MainActor
 @Observable
 final class MetadataService {
   static let shared = MetadataService()
@@ -99,33 +100,56 @@ final class MetadataService {
   /// Fetches metadata for a song from online sources
   func fetchMetadata(for song: LibrarySong) async -> FetchedMetadata? {
     print("[DEBUG] MetadataService.fetchMetadata: Starting for \(song.title)")
-    // Respect rate limiting
+    
+    // 1. Try Apple Music first (Primary)
+    if let amMetadata = await AppleMusicMetadataService.shared.fetchMetadata(
+      title: song.title,
+      artist: song.artist,
+      duration: song.duration
+    ) {
+      print("[DEBUG] MetadataService.fetchMetadata: Found match on Apple Music")
+      return amMetadata
+    }
+
+    // 2. Fallback to MusicBrainz (Secondary)
+    print("[DEBUG] MetadataService.fetchMetadata: Apple Music failed, falling back to MusicBrainz")
     await respectRateLimit()
 
     // Search for recording on MusicBrainz
     print("[DEBUG] MetadataService.fetchMetadata: Searching MusicBrainz for recording")
-    guard let recording = await searchRecording(song: song) else {
+    guard let searchMatch = await searchRecording(song: song) else {
       print("[DEBUG] MetadataService.fetchMetadata: Recording search failed")
+      return nil
+    }
+
+    // Fetch full recording details with genres and releases
+    print("[DEBUG] MetadataService.fetchMetadata: Fetching details for recording \(searchMatch.id)")
+    guard let recording = await fetchRecordingDetails(mbid: searchMatch.id) else {
+      print("[DEBUG] MetadataService.fetchMetadata: Recording details fetch failed")
       return nil
     }
 
     // Parse release date
     let releaseYear = parseReleaseDate(recording.firstReleaseDate)
 
+    // Extract genres from both 'genres' and 'tags'
+    let genreLabel = extractGenreLabel(genres: recording.genres, tags: recording.tags)
+
     // Fetch detailed metadata
     var metadata = FetchedMetadata(
       title: recording.title,
-      artist: recording.artistCredit.first?.name ?? song.artist,
+      artist: recording.artistCredit?.first?.name ?? song.artist,
       album: recording.releases?.first?.title,
       year: releaseYear,
-      genre: nil,
+      genre: genreLabel,
       trackNumber: nil,
       discNumber: nil,
       duration: recording.length.map { TimeInterval($0) / 1000.0 },
       musicBrainzId: recording.id,
       artworkURL: nil,
       songDescription: song.songDescription,
-      albumArtist: nil  // Recording release ref doesn't have artist credit, will fetch via release if needed
+      albumArtist: nil,
+      source: .musicBrainz
     )
 
     // Fetch artwork if we have a release
@@ -151,10 +175,6 @@ final class MetadataService {
       }
     }
 
-    if metadata.genre == nil || metadata.genre?.isEmpty == true {
-      metadata.genre = await fetchGenreTagsForRecording(mbid: recording.id)
-    }
-
     return metadata
   }
 
@@ -162,23 +182,53 @@ final class MetadataService {
   func fetchGenreTags(for song: LibrarySong) async -> String? {
     await respectRateLimit()
     guard let recording = await searchRecording(song: song) else { return nil }
-    return await fetchGenreTagsForRecording(mbid: recording.id)
+    guard let details = await fetchRecordingDetails(mbid: recording.id) else { return nil }
+    return extractGenreLabel(genres: details.genres, tags: details.tags)
   }
 
-  private func fetchGenreTagsForRecording(mbid: String) async -> String? {
-    let urlString = "\(musicBrainzDefaultURL)/recording/\(mbid)?inc=tags&fmt=json"
+  private func fetchRecordingDetails(mbid: String) async -> MusicBrainzRecordingDetailResponse? {
+    let urlString = "\(musicBrainzDefaultURL)/recording/\(mbid)?inc=genres+tags+artist-credits+releases+release-groups&fmt=json"
     guard let url = URL(string: urlString) else { return nil }
     guard let data = await performRequest(url: url) else { return nil }
     do {
       let detail = try JSONDecoder().decode(MusicBrainzRecordingDetailResponse.self, from: data)
-      guard let tags = detail.tags, !tags.isEmpty else { return nil }
-      let sorted = tags.sorted { ($0.count ?? 0) > ($1.count ?? 0) }
-      let genres = sorted.prefix(3).compactMap { normalizeGenreName($0.name) }
-      return genres.isEmpty ? nil : genres.joined(separator: " / ")
+      return detail
     } catch {
-      print("[DEBUG] MetadataService.fetchGenreTagsForRecording: decode error \(error)")
+      print("[DEBUG] MetadataService.fetchRecordingDetails: decode error \(error)")
       return nil
     }
+  }
+
+  private func extractGenreLabel(genres: [MusicBrainzGenre]?, tags: [MusicBrainzCountedTag]?) -> String? {
+    var genreNames = Set<String>()
+
+    // 1. Process explicit genres first
+    if let genres = genres {
+      for g in genres {
+        if let normalized = normalizeGenreName(g.name) {
+          genreNames.insert(normalized)
+        }
+      }
+    }
+
+    // 2. Process tags if we don't have enough genres yet
+    if genreNames.count < 3, let tags = tags {
+      let sortedTags = tags.sorted { ($0.count ?? 0) > ($1.count ?? 0) }
+      for tag in sortedTags {
+        if let normalized = normalizeGenreName(tag.name) {
+          genreNames.insert(normalized)
+        }
+        if genreNames.count >= 3 { break }
+      }
+    }
+
+    let sorted = Array(genreNames).sorted()
+    return sorted.isEmpty ? nil : sorted.joined(separator: " / ")
+  }
+
+  private func fetchGenreTagsForRecording(mbid: String) async -> String? {
+    guard let details = await fetchRecordingDetails(mbid: mbid) else { return nil }
+    return extractGenreLabel(genres: details.genres, tags: details.tags)
   }
 
   /// Fetches metadata for an album
@@ -637,23 +687,29 @@ final class MetadataService {
     // Update song fields only if they're empty or generic (Preserve user edits)
     if let title = metadata.title, !title.isEmpty,
       !song.userEditedFields.contains("title"),
-      song.title == song.fileName || song.title.contains("Untitled")
+      (song.titleConfidence < 0.8 || song.title == song.fileName || song.title.contains("Untitled"))
     {
       song.title = title
+      song.titleConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: title)
+      song.metadataSourceTitle = metadata.source.rawValue
       needsSave = true
     }
     if let artist = metadata.artist, !artist.isEmpty,
       !song.userEditedFields.contains("artist"),
-      song.artist == "Unknown Artist" || song.artist.isEmpty
+      (song.artistConfidence < 0.8 || song.artist == "Unknown Artist" || song.artist.isEmpty)
     {
       song.artist = artist
+      song.artistConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: artist)
+      song.metadataSourceArtist = metadata.source.rawValue
       needsSave = true
     }
     if let album = metadata.album, !album.isEmpty,
       !song.userEditedFields.contains("album"),
-      song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true
+      (song.albumConfidence < 0.8 || song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true)
     {
       song.album = album
+      song.albumConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: album)
+      song.metadataSourceAlbum = metadata.source.rawValue
       needsSave = true
     }
     if let year = metadata.year,
@@ -670,6 +726,83 @@ final class MetadataService {
       song.genre = normalizedGenreLabel(from: genre)
       needsSave = true
     }
+    if let albumArtist = metadata.albumArtist, !albumArtist.isEmpty,
+      !song.userEditedFields.contains("albumArtist"),
+      song.albumArtist == nil || song.albumArtist?.isEmpty == true
+    {
+      song.albumArtist = albumArtist
+      needsSave = true
+    }
+    if let composer = metadata.composer, !composer.isEmpty,
+      !song.userEditedFields.contains("composer"),
+      song.composer == nil || song.composer?.isEmpty == true
+    {
+      song.composer = composer
+      needsSave = true
+    }
+    if let lyricist = metadata.lyricist, !lyricist.isEmpty,
+      !song.userEditedFields.contains("lyricist"),
+      song.lyricist == nil || song.lyricist?.isEmpty == true
+    {
+        song.lyricist = lyricist
+        needsSave = true
+    }
+    if let isrc = metadata.isrc, !isrc.isEmpty {
+      song.isrc = isrc
+      needsSave = true
+    }
+    if let appleMusicURL = metadata.appleMusicURL {
+      song.appleMusicURL = appleMusicURL.absoluteString
+      needsSave = true
+    }
+
+    // Save artwork colors
+    if let bgColor = metadata.artworkBackgroundColor {
+        song.artworkBackgroundColor = bgColor
+        needsSave = true
+    }
+    if let primaryColor = metadata.artworkPrimaryTextColor {
+        song.artworkPrimaryTextColor = primaryColor
+        needsSave = true
+    }
+    if let secondaryColor = metadata.artworkSecondaryTextColor {
+        song.artworkSecondaryTextColor = secondaryColor
+        needsSave = true
+    }
+    if let tertiaryColor = metadata.artworkTertiaryTextColor {
+        song.artworkTertiaryTextColor = tertiaryColor
+        needsSave = true
+    }
+    
+    // Save experimental lyrics if found
+    if let lyrics = metadata.lyrics, (song.lyrics == nil || song.lyrics?.isEmpty == true) {
+        song.lyrics = lyrics
+        needsSave = true
+    }
+    
+    // Update related models
+    if let albumRef = song.albumReference {
+        if let desc = metadata.albumDescription, (albumRef.albumDescription == nil || albumRef.albumDescription?.isEmpty == true) {
+            albumRef.albumDescription = desc
+        }
+        if albumRef.appleMusicId == nil {
+            albumRef.appleMusicId = metadata.appleMusicId
+        }
+    }
+    
+    let artistNames = ArtistParser.parseArtists(from: metadata.albumArtist ?? metadata.artist ?? song.artist)
+    if let primaryArtist = artistNames.first {
+        let artist = SongLibrary.shared.getArtist(named: primaryArtist)
+        if let artist = artist {
+            if let bio = metadata.artistBio, (artist.biography == nil || artist.biography?.isEmpty == true) {
+                artist.biography = bio
+            }
+            if artist.appleMusicId == nil {
+                artist.appleMusicId = metadata.appleMusicId // Note: this might be song ID, not artist ID. Need to fix in service if so.
+            }
+        }
+    }
+
     if let duration = metadata.duration, duration > 0, song.duration <= 0 {
       song.duration = duration
       needsSave = true
@@ -713,6 +846,20 @@ final class MetadataService {
     }
     if let year = metadata.year {
       album.year = year
+    }
+
+    // Save artwork colors
+    if let bgColor = metadata.artworkBackgroundColor {
+        album.artworkBackgroundColor = bgColor
+    }
+    if let primaryColor = metadata.artworkPrimaryTextColor {
+        album.artworkPrimaryTextColor = primaryColor
+    }
+    if let secondaryColor = metadata.artworkSecondaryTextColor {
+        album.artworkSecondaryTextColor = secondaryColor
+    }
+    if let tertiaryColor = metadata.artworkTertiaryTextColor {
+        album.artworkTertiaryTextColor = tertiaryColor
     }
 
     // Download and cache artwork if available

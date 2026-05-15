@@ -5,6 +5,14 @@
 
 import Foundation
 
+enum MetadataSource: String, Codable {
+  case embedded
+  case filename
+  case appleMusic
+  case musicBrainz
+  case manual
+}
+
 struct FetchedMetadata {
   var title: String?
   var artist: String?
@@ -15,9 +23,23 @@ struct FetchedMetadata {
   var discNumber: Int?
   var duration: TimeInterval?
   var musicBrainzId: String?
+  var appleMusicId: String?
   var artworkURL: URL?
   var songDescription: String?
   var albumArtist: String?
+  var composer: String?
+  var lyricist: String?
+  var isrc: String?
+  var appleMusicURL: URL?
+  var albumDescription: String?
+  var artistBio: String?
+  var hasLyrics: Bool = false
+  var lyrics: String?
+  var artworkBackgroundColor: String?
+  var artworkPrimaryTextColor: String?
+  var artworkSecondaryTextColor: String?
+  var artworkTertiaryTextColor: String?
+  var source: MetadataSource = .appleMusic
 
   init(
     title: String? = nil,
@@ -29,9 +51,23 @@ struct FetchedMetadata {
     discNumber: Int? = nil,
     duration: TimeInterval? = nil,
     musicBrainzId: String? = nil,
+    appleMusicId: String? = nil,
     artworkURL: URL? = nil,
     songDescription: String? = nil,
-    albumArtist: String? = nil
+    albumArtist: String? = nil,
+    composer: String? = nil,
+    lyricist: String? = nil,
+    isrc: String? = nil,
+    appleMusicURL: URL? = nil,
+    albumDescription: String? = nil,
+    artistBio: String? = nil,
+    hasLyrics: Bool = false,
+    lyrics: String? = nil,
+    artworkBackgroundColor: String? = nil,
+    artworkPrimaryTextColor: String? = nil,
+    artworkSecondaryTextColor: String? = nil,
+    artworkTertiaryTextColor: String? = nil,
+    source: MetadataSource = .appleMusic
   ) {
     self.title = title
     self.artist = artist
@@ -42,8 +78,22 @@ struct FetchedMetadata {
     self.discNumber = discNumber
     self.duration = duration
     self.musicBrainzId = musicBrainzId
+    self.appleMusicId = appleMusicId
     self.artworkURL = artworkURL
     self.songDescription = songDescription
     self.albumArtist = albumArtist
+    self.composer = composer
+    self.lyricist = lyricist
+    self.isrc = isrc
+    self.appleMusicURL = appleMusicURL
+    self.albumDescription = albumDescription
+    self.artistBio = artistBio
+    self.hasLyrics = hasLyrics
+    self.lyrics = lyrics
+    self.artworkBackgroundColor = artworkBackgroundColor
+    self.artworkPrimaryTextColor = artworkPrimaryTextColor
+    self.artworkSecondaryTextColor = artworkSecondaryTextColor
+    self.artworkTertiaryTextColor = artworkTertiaryTextColor
+    self.source = source
   }
 }

@@ -964,7 +964,15 @@ final class SongLibrary {
       channels: metadata.channels,
       format: metadata.format,
       storageMode: storageMode,
-      bookmarkData: bookmarkData
+      bookmarkData: bookmarkData,
+      titleConfidence: metadata.titleConfidence,
+      artistConfidence: metadata.artistConfidence,
+      albumConfidence: metadata.albumConfidence,
+      metadataSourceTitle: metadata.metadataSourceTitle,
+      metadataSourceArtist: metadata.metadataSourceArtist,
+      metadataSourceAlbum: metadata.metadataSourceAlbum,
+      isLive: metadata.isLive,
+      isMedley: metadata.isMedley
     )
 
     // Set initial artwork source
@@ -1085,7 +1093,15 @@ final class SongLibrary {
       channels: metadata.channels,
       format: metadata.format,
       storageMode: storageMode,
-      bookmarkData: bookmarkData
+      bookmarkData: bookmarkData,
+      titleConfidence: metadata.titleConfidence,
+      artistConfidence: metadata.artistConfidence,
+      albumConfidence: metadata.albumConfidence,
+      metadataSourceTitle: metadata.metadataSourceTitle,
+      metadataSourceArtist: metadata.metadataSourceArtist,
+      metadataSourceAlbum: metadata.metadataSourceAlbum,
+      isLive: metadata.isLive,
+      isMedley: metadata.isMedley
     )
 
     // Set initial artwork source
@@ -1167,6 +1183,15 @@ final class SongLibrary {
           song.bitRate = metadata.bitRate
           song.channels = metadata.channels
           song.format = metadata.format
+          
+          song.titleConfidence = metadata.titleConfidence
+          song.artistConfidence = metadata.artistConfidence
+          song.albumConfidence = metadata.albumConfidence
+          song.metadataSourceTitle = metadata.metadataSourceTitle
+          song.metadataSourceArtist = metadata.metadataSourceArtist
+          song.metadataSourceAlbum = metadata.metadataSourceAlbum
+          song.isLive = metadata.isLive
+          song.isMedley = metadata.isMedley
         }
 
         if index % 10 == 0 {
@@ -1445,83 +1470,137 @@ final class SongLibrary {
 
     var needsSave = false
 
-    // Update song fields only if they're empty or better
+    // Update song fields only if they're empty or generic (Preserve user edits)
     if let title = metadata.title, !title.isEmpty,
-      song.title.contains("Untitled") || song.title == song.fileName
+      !song.userEditedFields.contains("title"),
+      (song.titleConfidence < 0.8 || song.title == song.fileName || song.title.contains("Untitled"))
     {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating title to \(title)")
       song.title = title
+      song.titleConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: title)
+      song.metadataSourceTitle = metadata.source.rawValue
       needsSave = true
     }
 
     if let artist = metadata.artist, !artist.isEmpty,
-      song.artist == "Unknown Artist" || song.artist.isEmpty
+      !song.userEditedFields.contains("artist"),
+      (song.artistConfidence < 0.8 || song.artist == "Unknown Artist" || song.artist.isEmpty)
     {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating artist to \(artist)")
       song.artist = artist
+      song.artistConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: artist)
+      song.metadataSourceArtist = metadata.source.rawValue
       needsSave = true
     }
 
     if let album = metadata.album, !album.isEmpty,
-      song.album == nil || song.album?.isEmpty == true || song.album == "Unknown Album"
+      !song.userEditedFields.contains("album"),
+      (song.albumConfidence < 0.8 || song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true)
     {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating album to \(album)")
       song.album = album
+      song.albumConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: album)
+      song.metadataSourceAlbum = metadata.source.rawValue
       needsSave = true
     }
 
-    if let year = metadata.year, song.year == nil || song.year == 0 {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating year to \(year)")
+    if let year = metadata.year,
+      !song.userEditedFields.contains("year"),
+      song.year == nil || song.year == 0
+    {
       song.year = year
       needsSave = true
     }
 
-    if let genre = metadata.genre, !genre.isEmpty, song.genre == nil || song.genre?.isEmpty == true
+    if let genre = metadata.genre, !genre.isEmpty,
+      !song.userEditedFields.contains("genre"),
+      song.genre == nil || song.genre?.isEmpty == true
     {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating genre to \(genre)")
       song.genre = genre
       needsSave = true
     }
 
     if let albumArtist = metadata.albumArtist, !albumArtist.isEmpty,
+      !song.userEditedFields.contains("albumArtist"),
       song.albumArtist == nil || song.albumArtist?.isEmpty == true
     {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating albumArtist to \(albumArtist)")
       song.albumArtist = albumArtist
       needsSave = true
     }
 
+    if let composer = metadata.composer, !composer.isEmpty,
+      !song.userEditedFields.contains("composer"),
+      song.composer == nil || song.composer?.isEmpty == true
+    {
+      song.composer = composer
+      needsSave = true
+    }
+
+    if let lyricist = metadata.lyricist, !lyricist.isEmpty,
+      !song.userEditedFields.contains("lyricist"),
+      song.lyricist == nil || song.lyricist?.isEmpty == true
+    {
+        song.lyricist = lyricist
+        needsSave = true
+    }
+
+    if let isrc = metadata.isrc, !isrc.isEmpty {
+      song.isrc = isrc
+      needsSave = true
+    }
+
+    if let appleMusicURL = metadata.appleMusicURL {
+      song.appleMusicURL = appleMusicURL.absoluteString
+      needsSave = true
+    }
+
+    // Update related models
+    if let albumRef = song.albumReference {
+        if let desc = metadata.albumDescription, (albumRef.albumDescription == nil || albumRef.albumDescription?.isEmpty == true) {
+            albumRef.albumDescription = desc
+        }
+        if albumRef.appleMusicId == nil {
+            albumRef.appleMusicId = metadata.appleMusicId
+        }
+    }
+    
+    let artistNames = ArtistParser.parseArtists(from: metadata.albumArtist ?? metadata.artist ?? song.artist)
+    if let primaryArtist = artistNames.first {
+        let artist = getArtist(named: primaryArtist)
+        if let artist = artist {
+            if let bio = metadata.artistBio, (artist.biography == nil || artist.biography?.isEmpty == true) {
+                artist.biography = bio
+            }
+            if artist.appleMusicId == nil {
+                artist.appleMusicId = metadata.appleMusicId
+            }
+        }
+    }
+
     if let duration = metadata.duration, duration > 0, song.duration <= 0 {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating duration to \(duration)")
       song.duration = duration
       needsSave = true
     }
 
     // Download and cache artwork if available
     if let artworkURL = metadata.artworkURL {
-      // If we prefer online, or if we don't have artwork yet, fetch it.
-      // We skip if we already have remote artwork to satisfy "once" requirement.
-      let shouldFetchArtwork =
-        (preferences.preferOnlineArtwork && !song.isRemoteArtwork) || song.artworkPath == nil
+      // Only replace if no artwork or if remote artwork is preferred and not user-selected
+      let isUserSelected = song.artworkSource == .user
+      let hasEmbeddedArt = song.embeddedArtworkPath != nil
 
-      if shouldFetchArtwork {
-        print(
-          "[DEBUG] SongLibrary.applyFetchedMetadata: Fetching online artwork (preferOnline: \(preferences.preferOnlineArtwork))"
-        )
+      // If preferEmbeddedArtwork is true and we have embedded art, don't replace
+      let shouldRespectEmbedded = preferences.preferEmbeddedArtwork && hasEmbeddedArt
+
+      if song.artworkPath == nil
+        || (preferences.preferOnlineArtwork && !isUserSelected && !shouldRespectEmbedded)
+      {
         if let artworkPath = await MetadataService.shared.downloadArtwork(from: artworkURL) {
-          print("[DEBUG] SongLibrary.applyFetchedMetadata: Artwork downloaded to \(artworkPath)")
           song.artworkPath = artworkPath
           song.isRemoteArtwork = true
           song.artworkSource = .online
           needsSave = true
-
+          
           // Update album artwork too
           if let album = song.albumReference {
-            print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating album artwork")
             album.artworkPath = artworkPath
           }
-        } else {
-          print("[DEBUG] SongLibrary.applyFetchedMetadata: Failed to download artwork")
         }
       }
     }

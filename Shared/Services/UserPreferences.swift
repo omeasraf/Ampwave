@@ -259,7 +259,20 @@ final class ThemeManager {
 
   var accentColor: Color { themeConfig.accent }
   var backgroundColor: Color { themeConfig.background }
-  var cardBackgroundColor: Color { themeConfig.cardBackground }
+  var cardBackgroundColor: Color {
+    if coloredSurfaces {
+      return themeConfig.cardBackground
+    } else {
+      // Use platform-native neutral surfaces when colored surfaces are disabled
+      #if os(macOS)
+        return Color(nsColor: .controlBackgroundColor)
+      #elseif os(iOS)
+        return Color(uiColor: .secondarySystemGroupedBackground)
+      #else
+        return themeConfig.isDark ? Color(white: 0.12) : Color(white: 0.94)
+      #endif
+    }
+  }
 
   var colorScheme: ColorScheme? {
     if currentTheme == .custom {
@@ -411,17 +424,17 @@ final class UserPreferences: Identifiable {
   }
   @Attribute(originalName: "openPlayerGlassBackground") var _openPlayerGlassBackground: Bool?
 
-  var fullAppBackground: Bool? {
+  var coloredSurfaces: Bool? {
     get {
-      _fullAppBackground ?? UserDefaults.standard.bool(forKey: "com.ampwave.fullAppBackground")
+      _coloredSurfaces ?? UserDefaults.standard.bool(forKey: "com.ampwave.coloredSurfaces")
     }
     set {
-      _fullAppBackground = newValue
-      UserDefaults.standard.set(newValue ?? false, forKey: "com.ampwave.fullAppBackground")
+      _coloredSurfaces = newValue
+      UserDefaults.standard.set(newValue ?? false, forKey: "com.ampwave.coloredSurfaces")
       save()
     }
   }
-  @Attribute(originalName: "fullAppBackground") var _fullAppBackground: Bool?
+  @Attribute(originalName: "fullAppBackground") var _coloredSurfaces: Bool?
 
   var showFullArtworkGradient: Bool? {
     get {
@@ -505,7 +518,7 @@ final class UserPreferences: Identifiable {
     UserDefaults.standard.set(
       openPlayerGlassBackground ?? true, forKey: "com.ampwave.openPlayerGlassBackground")
     UserDefaults.standard.set(
-      fullAppBackground ?? false, forKey: "com.ampwave.fullAppBackground")
+      coloredSurfaces ?? true, forKey: "com.ampwave.coloredSurfaces")
     UserDefaults.standard.set(
       showFullArtworkGradient ?? true, forKey: "com.ampwave.showFullArtworkGradient")
     UserDefaults.standard.set(miniPlayerFloating ?? false, forKey: "com.ampwave.miniPlayerFloating")
@@ -551,7 +564,7 @@ final class UserPreferences: Identifiable {
     self.selectedThemeRaw = AppTheme.ampwave.rawValue
     self.fullArtworkBackground = true
     self.openPlayerGlassBackground = true
-    self.fullAppBackground = false
+    self.coloredSurfaces = true
     self.showFullArtworkGradient = true
     self.miniPlayerFloating = false
     self.isPremiumUser = true
@@ -575,7 +588,9 @@ final class UserPreferences: Identifiable {
         }
         if existing.fullArtworkBackground == nil { existing.fullArtworkBackground = true }
         if existing.openPlayerGlassBackground == nil { existing.openPlayerGlassBackground = true }
-        if existing.fullAppBackground == nil { existing.fullAppBackground = false }
+        if existing.coloredSurfaces == nil {
+          existing.coloredSurfaces = UserDefaults.standard.object(forKey: "com.ampwave.coloredSurfaces") as? Bool ?? true
+        }
         if existing.showFullArtworkGradient == nil { existing.showFullArtworkGradient = true }
         if existing.miniPlayerFloating == nil { existing.miniPlayerFloating = false }
         if existing.wordSyncedLyricsEnabled == nil { existing.wordSyncedLyricsEnabled = false }
@@ -601,9 +616,26 @@ extension ThemeManager {
   /// Uses platform semantic colors and does not force a custom global accent (Liquid Glass / system chrome).
   var usesSystemAppearance: Bool { currentTheme == .ampwave }
 
-  var fullArtworkBackground: Bool { userPreferences?.fullArtworkBackground ?? false }
-  var openPlayerGlassBackground: Bool { userPreferences?.openPlayerGlassBackground ?? true }
-  var fullAppBackground: Bool { userPreferences?.fullAppBackground ?? false }
-  var showFullArtworkGradient: Bool { userPreferences?.showFullArtworkGradient ?? true }
-  var miniPlayerFloating: Bool { userPreferences?.miniPlayerFloating ?? false }
+  var fullArtworkBackground: Bool {
+    userPreferences?.fullArtworkBackground
+      ?? UserDefaults.standard.bool(forKey: "com.ampwave.fullArtworkBackground")
+  }
+  var openPlayerGlassBackground: Bool {
+    userPreferences?.openPlayerGlassBackground
+      ?? UserDefaults.standard.object(forKey: "com.ampwave.openPlayerGlassBackground") as? Bool
+      ?? true
+  }
+  var coloredSurfaces: Bool {
+    userPreferences?.coloredSurfaces
+      ?? UserDefaults.standard.bool(forKey: "com.ampwave.coloredSurfaces")
+  }
+  var showFullArtworkGradient: Bool {
+    userPreferences?.showFullArtworkGradient
+      ?? UserDefaults.standard.object(forKey: "com.ampwave.showFullArtworkGradient") as? Bool
+      ?? true
+  }
+  var miniPlayerFloating: Bool {
+    userPreferences?.miniPlayerFloating
+      ?? UserDefaults.standard.bool(forKey: "com.ampwave.miniPlayerFloating")
+  }
 }

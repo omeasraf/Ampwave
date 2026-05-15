@@ -20,6 +20,10 @@ final class Album: Identifiable, Hashable {
   var artworkPath: String?
   var embeddedArtworkPath: String?
   var artworkSourceRaw: String = "embedded"
+  var artworkBackgroundColor: String?
+  var artworkPrimaryTextColor: String?
+  var artworkSecondaryTextColor: String?
+  var artworkTertiaryTextColor: String?
   @Attribute(.externalStorage) var userEditedFields: [String] = []
   @Relationship(deleteRule: .cascade) var songs: [LibrarySong] = []
 
@@ -36,13 +40,21 @@ final class Album: Identifiable, Hashable {
   var createdDate: Date
   var isExplicit: Bool = false
   var genre: [String]?
+  var albumDescription: String?
+  var appleMusicId: String?
 
   init(
     name: String,
     artist: String? = nil,
     year: Int? = nil,
     artworkPath: String? = nil,
-    embeddedArtworkPath: String? = nil
+    embeddedArtworkPath: String? = nil,
+    artworkBackgroundColor: String? = nil,
+    artworkPrimaryTextColor: String? = nil,
+    artworkSecondaryTextColor: String? = nil,
+    artworkTertiaryTextColor: String? = nil,
+    albumDescription: String? = nil,
+    appleMusicId: String? = nil
   ) {
     self.id = UUID()
     self.name = name
@@ -50,9 +62,15 @@ final class Album: Identifiable, Hashable {
     self.year = year
     self.artworkPath = artworkPath
     self.embeddedArtworkPath = embeddedArtworkPath
+    self.artworkBackgroundColor = artworkBackgroundColor
+    self.artworkPrimaryTextColor = artworkPrimaryTextColor
+    self.artworkSecondaryTextColor = artworkSecondaryTextColor
+    self.artworkTertiaryTextColor = artworkTertiaryTextColor
     self.createdDate = Date()
     self.isExplicit = false
     self.genre = nil
+    self.albumDescription = albumDescription
+    self.appleMusicId = appleMusicId
   }
 
   /// Returns the song count for this album.
@@ -68,6 +86,10 @@ final class Album: Identifiable, Hashable {
     if embeddedArtworkPath == nil, let songEmbedded = song.embeddedArtworkPath {
       embeddedArtworkPath = songEmbedded
     }
+    if artworkBackgroundColor == nil { artworkBackgroundColor = song.artworkBackgroundColor }
+    if artworkPrimaryTextColor == nil { artworkPrimaryTextColor = song.artworkPrimaryTextColor }
+    if artworkSecondaryTextColor == nil { artworkSecondaryTextColor = song.artworkSecondaryTextColor }
+    if artworkTertiaryTextColor == nil { artworkTertiaryTextColor = song.artworkTertiaryTextColor }
   }
 
   static func == (lhs: Album, rhs: Album) -> Bool {

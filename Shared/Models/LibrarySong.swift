@@ -52,12 +52,29 @@ final class LibrarySong: Identifiable, Hashable {
   var discNumber: Int?
   var year: Int?
   var composer: String?
+  var lyricist: String?
+  var isrc: String?
+  var appleMusicURL: String?
   var artworkPath: String?
   var embeddedArtworkPath: String?
   var isRemoteArtwork: Bool = false
   var artworkSourceRaw: String = "embedded"
+  var artworkBackgroundColor: String?
+  var artworkPrimaryTextColor: String?
+  var artworkSecondaryTextColor: String?
+  var artworkTertiaryTextColor: String?
   @Attribute(.externalStorage) var userEditedFields: [String] = []
   
+  // MARK: - Metadata confidence & sources
+  var titleConfidence: Double = 0.0
+  var artistConfidence: Double = 0.0
+  var albumConfidence: Double = 0.0
+  var metadataSourceTitle: String?
+  var metadataSourceArtist: String?
+  var metadataSourceAlbum: String?
+  var isLive: Bool = false
+  var isMedley: Bool = false
+
   @Relationship(inverse: \Album.songs)
   var albumReference: Album?
 
@@ -111,8 +128,15 @@ final class LibrarySong: Identifiable, Hashable {
     discNumber: Int? = nil,
     year: Int? = nil,
     composer: String? = nil,
+    lyricist: String? = nil,
+    isrc: String? = nil,
+    appleMusicURL: String? = nil,
     artworkPath: String? = nil,
     embeddedArtworkPath: String? = nil,
+    artworkBackgroundColor: String? = nil,
+    artworkPrimaryTextColor: String? = nil,
+    artworkSecondaryTextColor: String? = nil,
+    artworkTertiaryTextColor: String? = nil,
     isRemoteArtwork: Bool = false,
     sampleRate: Double? = nil,
     bitDepth: Int? = nil,
@@ -125,7 +149,15 @@ final class LibrarySong: Identifiable, Hashable {
     processingChain: String? = nil,
     shouldSyncToWatch: Bool = false,
     storageMode: StorageMode = .copied,
-    bookmarkData: Data? = nil
+    bookmarkData: Data? = nil,
+    titleConfidence: Double = 0.0,
+    artistConfidence: Double = 0.0,
+    albumConfidence: Double = 0.0,
+    metadataSourceTitle: String? = nil,
+    metadataSourceArtist: String? = nil,
+    metadataSourceAlbum: String? = nil,
+    isLive: Bool = false,
+    isMedley: Bool = false
   ) {
     self.id = UUID()
     self.title = title
@@ -145,8 +177,15 @@ final class LibrarySong: Identifiable, Hashable {
     self.discNumber = discNumber
     self.year = year
     self.composer = composer
+    self.lyricist = lyricist
+    self.isrc = isrc
+    self.appleMusicURL = appleMusicURL
     self.artworkPath = artworkPath
     self.embeddedArtworkPath = embeddedArtworkPath
+    self.artworkBackgroundColor = artworkBackgroundColor
+    self.artworkPrimaryTextColor = artworkPrimaryTextColor
+    self.artworkSecondaryTextColor = artworkSecondaryTextColor
+    self.artworkTertiaryTextColor = artworkTertiaryTextColor
     self.isRemoteArtwork = isRemoteArtwork
     self.sampleRate = sampleRate
     self.bitDepth = bitDepth
@@ -162,6 +201,14 @@ final class LibrarySong: Identifiable, Hashable {
     self.shouldSyncToWatch = shouldSyncToWatch
     self.storageModeRaw = storageMode.rawValue
     self.bookmarkData = bookmarkData
+    self.titleConfidence = titleConfidence
+    self.artistConfidence = artistConfidence
+    self.albumConfidence = albumConfidence
+    self.metadataSourceTitle = metadataSourceTitle
+    self.metadataSourceArtist = metadataSourceArtist
+    self.metadataSourceAlbum = metadataSourceAlbum
+    self.isLive = isLive
+    self.isMedley = isMedley
   }
 
   static func == (lhs: LibrarySong, rhs: LibrarySong) -> Bool {

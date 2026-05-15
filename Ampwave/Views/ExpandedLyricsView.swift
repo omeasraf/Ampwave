@@ -48,8 +48,6 @@ struct ExpandedLyricsView: View {
                       line: line,
                       index: index,
                       isCurrent: isCurrentLine(index),
-                      nextLineTimestamp: index < lyrics.lines.count - 1
-                        ? lyrics.lines[index + 1].timestamp : nil,
                       playback: playback
                     )
                   }
@@ -256,34 +254,13 @@ struct CompactLyricsView: View {
                 Array(lyrics.lines.enumerated()),
                 id: \.element.timestamp
               ) { index, line in
-                Text(line.text)
-                  .font(
-                    .system(
-                      size: 15,
-                      weight: isCurrentLine(index)
-                        ? .bold : .regular
-                    )
-                  )
-                  .foregroundStyle(
-                    isCurrentLine(index)
-                      ? .primary : .secondary
-                  )
-                  .multilineTextAlignment(.center)
-                  .lineLimit(nil)
-                  .fixedSize(
-                    horizontal: false,
-                    vertical: true
-                  )
-                  .padding(.horizontal, 16)
-                  .frame(
-                    minWidth: 0,
-                    maxWidth: .infinity,
-                    alignment: .center
-                  )
-                  .scaleEffect(
-                    isCurrentLine(index) ? 1.08 : 1.0,
-                    anchor: .center
-                  )
+                CompactLyricLineView(
+                  line: line,
+                  isCurrent: isCurrentLine(index),
+                  currentTime: playback.currentTime,
+                  wordSyncEnabled: PlaybackController.shared.currentLyrics?.lines[index].wordOffsets != nil
+                    && (ThemeManager.shared.userPreferences?.wordSyncedLyricsEnabled ?? false)
+                )
                   .id(index)
                   .onTapGesture {
                     playback.seek(to: line.timestamp)
@@ -464,23 +441,23 @@ struct LyricLineView: View {
   let line: LyricLine
   let index: Int
   let isCurrent: Bool
-  let nextLineTimestamp: TimeInterval?
   @Bindable var playback: PlaybackController
   @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     Group {
-      if isCurrent, themeManager.userPreferences?.wordSyncedLyricsEnabled ?? true {
-        let words = line.wordOffsets ?? generateWordOffsets()
-        if !words.isEmpty {
+      if isCurrent,
+        themeManager.userPreferences?.wordSyncedLyricsEnabled ?? false,
+        let words = line.wordOffsets,
+        !words.isEmpty
+      {
           WordByWordLyricView(
             words: words,
             currentTime: playback.currentTime,
-            isCurrent: true
+            fontSize: 24,
+            activeColor: .white,
+            inactiveColor: .white.opacity(0.35)
           )
-        } else {
-          plainLineText
-        }
       } else {
         plainLineText
       }
@@ -524,98 +501,76 @@ struct LyricLineView: View {
         isCurrent ? .white : .white.opacity(0.35)
       )
   }
-
-  private func generateWordOffsets() -> [WordOffset] {
-    let rawWords = line.text.components(separatedBy: .whitespaces)
-      .filter { !$0.isEmpty }
-    guard !rawWords.isEmpty else { return [] }
-
-    let duration: TimeInterval
-    if let next = nextLineTimestamp {
-      duration = max(0.5, next - line.timestamp)
-    } else if let total = playback.currentItem?.duration, total > line.timestamp {
-      duration = max(0.5, total - line.timestamp)
-    } else {
-      duration = 3.0  // Fallback
-    }
-
-    let wordDuration = duration / Double(rawWords.count)
-    return rawWords.enumerated().map { i, word in
-      WordOffset(
-        timestamp: line.timestamp + (Double(i) * wordDuration),
-        text: word + (i < rawWords.count - 1 ? " " : "")
-      )
-    }
-  }
 }
 
 struct WordByWordLyricView: View {
   let words: [WordOffset]
   let currentTime: TimeInterval
-  let isCurrent: Bool
+  let fontSize: CGFloat
+  let activeColor: Color
+  let inactiveColor: Color
 
   var body: some View {
-    // We use a simpler but effective progressive highlight:
-    // We render the full text twice, one dim and one bright.
-    // The bright one is masked by a rectangle that moves according to time.
-
-    let fullText = words.map { $0.text }.joined()
-
-    ZStack(alignment: .leading) {
-      Text(fullText)
-        .font(.system(size: 24, weight: .bold))
-        .foregroundStyle(.white.opacity(0.35))
-
-      Text(fullText)
-        .font(.system(size: 24, weight: .bold))
-        .foregroundStyle(.white)
-        .mask(
-          GeometryReader { geo in
-            HStack(spacing: 0) {
-              Rectangle()
-                .frame(width: calculateProgressWidth(totalWidth: geo.size.width))
-              Spacer(minLength: 0)
-            }
-          }
-        )
-    }
+    Text(attributedText)
+      .font(.system(size: fontSize, weight: .bold))
   }
 
-  private func calculateProgressWidth(totalWidth: Double) -> Double {
-    guard !words.isEmpty else { return 0 }
+  private var attributedText: AttributedString {
+    var result = AttributedString()
 
-    // Find which word we are currently on
-    if let currentIndex = words.lastIndex(where: { currentTime >= $0.timestamp }) {
-      // Calculate progress through words
-      let wordProgress = Double(currentIndex + 1) / Double(words.count)
-
-      // If we are on the last word, we might want to animate its completion
-      // but without word-specific widths, we just use word-count progress.
-      // This is "progressive" enough for a generated timing.
-
-      // For a smoother look, we can interpolate between words
-      let nextTimestamp: TimeInterval
-      if currentIndex < words.count - 1 {
-        nextTimestamp = words[currentIndex + 1].timestamp
-      } else {
-        nextTimestamp = words[currentIndex].timestamp + 0.5
-      }
-
-      let duration = nextTimestamp - words[currentIndex].timestamp
-      let elapsed = currentTime - words[currentIndex].timestamp
-      let internalProgress = duration > 0 ? min(1.0, elapsed / duration) : 1.0
-
-      let totalProgress = (Double(currentIndex) + internalProgress) / Double(words.count)
-      return totalWidth * min(1.0, totalProgress)
-    } else {
-      // Before first word
-      guard let first = words.first else { return 0 }
-      let timeToFirst = first.timestamp - currentTime
-      if timeToFirst < 0.5 && timeToFirst > 0 {
-        // Optional: pre-roll animation
-        return 0
-      }
-      return 0
+    for (index, word) in words.enumerated() {
+      var segment = AttributedString(word.text)
+      segment.foregroundColor = isWordActive(at: index) ? activeColor : inactiveColor
+      result.append(segment)
     }
+
+    return result
+  }
+
+  private func isWordActive(at index: Int) -> Bool {
+    guard index < words.count else { return false }
+
+    let word = words[index]
+    let nextTimestamp: TimeInterval
+    if index < words.count - 1 {
+      nextTimestamp = words[index + 1].timestamp
+    } else {
+      nextTimestamp = word.timestamp + 0.5
+    }
+
+    if currentTime < word.timestamp { return false }
+    if index == words.count - 1 { return true }
+    return currentTime >= word.timestamp && currentTime < nextTimestamp || currentTime >= nextTimestamp
+  }
+}
+
+private struct CompactLyricLineView: View {
+  let line: LyricLine
+  let isCurrent: Bool
+  let currentTime: TimeInterval
+  let wordSyncEnabled: Bool
+
+  var body: some View {
+    Group {
+      if isCurrent, wordSyncEnabled, let words = line.wordOffsets, !words.isEmpty {
+        WordByWordLyricView(
+          words: words,
+          currentTime: currentTime,
+          fontSize: 15,
+          activeColor: .primary,
+          inactiveColor: .secondary
+        )
+      } else {
+        Text(line.text)
+          .font(.system(size: 15, weight: isCurrent ? .bold : .regular))
+          .foregroundStyle(isCurrent ? .primary : .secondary)
+      }
+    }
+    .multilineTextAlignment(.center)
+    .lineLimit(nil)
+    .fixedSize(horizontal: false, vertical: true)
+    .padding(.horizontal, 16)
+    .frame(minWidth: 0, maxWidth: .infinity, alignment: .center)
+    .scaleEffect(isCurrent ? 1.08 : 1.0, anchor: .center)
   }
 }

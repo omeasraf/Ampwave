@@ -13,6 +13,7 @@ import SwiftData
 #endif
 
 /// Service for managing sync status of songs and playlists to Apple Watch
+@MainActor
 final class WatchSyncService: NSObject {
   // MARK: - Singleton
 

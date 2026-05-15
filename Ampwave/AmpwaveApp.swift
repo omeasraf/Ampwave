@@ -46,9 +46,22 @@ struct AmpwaveApp: App {
       PlaybackState.self,
     ])
 
+    // Configure storage in App Group for sharing with extensions
+    let storeURL: URL
+    if let sharedURL = PathManager.sharedContainerURL {
+      let appSupport = sharedURL.appendingPathComponent("Library/Application Support", isDirectory: true)
+      try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+      storeURL = appSupport.appendingPathComponent("default.store")
+      print("[DEBUG] Using App Group storage: \(storeURL.path)")
+    } else {
+      storeURL = PathManager.documentsDirectory.appendingPathComponent("default.store")
+      print("[DEBUG] Falling back to Documents storage: \(storeURL.path)")
+    }
+
     let modelConfiguration = ModelConfiguration(
-      schema: schema,
-      isStoredInMemoryOnly: false
+      url: storeURL,
+      allowsSave: true,
+      cloudKitDatabase: .none
     )
 
     do {

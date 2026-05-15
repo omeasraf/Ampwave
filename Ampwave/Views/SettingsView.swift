@@ -229,14 +229,17 @@ struct SettingsView: View {
             set: { preferences.openPlayerGlassBackground = $0 }
           ))
 
-        Toggle(
-          "Full App Background",
-          isOn: Binding(
-            get: { preferences.fullAppBackground ?? false },
-            set: { preferences.fullAppBackground = $0 }
-          )
-        )
-        .disabled(true)
+        Toggle(isOn: Binding(
+          get: { preferences.coloredSurfaces ?? true },
+          set: { preferences.coloredSurfaces = $0 }
+        )) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Colored Surfaces")
+            Text("Enable colored backgrounds behind cards and controls")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
 
         //        if preferences.fullArtworkBackground ?? false {
         //          Toggle(

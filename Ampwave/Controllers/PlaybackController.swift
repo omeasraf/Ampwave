@@ -12,6 +12,7 @@ import Combine
 import Foundation
 import MediaPlayer
 import MediaToolbox
+import MusicKit
 import SwiftData
 internal import SwiftUI
 
@@ -549,6 +550,14 @@ final class PlaybackController {
         self.saveState()
       }
     }
+  }
+
+  func prepareForExternalPlayback() {
+    player?.pause()
+    isPlaying = false
+    isLoading = false
+    audioSessionConfigured = false
+    updateNowPlaying()
   }
 
   private func createPlayerItem(for song: LibrarySong) async -> AVPlayerItem {

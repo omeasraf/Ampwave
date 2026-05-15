@@ -145,14 +145,15 @@ struct AlbumView: View {
 
         HStack(spacing: 8) {
           if let year = album.year {
-            Text("\(year)")
+            Text(year, format: .number.grouping(.never))
               .font(.system(size: 14))
               .foregroundStyle(.secondary)
           }
-
-          Text("•")
-            .font(.system(size: 14))
-            .foregroundStyle(.secondary)
+            if (album.year != nil) {
+                Text("•")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
 
           Text(
             "\(album.songCount) song\(album.songCount == 1 ? "" : "s")"

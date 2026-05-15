@@ -151,6 +151,11 @@ public struct PlayMusicIntent: AudioPlaybackIntent {
 
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: PlayMusicIntent.perform (query: \(query))")
+    if let songResult = try? await SiriPlaybackRouter.shared.playSong(songTitle: query) {
+      print("[DEBUG] Siri: Routed query through SiriPlaybackRouter (\(songResult.source.rawValue))")
+      return .result()
+    }
+
     let results = await SearchManager.shared.search(query: query, filter: .all)
 
     await MainActor.run {
@@ -257,6 +262,17 @@ struct AmpwaveShortcuts: AppShortcutsProvider {
   @AppShortcutsBuilder
   static var appShortcuts: [AppShortcut] {
     AppShortcut(
+      intent: PlaySongIntent(),
+      phrases: [
+        "Play \(\.$song) on \(.applicationName)",
+        "Play song on \(.applicationName)",
+        "Play \(.applicationName) song",
+        "Play \(.applicationName) music",
+      ],
+      shortTitle: "Play Song",
+      systemImageName: "music.note"
+    )
+    AppShortcut(
       intent: PlayLikedSongsIntent(),
       phrases: [
         "Play liked songs in \(.applicationName)",
@@ -298,6 +314,8 @@ struct AmpwaveShortcuts: AppShortcutsProvider {
       phrases: [
         "Play a playlist in \(.applicationName)",
         "Start playlist in \(.applicationName)",
+        "Play \(.applicationName) playlist",
+        "Play my playlist in \(.applicationName)",
       ],
       shortTitle: "Play Playlist",
       systemImageName: "music.note.list"
