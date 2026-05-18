@@ -15,6 +15,7 @@ struct ExpandedLyricsView: View {
   @Binding var isExpanded: Bool
   @State private var isUserScrolling = false
   @State private var isProgrammaticScroll = false
+  @State private var isVisible = false
   @State private var scrollTimeout: Timer?
   @Environment(ThemeManager.self) private var themeManager
 
@@ -35,7 +36,7 @@ struct ExpandedLyricsView: View {
           if let lyrics = playback.currentLyrics, lyrics.hasLyrics {
             ScrollViewReader { proxy in
               ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 20) {
+                LazyVStack(spacing: 20) {
                   // Top spacer for centering first line
                   Color.clear
                     .frame(height: 200)
@@ -64,7 +65,7 @@ struct ExpandedLyricsView: View {
               }
               .id(playback.currentItem?.id)
               .onChange(of: playback.currentLyricIndex) { _, newIndex in
-                guard let idx = newIndex, !isUserScrolling else {
+                guard isVisible, let idx = newIndex, !isUserScrolling, !playback.isScrubbing else {
                   return
                 }
                 isProgrammaticScroll = true
@@ -177,11 +178,13 @@ struct ExpandedLyricsView: View {
         }
       #endif
       .onAppear {
+        isVisible = true
         #if os(iOS)
           UIApplication.shared.isIdleTimerDisabled = true
         #endif
       }
       .onDisappear {
+        isVisible = false
         #if os(iOS)
           UIApplication.shared.isIdleTimerDisabled = false
         #endif
@@ -236,6 +239,7 @@ struct CompactLyricsView: View {
   let onExpand: () -> Void
   @State private var isUserScrolling = false
   @State private var isProgrammaticScroll = false
+  @State private var isVisible = false
   @State private var scrollTimeout: Timer?
 
   @Bindable private var playback = PlaybackController.shared
@@ -245,7 +249,7 @@ struct CompactLyricsView: View {
       if let lyrics = playback.currentLyrics, lyrics.hasLyrics {
         ScrollViewReader { proxy in
           ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 12) {
+            LazyVStack(spacing: 12) {
               // Top spacer for centering
               Color.clear
                 .frame(height: 60)
@@ -269,10 +273,10 @@ struct CompactLyricsView: View {
                     }
                   }
                   .animation(
-                    .spring(
+                    isVisible ? .spring(
                       response: 0.3,
                       dampingFraction: 0.7
-                    ),
+                    ) : nil,
                     value: playback.currentLyricIndex
                   )
               }
@@ -284,7 +288,7 @@ struct CompactLyricsView: View {
             .padding(.horizontal, 16)
           }
           .onChange(of: playback.currentLyricIndex) { _, newIndex in
-            guard let index = newIndex, !isUserScrolling else {
+            guard isVisible, let index = newIndex, !isUserScrolling, !playback.isScrubbing else {
               return
             }
             isProgrammaticScroll = true
@@ -330,6 +334,8 @@ struct CompactLyricsView: View {
         .onTapGesture {
           onExpand()
         }
+        .onAppear { isVisible = true }
+        .onDisappear { isVisible = false }
       } else if let plainLyrics = playback.currentItem?.lyrics,
         !plainLyrics.isEmpty
       {
@@ -456,7 +462,8 @@ struct LyricLineView: View {
             currentTime: playback.currentTime,
             fontSize: 24,
             activeColor: .white,
-            inactiveColor: .white.opacity(0.35)
+            inactiveColor: .white.opacity(0.35),
+            isScrubbing: playback.isScrubbing
           )
       } else {
         plainLineText
@@ -509,6 +516,7 @@ struct WordByWordLyricView: View {
   let fontSize: CGFloat
   let activeColor: Color
   let inactiveColor: Color
+  var isScrubbing: Bool = false
 
   var body: some View {
     Text(attributedText)
@@ -516,6 +524,12 @@ struct WordByWordLyricView: View {
   }
 
   private var attributedText: AttributedString {
+    if isScrubbing {
+      var segment = AttributedString(words.map { $0.text }.joined())
+      segment.foregroundColor = inactiveColor
+      return segment
+    }
+
     var result = AttributedString()
 
     for (index, word) in words.enumerated() {
@@ -558,7 +572,8 @@ private struct CompactLyricLineView: View {
           currentTime: currentTime,
           fontSize: 15,
           activeColor: .primary,
-          inactiveColor: .secondary
+          inactiveColor: .secondary,
+          isScrubbing: PlaybackController.shared.isScrubbing
         )
       } else {
         Text(line.text)

@@ -10,16 +10,17 @@ import Foundation
 import SwiftData
 
 @Observable
-@MainActor
-final class SongLibrary {
-  static let shared = SongLibrary()
-
-  private let fileManager = FileManager.default
-  private(set) var songs: [LibrarySong] = []
-  private(set) var albums: [Album] = []
-  private(set) var artists: [Artist] = []
-
-  private var isLoaded = false
+  @MainActor
+  final class SongLibrary {
+    static let shared = SongLibrary()
+  
+    private let fileManager = FileManager.default
+    private(set) var songs: [LibrarySong] = []
+    private(set) var albums: [Album] = []
+    private(set) var artists: [Artist] = []
+    private(set) var libraryVersion: Int = 0
+  
+    private var isLoaded = false
   nonisolated let songsDirectory: URL
   nonisolated let artworkCacheDirectory: URL
 
@@ -40,7 +41,7 @@ final class SongLibrary {
   ]
 
   private init() {
-    let baseDir = PathManager.documentsDirectory.standardizedFileURL
+    let baseDir = PathManager.baseDirectory.standardizedFileURL
     let songsDir = baseDir.appendingPathComponent("Songs", isDirectory: true).standardizedFileURL
     let artworkDir = baseDir.appendingPathComponent("Artwork", isDirectory: true)
       .standardizedFileURL
@@ -51,6 +52,10 @@ final class SongLibrary {
     let fm = FileManager.default
     try? fm.createDirectory(at: songsDir, withIntermediateDirectories: true)
     try? fm.createDirectory(at: artworkDir, withIntermediateDirectories: true)
+  }
+
+  func notifyLibraryChange() {
+    libraryVersion += 1
   }
 
   // MARK: - Duplicate Detection
@@ -479,6 +484,7 @@ final class SongLibrary {
       }
       
       isLoaded = true
+      notifyLibraryChange()
     } catch {
       print("[DEBUG] SongLibrary.loadSongs: Error fetching songs: \(error)")
       songs = []
@@ -1874,7 +1880,7 @@ final class SongLibrary {
 
   // MARK: - Persistence
 
-  private func saveContext() {
+  func saveContext() {
     print("[DEBUG] SongLibrary.saveContext: Saving modelContext")
     guard let modelContext = modelContext else {
       print("[DEBUG] SongLibrary.saveContext: Error - No modelContext")
@@ -1882,6 +1888,7 @@ final class SongLibrary {
     }
     do {
       try modelContext.save()
+      notifyLibraryChange()
       print("[DEBUG] SongLibrary.saveContext: Successfully saved")
     } catch {
       print("[DEBUG] SongLibrary.saveContext: Error saving: \(error)")

@@ -233,36 +233,7 @@ final class VocalIsolator {
                 }
                 
                 storage.currentLevel.pointee = current
-                
                 storage.frameCounter += Int64(numberFrames)
-                
-                let logInterval: Int64 = 88200
-                
-                if (storage.frameCounter / logInterval)
-                    != ((storage.frameCounter + Int64(numberFrames)) / logInterval) {
-                    
-                    let rmsBefore =
-                    sampleCount > 0
-                    ? sqrt(sumSqBefore / Float(sampleCount))
-                    : 0
-                    
-                    let rmsAfter =
-                    sampleCount > 0
-                    ? sqrt(sumSqAfter / Float(sampleCount))
-                    : 0
-                    
-                    let reduction =
-                    rmsBefore > 0
-                    ? 20 * log10(rmsAfter / rmsBefore)
-                    : 0
-                    
-                    print("""
-          [VALIDATION] VocalIsolator:
-          target=\(String(format: "%.2f", target))
-          current=\(String(format: "%.2f", current))
-          reduction=\(String(format: "%.2f", reduction)) dB
-          """)
-                }
             }
         )
         

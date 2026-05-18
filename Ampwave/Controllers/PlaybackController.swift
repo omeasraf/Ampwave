@@ -36,10 +36,12 @@ final class PlaybackController {
   // MARK: - Playback State
 
   private(set) var currentItem: LibrarySong?
-  private(set) var currentTime: TimeInterval = 0
+  var currentTime: TimeInterval = 0
   private(set) var duration: TimeInterval = 0
   private(set) var isPlaying: Bool = false
   private(set) var isLoading: Bool = false
+  var isScrubbing: Bool = false
+  private var isSeeking: Bool = false
 
   var volume: Float = 1.0 {
     didSet {
@@ -204,8 +206,6 @@ final class PlaybackController {
       )
     }
 
-    // Restore state - if library is empty, this will fail but SongLibrary will retry after loading
-    restoreState()
     self.isInitializing = false
   }
 
@@ -722,15 +722,36 @@ final class PlaybackController {
 
   func seek(to time: TimeInterval) {
     guard time.isFinite, time >= 0 else { return }
+    self.currentTime = time
+
+    if isScrubbing {
+      debouncedUpdateLyric()
+      return
+    }
+
+    isSeeking = true
     let cmTime = CMTime(seconds: time, preferredTimescale: 600)
     player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) {
       [weak self] finished in
-      if finished {
-        Task { @MainActor in
+      Task { @MainActor in
+        self?.isSeeking = false
+        if finished {
           self?.currentTime = time
+          self?.updateCurrentLyric()
           self?.updateNowPlaying()
           self?.saveState()
         }
+      }
+    }
+  }
+
+  private var lyricUpdateTask: Task<Void, Never>?
+  private func debouncedUpdateLyric() {
+    lyricUpdateTask?.cancel()
+    lyricUpdateTask = Task {
+      try? await Task.sleep(for: .milliseconds(100))
+      if !Task.isCancelled {
+        updateCurrentLyric()
       }
     }
   }
@@ -1293,7 +1314,7 @@ final class PlaybackController {
       queue: .main
     ) {
       [weak self] time in
-      guard let self = self else { return }
+      guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
       self.currentTime = time.seconds
       self.updateCurrentLyric()
 

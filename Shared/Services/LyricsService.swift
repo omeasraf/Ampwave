@@ -254,5 +254,6 @@ final class LyricsService {
     song.lyrics = content
     song.updateSearchIndex()
     try? modelContext.save()
+    SongLibrary.shared.notifyLibraryChange()
   }
 }

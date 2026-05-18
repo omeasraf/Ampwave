@@ -99,6 +99,7 @@ struct OpenTabView: View {
         NavigationStack {
           SearchView()
         }
+        .background(themeManager.backgroundColor)
       }
     }
 
@@ -137,7 +138,13 @@ struct OpenTabView: View {
         self.lyricsService.setModelContext(self.modelContext)
         self.metadataService.setModelContext(self.modelContext)
         self.recommendationEngine.setModelContext(self.modelContext)
-        
+        #if os(iOS)
+          WatchSyncService.shared.setModelContext(self.modelContext)
+        #endif
+
+        // Setup preferences and theme
+        _ = UserPreferences.getOrCreate(in: self.modelContext)
+
         // 2. Load songs first (needed for restoration)
         print("[DEBUG] Loading songs...")
         await library.loadSongs()

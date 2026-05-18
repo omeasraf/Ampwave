@@ -236,6 +236,7 @@ final class LibrarySong: Identifiable, Hashable {
       .filter { !$0.isEmpty }
       .joined(separator: " ")
       .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(of: "[''\"\"“”]", with: "", options: .regularExpression)
       .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)
       .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
       .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -245,15 +246,15 @@ final class LibrarySong: Identifiable, Hashable {
   private func cleanLyrics() -> String {
     guard let lyrics = lyrics, !lyrics.isEmpty else { return "" }
 
-    // Remove LRC timestamps like [00:12.34]
-    let timestampPattern = #"\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]"#
+    // Remove LRC timestamps like [00:12.34] or [00:12:34]
+    let timestampPattern = #"\[\d{2}:\d{2}[\.:]\d{2,3}\]"#
     let cleaned = lyrics.replacingOccurrences(
       of: timestampPattern,
       with: "",
       options: .regularExpression
     )
 
-    // Limit indexing to first 1000 characters to keep searchIndex size manageable
-    return String(cleaned.prefix(1000))
+    // Limit indexing to first 5000 characters to allow better lyric searching for long songs
+    return String(cleaned.prefix(5000))
   }
 }

@@ -531,11 +531,7 @@ struct SongEditSheet: View {
     // Save lyrics
     LyricsService.shared.saveLyrics(for: song, content: lyrics)
 
-    // Persist changes
-    if let modelContext = library.modelContext {
-      do {
-        try modelContext.save()
-      } catch {}
-    }
+    // Persist changes using library service to update search index version
+    library.saveContext()
   }
 }

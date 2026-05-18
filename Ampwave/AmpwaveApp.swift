@@ -72,21 +72,6 @@ struct AmpwaveApp: App {
       )
       print("[DEBUG] ModelContainer created successfully")
 
-      // Initialize shared services with the main context immediately
-      let context = modelContainer.mainContext
-      SongLibrary.shared.setModelContext(context)
-      PlaybackController.shared.setModelContext(context)
-      PlaylistManager.shared.setModelContext(context)
-      ListeningHistoryTracker.shared.setModelContext(context)
-      MetadataService.shared.setModelContext(context)
-      LyricsService.shared.setModelContext(context)
-      #if os(iOS)
-        WatchSyncService.shared.setModelContext(context)
-      #endif
-
-      // Setup preferences and theme
-      _ = UserPreferences.getOrCreate(in: context)
-
       // Update Siri App Shortcuts
       if #available(iOS 17.0, macOS 14.0, *) {
         AmpwaveShortcuts.updateAppShortcutParameters()
