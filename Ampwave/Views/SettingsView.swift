@@ -435,8 +435,26 @@ struct SettingsView: View {
             Text(mode.displayName).tag(mode)
           }
         }
-
       }
+
+      NavigationLink {
+        EqualizerSettingsView()
+      } label: {
+        HStack {
+          Label("Equalizer", systemImage: "slider.horizontal.3")
+          Spacer()
+          if EQManager.shared.isEnabled {
+            Text(EQManager.shared.currentPresetName)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          } else {
+            Text("Off")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+      }
+
     } header: {
       Text("Playback")
     } footer: {

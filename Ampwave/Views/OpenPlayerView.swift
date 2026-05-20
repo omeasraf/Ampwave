@@ -20,6 +20,7 @@ struct OpenPlayerView: View {
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
   @State private var showingTechnicalInfo = false
+  @State private var showingEqualizer = false
   @State private var artworkColor: Color = .clear
 
   private var playback: PlaybackController { PlaybackController.shared }
@@ -49,72 +50,82 @@ struct OpenPlayerView: View {
           let isFullBackground = userPreferences?.fullArtworkBackground ?? true
           
           ScrollView(showsIndicators: false) {
-            VStack(spacing: 0) {
-              if isFullBackground {
-                // Adaptive header area for full background
-                FullArtworkBackgroundView(artworkPath: playback.currentItem?.effectiveArtworkPath)
-                  .frame(height: availableHeight * 0.55)
-                  .overlay {
-                    LinearGradient(
-                      stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .clear, location: 0.6),
-                        .init(color: themeManager.backgroundColor.opacity(0.8), location: 0.85),
-                        .init(color: themeManager.backgroundColor, location: 1.0),
-                      ],
-                      startPoint: .top,
-                      endPoint: .bottom
-                    )
+              VStack(spacing: 0) {
+                  // ── First page: fills exactly the viewport ──
+                  VStack(spacing: 0) {
+                      if isFullBackground {
+                          // Taller artwork for full background mode
+                          FullArtworkBackgroundView(artworkPath: playback.currentItem?.effectiveArtworkPath)
+                              .frame(height: availableHeight * 0.62)
+                              .overlay {
+                                  LinearGradient(
+                                    stops: [
+                                        .init(color: .clear, location: 0),
+                                        .init(color: .clear, location: 0.6),
+                                        .init(color: themeManager.backgroundColor.opacity(0.8), location: 0.85),
+                                        .init(color: themeManager.backgroundColor, location: 1.0),
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                  )
+                              }
+                      } else {
+                          // Artwork same width as glass card
+                          LargeArtworkImageView(
+                            artworkPath: playback.currentItem?.effectiveArtworkPath
+                          )
+                          .padding(.top, 10)
+                          .padding(.bottom, 10)
+                          .padding(.horizontal, 16)
+                      }
+                      
+                      Spacer(minLength: 0)
+                      
+                      VStack(spacing: isFullBackground ? 24 : 22) {
+                          trackInfoSection
+                          
+                          PlayerProgressView()
+                          
+                          PlayerPlaybackControlsView()
+                          
+                          extraControls
+                      }
+                      .padding(.vertical, isFullBackground ? 24 : 16)
+                      .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 24 : 12)
+                      .background(
+                        Group {
+                            if !(userPreferences?.openPlayerGlassBackground ?? true) {
+                                Color.clear
+                            } else {
+                                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                                    .fill(themeManager.cardBackgroundColor)
+                            }
+                        }
+                      )
+                      .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 16 : 8)
+                      .padding(.bottom, 10)
                   }
-              } else {
-                // Responsive artwork for standard background
-                LargeArtworkImageView(
-                  artworkPath: playback.currentItem?.effectiveArtworkPath
-                )
-                .padding(.top, 10)
-                .padding(.bottom, 10)
-                .padding(.horizontal, 32)
-                .frame(height: min(availableHeight * 0.45, 400))
+                  .frame(minHeight: availableHeight)
+                  
+                  // ── Lyrics section: only visible on scroll ──
+                  tabSection
+                      .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 16 : 8)
+                      .padding(.bottom, 24)
               }
-
-              Spacer(minLength: 0)
-
-              VStack(spacing: isFullBackground ? 24 : 22) {
-                trackInfoSection
-
-                PlayerProgressView()
-
-                PlayerPlaybackControlsView()
-
-                extraControls
-
-                if !isFullBackground {
-                  Spacer(minLength: 8)
-                }
-
-                tabSection
-              }
-              .padding(.vertical, isFullBackground ? 24 : 16)
-              .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 24 : 12)
-              .background(
-                Group {
-                  if !(userPreferences?.openPlayerGlassBackground ?? true) {
-                    Color.clear
-                  } else {
-                    RoundedRectangle(cornerRadius: 32, style: .continuous)
-                      .fill(themeManager.cardBackgroundColor)
-                  }
-                }
-              )
-              .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 16 : 8)
-              .padding(.bottom, 10)
-            }
-            .frame(minHeight: availableHeight)
           }
           .background(themeManager.backgroundColor)
         }
         .ignoresSafeArea(edges: (userPreferences?.fullArtworkBackground ?? true) ? .top : [])
       }
+      // Swipe down anywhere to dismiss — works simultaneously with the scroll gesture
+      .simultaneousGesture(
+        DragGesture(minimumDistance: 30, coordinateSpace: .global)
+          .onEnded { value in
+            guard value.translation.height > 80,
+              value.translation.height > abs(value.translation.width) else { return }
+            dismiss()
+          }
+      )
       .navigationTitle("Now Playing")
       #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -336,6 +347,16 @@ struct OpenPlayerView: View {
       }
       .sheet(isPresented: $showingQueue) {
         QueueSheetView()
+      }
+
+      playerUtilityButton(
+        icon: "slider.horizontal.3",
+        isActive: EQManager.shared.isEnabled
+      ) {
+        showingEqualizer = true
+      }
+      .sheet(isPresented: $showingEqualizer) {
+        EqualizerSheet()
       }
     }
   }

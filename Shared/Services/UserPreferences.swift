@@ -460,6 +460,19 @@ final class UserPreferences: Identifiable {
     }
   }
   @Attribute(originalName: "miniPlayerFloating") var _miniPlayerFloating: Bool?
+
+  var fullScreenArtworkExpanded: Bool? {
+    get {
+      _fullScreenArtworkExpanded
+        ?? UserDefaults.standard.object(forKey: "com.ampwave.fullScreenArtworkExpanded") as? Bool
+    }
+    set {
+      _fullScreenArtworkExpanded = newValue
+      UserDefaults.standard.set(newValue ?? false, forKey: "com.ampwave.fullScreenArtworkExpanded")
+      save()
+    }
+  }
+  @Attribute(originalName: "fullScreenArtworkExpanded") var _fullScreenArtworkExpanded: Bool?
   var isPremiumUser: Bool?
   var customColorSchemeRaw: String? {
     get {
@@ -522,6 +535,8 @@ final class UserPreferences: Identifiable {
     UserDefaults.standard.set(
       showFullArtworkGradient ?? true, forKey: "com.ampwave.showFullArtworkGradient")
     UserDefaults.standard.set(miniPlayerFloating ?? false, forKey: "com.ampwave.miniPlayerFloating")
+    UserDefaults.standard.set(
+      fullScreenArtworkExpanded ?? false, forKey: "com.ampwave.fullScreenArtworkExpanded")
   }
 
   var customColorScheme: ColorScheme? {
@@ -567,6 +582,7 @@ final class UserPreferences: Identifiable {
     self.coloredSurfaces = true
     self.showFullArtworkGradient = true
     self.miniPlayerFloating = false
+    self.fullScreenArtworkExpanded = false
     self.isPremiumUser = true
     self.customColorSchemeRaw = "dark"
   }
@@ -593,6 +609,7 @@ final class UserPreferences: Identifiable {
         }
         if existing.showFullArtworkGradient == nil { existing.showFullArtworkGradient = true }
         if existing.miniPlayerFloating == nil { existing.miniPlayerFloating = false }
+        if existing.fullScreenArtworkExpanded == nil { existing.fullScreenArtworkExpanded = false }
         if existing.wordSyncedLyricsEnabled == nil { existing.wordSyncedLyricsEnabled = false }
         if existing.copyMusicToStorage == nil { existing.copyMusicToStorage = true }
         if existing.isPremiumUser == nil { existing.isPremiumUser = true }
@@ -637,5 +654,10 @@ extension ThemeManager {
   var miniPlayerFloating: Bool {
     userPreferences?.miniPlayerFloating
       ?? UserDefaults.standard.bool(forKey: "com.ampwave.miniPlayerFloating")
+  }
+  var fullScreenArtworkExpanded: Bool {
+    userPreferences?.fullScreenArtworkExpanded
+      ?? UserDefaults.standard.object(forKey: "com.ampwave.fullScreenArtworkExpanded") as? Bool
+      ?? false
   }
 }
