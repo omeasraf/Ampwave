@@ -54,7 +54,7 @@ struct ArtworkSelectionSheet: View {
       .background(themeManager.backgroundColor)
       .navigationTitle("Select Artwork")
       #if os(iOS)
-      .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.inline)
       #endif
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {

@@ -48,12 +48,11 @@ enum PlaylistImportExport {
 
     for track in portable.tracks {
       let duration = Int(track.duration ?? 0)
-      lines.append("#EXTINF:\(duration),\(track.artist) - \(track.title)")
-      if let songID = track.songID { lines.append("#AMPWAVE-ID:\(songID)") }
-      if let fileHash = track.fileHash { lines.append("#AMPWAVE-HASH:\(fileHash)") }
-      if let album = track.album, !album.isEmpty { lines.append("#AMPWAVE-ALBUM:\(album)") }
+      lines.append("#EXTINF:\(duration),\(track.artistName) - \(track.songName)")
+      if let fileHash = track.hash { lines.append("#AMPWAVE-HASH:\(fileHash)") }
+      if let album = track.albumName, !album.isEmpty { lines.append("#AMPWAVE-ALBUM:\(album)") }
       if let duration = track.duration { lines.append("#AMPWAVE-DURATION:\(duration)") }
-      lines.append(track.fileName ?? track.title)
+      lines.append("\(track.artistName) - \(track.songName)")
     }
 
     return lines.joined(separator: "\n")
@@ -101,11 +100,6 @@ enum PlaylistImportExport {
         continue
       }
 
-      if line.hasPrefix("#AMPWAVE-ID:") {
-        pending.songID = String(line.dropFirst("#AMPWAVE-ID:".count))
-        continue
-      }
-
       if line.hasPrefix("#AMPWAVE-HASH:") {
         pending.fileHash = String(line.dropFirst("#AMPWAVE-HASH:".count))
         continue
@@ -123,7 +117,15 @@ enum PlaylistImportExport {
 
       if line.hasPrefix("#") { continue }
 
-      pending.identifier = line
+      // In the new format, this line is "Artist - Title", but we already got it from EXTINF or can parse it here
+      if pending.songName == "Unknown Title" {
+          let parts = line.components(separatedBy: " - ")
+          if parts.count >= 2 {
+              pending.artistName = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+              pending.songName = parts.dropFirst().joined(separator: " - ").trimmingCharacters(in: .whitespacesAndNewlines)
+          }
+      }
+
       importedTracks.append(pending.asTrack())
       pending = PendingM3UEntry()
     }
@@ -182,33 +184,17 @@ enum PlaylistImportExport {
   private static func resolveSong(from track: PortableTrackDocument, library: SongLibrary)
     -> LibrarySong?
   {
-    if let songID = track.songID,
-      let uuid = UUID(uuidString: songID),
-      let match = library.songs.first(where: { $0.id == uuid })
-    {
-      return match
-    }
-
-    if let fileHash = track.fileHash, !fileHash.isEmpty,
+    // 1. Match by hash first (most reliable)
+    if let fileHash = track.hash, !fileHash.isEmpty,
       let match = library.songs.first(where: { $0.fileHash == fileHash })
     {
       return match
     }
 
-    if let identifier = track.identifier?.trimmingCharacters(in: .whitespacesAndNewlines),
-      !identifier.isEmpty
-    {
-      let normalizedIdentifier = normalize(identifier)
-      if let match = library.songs.first(where: {
-        normalize($0.fileName) == normalizedIdentifier
-      }) {
-        return match
-      }
-    }
-
-    let normalizedTitle = normalize(track.title)
-    let normalizedArtist = normalize(track.artist)
-    let normalizedAlbum = normalize(track.album ?? "")
+    // 2. Fall back to metadata matching
+    let normalizedTitle = normalize(track.songName)
+    let normalizedArtist = normalize(track.artistName)
+    let normalizedAlbum = normalize(track.albumName ?? "")
 
     let rankedMatches = library.songs.compactMap { song -> (LibrarySong, Double)? in
       let songTitle = normalize(song.title)
@@ -232,9 +218,6 @@ enum PlaylistImportExport {
         } else {
           score -= min(delta / 10, 2.5)
         }
-      }
-      if let fileName = track.fileName, normalize(song.fileName) == normalize(fileName) {
-        score += 1.5
       }
       return score >= 8 ? (song, score) : nil
     }
@@ -305,7 +288,7 @@ private struct PortablePlaylistDocument: Codable {
 
   init(
     format: String = "ampwave-playlist",
-    version: Int = 1,
+    version: Int = 2,
     name: String,
     exportedAt: Date = .now,
     tracks: [PortableTrackDocument]
@@ -326,58 +309,43 @@ private struct PortablePlaylistDocument: Codable {
 }
 
 private struct PortableTrackDocument: Codable {
-  let songID: String?
-  let fileHash: String?
-  let title: String
-  let artist: String
-  let album: String?
+  let songName: String
+  let artistName: String
+  let albumName: String?
   let duration: TimeInterval?
-  let fileName: String?
-  let identifier: String?
+  let hash: String?
 
   init(
-    songID: String? = nil,
-    fileHash: String? = nil,
-    title: String,
-    artist: String,
-    album: String? = nil,
+    songName: String,
+    artistName: String,
+    albumName: String? = nil,
     duration: TimeInterval? = nil,
-    fileName: String? = nil,
-    identifier: String? = nil
+    hash: String? = nil
   ) {
-    self.songID = songID
-    self.fileHash = fileHash
-    self.title = title
-    self.artist = artist
-    self.album = album
+    self.songName = songName
+    self.artistName = artistName
+    self.albumName = albumName
     self.duration = duration
-    self.fileName = fileName
-    self.identifier = identifier
+    self.hash = hash
   }
 
   init(song: LibrarySong, library: SongLibrary) {
-    let resolvedFileName = library.getFileURL(for: song).lastPathComponent
     self.init(
-      songID: song.id.uuidString,
-      fileHash: song.fileHash,
-      title: song.title,
-      artist: song.artist,
-      album: song.album,
+      songName: song.title,
+      artistName: song.artist,
+      albumName: song.album,
       duration: song.duration > 0 ? song.duration : nil,
-      fileName: resolvedFileName,
-      identifier: resolvedFileName
+      hash: song.fileHash
     )
   }
 }
 
 private struct PendingM3UEntry {
-  var songID: String?
-  var fileHash: String?
-  var title: String = "Unknown Title"
-  var artist: String = "Unknown Artist"
+  var songName: String = "Unknown Title"
+  var artistName: String = "Unknown Artist"
   var album: String?
   var duration: TimeInterval?
-  var identifier: String?
+  var fileHash: String?
 
   mutating func applyEXTINF(_ line: String) {
     let payload = String(line.dropFirst("#EXTINF:".count))
@@ -391,24 +359,21 @@ private struct PendingM3UEntry {
     let metadata = pieces[1]
     let parts = metadata.components(separatedBy: " - ")
     if parts.count >= 2 {
-      artist = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-      title = parts.dropFirst().joined(separator: " - ").trimmingCharacters(
+      artistName = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+      songName = parts.dropFirst().joined(separator: " - ").trimmingCharacters(
         in: .whitespacesAndNewlines)
     } else {
-      title = metadata.trimmingCharacters(in: .whitespacesAndNewlines)
+      songName = metadata.trimmingCharacters(in: .whitespacesAndNewlines)
     }
   }
 
   func asTrack() -> PortableTrackDocument {
     PortableTrackDocument(
-      songID: songID,
-      fileHash: fileHash,
-      title: title,
-      artist: artist,
-      album: album,
+      songName: songName,
+      artistName: artistName,
+      albumName: album,
       duration: duration,
-      fileName: identifier,
-      identifier: identifier
+      hash: fileHash
     )
   }
 }

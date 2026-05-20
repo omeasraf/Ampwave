@@ -12,107 +12,9 @@ import Combine
 import Foundation
 import MediaPlayer
 import MediaToolbox
+import MusicKit
 import SwiftData
 internal import SwiftUI
-
-// MARK: - VocalIsolator
-
-// Sound Isolation subtype 'voic'
-let kAudioUnitSubType_SoundIsolation: OSType = 0x766f_6963
-
-final class VocalIsolator {
-  static let shared = VocalIsolator()
-
-  var vocalLevel: Float = 1.0
-
-  private init() {}
-
-  func createAudioMix(for item: AVPlayerItem) -> AVAudioMix? {
-    guard let audioTrack = item.asset.tracks(withMediaType: .audio).first else { return nil }
-
-    var callbacks = MTAudioProcessingTapCallbacks(
-      version: kMTAudioProcessingTapCallbacksVersion_0,
-      clientInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
-      init: { (tap, clientInfo, tapStorageOut) in
-        tapStorageOut.pointee = clientInfo
-      },
-      finalize: nil,
-      prepare: nil,
-      unprepare: nil,
-      process: { (tap, numberFrames, flags, bufferListInOut, numberFramesOut, flagsOut) in
-        let status = MTAudioProcessingTapGetSourceAudio(
-          tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut)
-        if status != noErr { return }
-
-        let isolator = Unmanaged<VocalIsolator>.fromOpaque(MTAudioProcessingTapGetStorage(tap))
-          .takeUnretainedValue()
-        let vocalLevel = isolator.vocalLevel
-
-        // If vocalLevel is 1.0, we don't need to do anything
-        if vocalLevel >= 0.99 {
-          return
-        }
-
-        let buffers = UnsafeMutableAudioBufferListPointer(bufferListInOut)
-        let numBuffers = buffers.count
-
-        if numBuffers >= 2 {
-          // Non-interleaved (separate buffers for L and R)
-          guard let leftData = buffers[0].mData?.assumingMemoryBound(to: Float.self),
-            let rightData = buffers[1].mData?.assumingMemoryBound(to: Float.self)
-          else {
-            return
-          }
-
-          let k1 = (vocalLevel + 1.0) / 2.0
-          let k2 = (vocalLevel - 1.0) / 2.0
-
-          for i in 0..<Int(numberFrames) {
-            let L = leftData[i]
-            let R = rightData[i]
-            leftData[i] = k1 * L + k2 * R
-            rightData[i] = k2 * L + k1 * R
-          }
-        } else if numBuffers == 1 {
-          // Interleaved (L and R in the same buffer: L, R, L, R...)
-          let buffer = buffers[0]
-          guard buffer.mNumberChannels >= 2,
-            let data = buffer.mData?.assumingMemoryBound(to: Float.self)
-          else {
-            return
-          }
-
-          let k1 = (vocalLevel + 1.0) / 2.0
-          let k2 = (vocalLevel - 1.0) / 2.0
-
-          for i in 0..<Int(numberFrames) {
-            let L = data[i * 2]
-            let R = data[i * 2 + 1]
-            data[i * 2] = k1 * L + k2 * R
-            data[i * 2 + 1] = k2 * L + k1 * R
-          }
-        }
-      }
-    )
-
-    var tap: MTAudioProcessingTap?
-    let status = MTAudioProcessingTapCreate(
-      kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap)
-
-    if status != noErr {
-      print("[ERROR] VocalIsolator: Failed to create tap: \(status)")
-      return nil
-    }
-
-    let inputParams = AVMutableAudioMixInputParameters(track: audioTrack)
-    inputParams.audioTapProcessor = tap
-
-    let audioMix = AVMutableAudioMix()
-    audioMix.inputParameters = [inputParams]
-
-    return audioMix
-  }
-}
 
 @Observable
 @MainActor
@@ -120,7 +22,7 @@ final class PlaybackController {
   static let shared = PlaybackController()
 
   private var player: AVQueuePlayer?
-  private var timeObserver: Any?
+  private var timeObserver: (observer: Any, player: AVPlayer)?
   private var itemObservers: [NSKeyValueObservation] = []
   private let library = SongLibrary.shared
   private let historyTracker = ListeningHistoryTracker.shared
@@ -134,10 +36,12 @@ final class PlaybackController {
   // MARK: - Playback State
 
   private(set) var currentItem: LibrarySong?
-  private(set) var currentTime: TimeInterval = 0
+  var currentTime: TimeInterval = 0
   private(set) var duration: TimeInterval = 0
   private(set) var isPlaying: Bool = false
   private(set) var isLoading: Bool = false
+  var isScrubbing: Bool = false
+  private var isSeeking: Bool = false
 
   var volume: Float = 1.0 {
     didSet {
@@ -174,10 +78,48 @@ final class PlaybackController {
 
   // MARK: - Vocal Isolation
 
-  var showVocalSlider: Bool = false
-  var vocalLevel: Float = 1.0 {
-    didSet {
-      VocalIsolator.shared.vocalLevel = vocalLevel
+  private(set) var isVocalSliderVisible: Bool = false
+  private(set) var currentVocalLevel: Float = 1.0
+  private var vocalSliderTimer: Timer?
+
+  func toggleVocalSlider() {
+    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+      isVocalSliderVisible.toggle()
+    }
+
+    print("[DEBUG] PlaybackController: toggleVocalSlider - New state: \(isVocalSliderVisible)")
+
+    if isVocalSliderVisible {
+      resetVocalSliderTimer()
+    } else {
+      vocalSliderTimer?.invalidate()
+      vocalSliderTimer = nil
+    }
+
+    saveState()
+  }
+
+  var vocalLevel: Float {
+    get { currentVocalLevel }
+    set {
+      currentVocalLevel = newValue
+      VocalIsolator.shared.vocalLevel = newValue
+
+      if isVocalSliderVisible {
+        resetVocalSliderTimer()
+      }
+    }
+  }
+
+  private func resetVocalSliderTimer() {
+    vocalSliderTimer?.invalidate()
+    vocalSliderTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) {
+      [weak self] _ in
+      Task { @MainActor in
+        withAnimation(.easeInOut(duration: 0.5)) {
+          self?.isVocalSliderVisible = false
+        }
+      }
     }
   }
 
@@ -232,8 +174,8 @@ final class PlaybackController {
   }
 
   private func cleanupPlayer() {
-    if let observer = timeObserver {
-      player?.removeTimeObserver(observer)
+    if let (observer, obsPlayer) = timeObserver {
+      obsPlayer.removeTimeObserver(observer)
       timeObserver = nil
     }
     player?.pause()
@@ -264,8 +206,6 @@ final class PlaybackController {
       )
     }
 
-    // Restore state - if library is empty, this will fail but SongLibrary will retry after loading
-    restoreState()
     self.isInitializing = false
   }
 
@@ -547,6 +487,8 @@ final class PlaybackController {
     from source: PlaySource = .library,
     playlistId: UUID? = nil
   ) {
+    print("[VALIDATION] PlaybackController: play triggered for \(song.title)")
+
     if let current = currentItem {
       // Record end of current song before starting new one
       // Count as skip if listened for less than 10 seconds
@@ -562,62 +504,89 @@ final class PlaybackController {
 
     let url = library.getFileURL(for: song)
     guard FileManager.default.fileExists(atPath: url.path) else {
-      print("Audio file not found: \(url.path)")
+      print("[ERROR] PlaybackController: Audio file not found: \(url.path)")
       isLoading = false
       return
     }
 
-    let item = createPlayerItem(for: song)
-
-    if player == nil {
-      player = AVQueuePlayer(items: [item])
-      applyEQPresetForPlayback()
-      applyPlayerOutputVolume()
-      addTimeObserver()
-      observePlayerItemChange()
-    } else {
-      player?.removeAllItems()
-      player?.insert(item, after: nil)
-    }
-
-    currentItem = song
-    duration = song.duration > 0 ? song.duration : 0
-    currentTime = 0
-
-    // Prepare next item for gapless
-    prepareNextItem()
-
-    player?.play()
-    isPlaying = true
-    isLoading = false
-
-    updateUIForNewItem()
-    historyTracker.songStarted(song, source: source, playlistId: playlistId)
-
     Task {
-      await loadLyrics(for: song)
-    }
+      let item = await createPlayerItem(for: song)
 
-    saveState()
+      await MainActor.run {
+        print(
+          "[VALIDATION] PlaybackController: AVPlayerItem ready with audioMix: \(item.audioMix != nil)"
+        )
+
+        if self.player == nil {
+          self.player = AVQueuePlayer(items: [item])
+          self.applyEQPresetForPlayback()
+          self.applyPlayerOutputVolume()
+          self.addTimeObserver()
+          self.observePlayerItemChange()
+        } else {
+          self.player?.pause()
+          self.player?.removeAllItems()
+          self.player?.insert(item, after: nil)
+        }
+
+        self.currentItem = song
+        self.duration = song.duration > 0 ? song.duration : 0
+        self.currentTime = 0
+
+        // Prepare next item for gapless
+        self.prepareNextItem()
+
+        self.player?.play()
+        self.isPlaying = true
+        self.isLoading = false
+
+        self.updateUIForNewItem()
+        self.historyTracker.songStarted(song, source: source, playlistId: playlistId)
+
+        Task {
+          await self.loadLyrics(for: song)
+        }
+
+        self.saveState()
+      }
+    }
   }
 
-  private func createPlayerItem(for song: LibrarySong) -> AVPlayerItem {
+  func prepareForExternalPlayback() {
+    player?.pause()
+    isPlaying = false
+    isLoading = false
+    audioSessionConfigured = false
+    updateNowPlaying()
+  }
+
+  private func createPlayerItem(for song: LibrarySong) async -> AVPlayerItem {
     let url = library.getFileURL(for: song)
 
-    // Start accessing security-scoped resource if it's a referenced file
     if song.storageMode == .referenced {
       _ = url.startAccessingSecurityScopedResource()
-      // Note: We don't explicitly stop accessing here because AVPlayer needs it.
-      // In a real app, you'd manage this more carefully with ref counting,
-      // but for this implementation, this ensures playback works.
     }
 
     let asset = AVURLAsset(url: url)
     let item = AVPlayerItem(asset: asset)
 
-    // Vocal Isolation
-    if let audioMix = VocalIsolator.shared.createAudioMix(for: item) {
-      item.audioMix = audioMix
+    // Vocal Isolation - Attach tap synchronously once tracks are loaded
+    do {
+      let tracks = try await asset.loadTracks(withMediaType: .audio)
+      if let audioTrack = tracks.first {
+        if let audioMix = VocalIsolator.shared.createAudioMix(for: audioTrack) {
+          item.audioMix = audioMix
+          print(
+            "[VALIDATION] PlaybackController: Assigned AVAudioMix to AVPlayerItem for \(song.title)"
+          )
+        } else {
+          print("[ERROR] PlaybackController: Failed to create audioMix for \(song.title)")
+        }
+      } else {
+        print("[ERROR] PlaybackController: No audio track found for \(song.title)")
+      }
+    } catch {
+      print("[ERROR] PlaybackController: Failed to load tracks: \(error)")
     }
 
     observePlayerItem(item)
@@ -629,11 +598,15 @@ final class PlaybackController {
       [weak self] item, _ in
       Task { @MainActor in
         if item.status == .readyToPlay {
+          print("[VALIDATION] PlaybackController: AVPlayerItem status .readyToPlay")
           let itemDuration = CMTimeGetSeconds(item.duration)
           if itemDuration.isFinite, itemDuration > 0 {
             self?.duration = itemDuration
             self?.updateNowPlaying()
           }
+        } else if item.status == .failed {
+          print(
+            "[ERROR] PlaybackController: AVPlayerItem failed: \(String(describing: item.error))")
         }
       }
     }
@@ -651,8 +624,17 @@ final class PlaybackController {
     let nextIndex = currentQueueIndex + 1
     if nextIndex < queue.count {
       let nextSong = queue[nextIndex]
-      let nextItem = createPlayerItem(for: nextSong)
-      player.insert(nextItem, after: player.currentItem)
+      print("[VALIDATION] PlaybackController: preparing next item \(nextSong.title)")
+
+      Task {
+        let nextItem = await createPlayerItem(for: nextSong)
+        await MainActor.run {
+          if player.items().count < 2 {
+            player.insert(nextItem, after: player.currentItem)
+            print("[VALIDATION] PlaybackController: Inserted next item into player")
+          }
+        }
+      }
     }
   }
 
@@ -740,15 +722,36 @@ final class PlaybackController {
 
   func seek(to time: TimeInterval) {
     guard time.isFinite, time >= 0 else { return }
+    self.currentTime = time
+
+    if isScrubbing {
+      debouncedUpdateLyric()
+      return
+    }
+
+    isSeeking = true
     let cmTime = CMTime(seconds: time, preferredTimescale: 600)
     player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) {
       [weak self] finished in
-      if finished {
-        Task { @MainActor in
+      Task { @MainActor in
+        self?.isSeeking = false
+        if finished {
           self?.currentTime = time
+          self?.updateCurrentLyric()
           self?.updateNowPlaying()
           self?.saveState()
         }
+      }
+    }
+  }
+
+  private var lyricUpdateTask: Task<Void, Never>?
+  private func debouncedUpdateLyric() {
+    lyricUpdateTask?.cancel()
+    lyricUpdateTask = Task {
+      try? await Task.sleep(for: .milliseconds(100))
+      if !Task.isCancelled {
+        updateCurrentLyric()
       }
     }
   }
@@ -844,9 +847,14 @@ final class PlaybackController {
     guard let song = currentItem else { return }
     applyEQPresetForPlayback()
     applyPlayerOutputVolume()
-    duration = song.duration > 0 ? song.duration : 0
-    currentTime = 0
+    
+    // Reset time immediately to prevent scrubber lag from previous track
+    self.currentTime = 0
+    self.duration = song.duration > 0 ? song.duration : 0
+    
+    // Force immediate remote command and lock screen update
     updateNowPlaying()
+    
     prepareNextItem()
     Task {
       await loadLyrics(for: song)
@@ -873,7 +881,7 @@ final class PlaybackController {
     saveState()
   }
 
-  func playNext(_ song: LibrarySong) {
+  func playNext(_ song: LibrarySong) async {
     let insertIndex = min(currentQueueIndex + 1, queue.count)
     queue.insert(song, at: insertIndex)
     if shuffleMode != .off {
@@ -882,7 +890,7 @@ final class PlaybackController {
 
     // Insert into AVQueuePlayer
     if let player = player {
-      let item = createPlayerItem(for: song)
+      let item = await createPlayerItem(for: song)
       player.insert(item, after: player.currentItem)
     }
     saveState()
@@ -1091,8 +1099,8 @@ final class PlaybackController {
       MPMediaItemPropertyPlaybackDuration: duration,
       MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
       MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
-      MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio
-        .rawValue,
+      MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
+      MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
     ]
 
     #if os(iOS)
@@ -1252,7 +1260,7 @@ final class PlaybackController {
           self.isPlaying = false
 
           // Prepare player but don't play
-          let item = createPlayerItem(for: song)
+          let item = await createPlayerItem(for: song)
           self.player = AVQueuePlayer(items: [item])
           self.applyEQPresetForPlayback()
           self.applyPlayerOutputVolume()
@@ -1295,18 +1303,18 @@ final class PlaybackController {
   private func addTimeObserver() {
     guard let player = player else { return }
 
-    if let observer = timeObserver {
-      player.removeTimeObserver(observer)
+    if let (observer, obsPlayer) = timeObserver {
+      obsPlayer.removeTimeObserver(observer)
       timeObserver = nil
     }
 
     let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
-    timeObserver = player.addPeriodicTimeObserver(
+    let observer = player.addPeriodicTimeObserver(
       forInterval: interval,
       queue: .main
     ) {
       [weak self] time in
-      guard let self = self else { return }
+      guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
       self.currentTime = time.seconds
       self.updateCurrentLyric()
 
@@ -1315,5 +1323,6 @@ final class PlaybackController {
         self.saveState()
       }
     }
+    timeObserver = (observer, player)
   }
 }

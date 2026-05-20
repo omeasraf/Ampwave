@@ -34,6 +34,7 @@ final class Artist: Identifiable, Hashable {
 
   // MARK: - External IDs
   var musicBrainzId: String?
+  var appleMusicId: String?
 
   // MARK: - Statistics
   var songCount: Int

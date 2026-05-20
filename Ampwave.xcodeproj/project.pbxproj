@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0F03359E29AD44ABFB910021 /* FilenameParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60CDBA89F93E38F963A7E75B /* FilenameParser.swift */; };
+		2C784F762AEFB7FE835B15C6 /* MetadataMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1161437BA5F1224BF8176C35 /* MetadataMatcher.swift */; };
+		40B88AD0A40A2206056D0D4E /* MetadataConfidenceScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C26CE288281572E8DECF5F /* MetadataConfidenceScorer.swift */; };
+		488C5CCDD068FDA7EF964931 /* AppleMusicMetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE46362AAF3252EE4BD006A0 /* AppleMusicMetadataService.swift */; };
+		48EE978190F3189FCE41911E /* UnicodeCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB099B1137DA8F182593757 /* UnicodeCleanup.swift */; };
+		648D6563B066201A8F4F9B0A /* MetadataConfidenceScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C26CE288281572E8DECF5F /* MetadataConfidenceScorer.swift */; };
+		AC1820DC60D8B71ABD95305C /* FilenameParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60CDBA89F93E38F963A7E75B /* FilenameParser.swift */; };
 		B40A39302F411B23005DD316 /* MobileVLCKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40A392F2F411B23005DD316 /* MobileVLCKit.xcframework */; platformFilter = ios; };
 		B40A39322F411B23005DD316 /* MobileVLCKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B40A392F2F411B23005DD316 /* MobileVLCKit.xcframework */; platformFilter = ios; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B40A39332F411B23005DD316 /* VLCKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40A39342F411B23005DD316 /* VLCKit.xcframework */; platformFilters = (macos, ); };
@@ -145,6 +152,14 @@
 		B461961B2F8B458F00FF14A5 /* RecommendationSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B461958D2F8B458F00FF14A5 /* RecommendationSource.swift */; };
 		B461961C2F8B458F00FF14A5 /* RecommendationItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B461958B2F8B458F00FF14A5 /* RecommendationItem.swift */; };
 		B461961D2F8B458F00FF14A5 /* RecommendationReason.swift in Sources */ = {isa = PBXBuildFile; fileRef = B461958C2F8B458F00FF14A5 /* RecommendationReason.swift */; };
+		B954598C80EC92D7954DB4F1 /* MetadataMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1161437BA5F1224BF8176C35 /* MetadataMatcher.swift */; };
+		BA906416604686B89A4279EC /* MetadataConfidenceScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C26CE288281572E8DECF5F /* MetadataConfidenceScorer.swift */; };
+		C4082ECEC05D7111CE1DC809 /* UnicodeCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB099B1137DA8F182593757 /* UnicodeCleanup.swift */; };
+		E774A1E85F65BD1515577E7A /* AppleMusicMetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE46362AAF3252EE4BD006A0 /* AppleMusicMetadataService.swift */; };
+		F0FB3A141F1D8B6F7DF1BC70 /* MetadataMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1161437BA5F1224BF8176C35 /* MetadataMatcher.swift */; };
+		F417202325DFBD3765132B0B /* FilenameParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60CDBA89F93E38F963A7E75B /* FilenameParser.swift */; };
+		F42BACF9EC6073CD2C29CEC8 /* AppleMusicMetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE46362AAF3252EE4BD006A0 /* AppleMusicMetadataService.swift */; };
+		F5E8A3E932041BBF67E7C0E9 /* UnicodeCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB099B1137DA8F182593757 /* UnicodeCleanup.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -202,6 +217,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		1161437BA5F1224BF8176C35 /* MetadataMatcher.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetadataMatcher.swift; sourceTree = "<group>"; };
+		18C26CE288281572E8DECF5F /* MetadataConfidenceScorer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetadataConfidenceScorer.swift; sourceTree = "<group>"; };
+		60CDBA89F93E38F963A7E75B /* FilenameParser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FilenameParser.swift; sourceTree = "<group>"; };
+		9EB099B1137DA8F182593757 /* UnicodeCleanup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = UnicodeCleanup.swift; sourceTree = "<group>"; };
 		B40A39192F411B23005DD316 /* Ampwave.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ampwave.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B40A392F2F411B23005DD316 /* MobileVLCKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = MobileVLCKit.xcframework; sourceTree = "<group>"; };
 		B40A39342F411B23005DD316 /* VLCKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = VLCKit.xcframework; sourceTree = "<group>"; };
@@ -254,6 +273,7 @@
 		B461959B2F8B458F00FF14A5 /* PathManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathManager.swift; sourceTree = "<group>"; };
 		B461959C2F8B458F00FF14A5 /* SongLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongLibrary.swift; sourceTree = "<group>"; };
 		B461959D2F8B458F00FF14A5 /* UserPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserPreferences.swift; sourceTree = "<group>"; };
+		FE46362AAF3252EE4BD006A0 /* AppleMusicMetadataService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppleMusicMetadataService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -264,11 +284,29 @@
 			);
 			target = B46195512F8B3AAE00FF14A5 /* LyricsExtension */;
 		};
+		B4E1644E2FB3CC5D00FB94CE /* Exceptions for "Ampwave" folder in "Ampwave Watch App" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Services/NetworkMonitor.swift,
+			);
+			target = B452661B2F8B190D007FDE40 /* Ampwave Watch App */;
+		};
+		B4E1644F2FB3CC5D00FB94CE /* Exceptions for "Ampwave" folder in "LyricsExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Services/NetworkMonitor.swift,
+			);
+			target = B46195512F8B3AAE00FF14A5 /* LyricsExtension */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		B40A391B2F411B23005DD316 /* Ampwave */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B4E1644E2FB3CC5D00FB94CE /* Exceptions for "Ampwave" folder in "Ampwave Watch App" target */,
+				B4E1644F2FB3CC5D00FB94CE /* Exceptions for "Ampwave" folder in "LyricsExtension" target */,
+			);
 			path = Ampwave;
 			sourceTree = "<group>";
 		};
@@ -316,6 +354,16 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		19CCD124548CFCC8E316C2A4 /* Metadata */ = {
+			isa = PBXGroup;
+			children = (
+				9EB099B1137DA8F182593757 /* UnicodeCleanup.swift */,
+				60CDBA89F93E38F963A7E75B /* FilenameParser.swift */,
+				18C26CE288281572E8DECF5F /* MetadataConfidenceScorer.swift */,
+			);
+			path = Metadata;
+			sourceTree = "<group>";
+		};
 		B40A39102F411B23005DD316 = {
 			isa = PBXGroup;
 			children = (
@@ -404,6 +452,9 @@
 				B461959B2F8B458F00FF14A5 /* PathManager.swift */,
 				B461959C2F8B458F00FF14A5 /* SongLibrary.swift */,
 				B461959D2F8B458F00FF14A5 /* UserPreferences.swift */,
+				19CCD124548CFCC8E316C2A4 /* Metadata */,
+				FE46362AAF3252EE4BD006A0 /* AppleMusicMetadataService.swift */,
+				1161437BA5F1224BF8176C35 /* MetadataMatcher.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -470,8 +521,6 @@
 				B452661D2F8B190D007FDE40 /* Ampwave Watch App */,
 			);
 			name = "Ampwave Watch App";
-			packageProductDependencies = (
-			);
 			productName = "Ampwave Watch App Watch App";
 			productReference = B452661C2F8B190D007FDE40 /* Ampwave Watch App.app */;
 			productType = "com.apple.product-type.application";
@@ -492,8 +541,6 @@
 				B46195572F8B3AAE00FF14A5 /* Lyrics */,
 			);
 			name = LyricsExtension;
-			packageProductDependencies = (
-			);
 			productName = LyricsExtension;
 			productReference = B46195522F8B3AAE00FF14A5 /* LyricsExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
@@ -613,6 +660,11 @@
 				B461961B2F8B458F00FF14A5 /* RecommendationSource.swift in Sources */,
 				B461961C2F8B458F00FF14A5 /* RecommendationItem.swift in Sources */,
 				B461961D2F8B458F00FF14A5 /* RecommendationReason.swift in Sources */,
+				F5E8A3E932041BBF67E7C0E9 /* UnicodeCleanup.swift in Sources */,
+				AC1820DC60D8B71ABD95305C /* FilenameParser.swift in Sources */,
+				648D6563B066201A8F4F9B0A /* MetadataConfidenceScorer.swift in Sources */,
+				488C5CCDD068FDA7EF964931 /* AppleMusicMetadataService.swift in Sources */,
+				F0FB3A141F1D8B6F7DF1BC70 /* MetadataMatcher.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -663,6 +715,11 @@
 				B46195F12F8B458F00FF14A5 /* RecommendationSource.swift in Sources */,
 				B46195F22F8B458F00FF14A5 /* RecommendationItem.swift in Sources */,
 				B46195F32F8B458F00FF14A5 /* RecommendationReason.swift in Sources */,
+				C4082ECEC05D7111CE1DC809 /* UnicodeCleanup.swift in Sources */,
+				0F03359E29AD44ABFB910021 /* FilenameParser.swift in Sources */,
+				BA906416604686B89A4279EC /* MetadataConfidenceScorer.swift in Sources */,
+				E774A1E85F65BD1515577E7A /* AppleMusicMetadataService.swift in Sources */,
+				2C784F762AEFB7FE835B15C6 /* MetadataMatcher.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -713,6 +770,11 @@
 				B46195C72F8B458F00FF14A5 /* RecommendationSource.swift in Sources */,
 				B46195C82F8B458F00FF14A5 /* RecommendationItem.swift in Sources */,
 				B46195C92F8B458F00FF14A5 /* RecommendationReason.swift in Sources */,
+				48EE978190F3189FCE41911E /* UnicodeCleanup.swift in Sources */,
+				F417202325DFBD3765132B0B /* FilenameParser.swift in Sources */,
+				40B88AD0A40A2206056D0D4E /* MetadataConfidenceScorer.swift in Sources */,
+				F42BACF9EC6073CD2C29CEC8 /* AppleMusicMetadataService.swift in Sources */,
+				B954598C80EC92D7954DB4F1 /* MetadataMatcher.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -853,9 +915,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Ampwave/Ampwave.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = S8YT4LAQ84;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readonly;
@@ -918,9 +979,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Ampwave/Ampwave.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = S8YT4LAQ84;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readonly;

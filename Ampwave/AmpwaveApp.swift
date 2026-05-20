@@ -46,9 +46,22 @@ struct AmpwaveApp: App {
       PlaybackState.self,
     ])
 
+    // Configure storage in App Group for sharing with extensions
+    let storeURL: URL
+    if let sharedURL = PathManager.sharedContainerURL {
+      let appSupport = sharedURL.appendingPathComponent("Library/Application Support", isDirectory: true)
+      try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+      storeURL = appSupport.appendingPathComponent("default.store")
+      print("[DEBUG] Using App Group storage: \(storeURL.path)")
+    } else {
+      storeURL = PathManager.documentsDirectory.appendingPathComponent("default.store")
+      print("[DEBUG] Falling back to Documents storage: \(storeURL.path)")
+    }
+
     let modelConfiguration = ModelConfiguration(
-      schema: schema,
-      isStoredInMemoryOnly: false
+      url: storeURL,
+      allowsSave: true,
+      cloudKitDatabase: .none
     )
 
     do {
@@ -58,21 +71,6 @@ struct AmpwaveApp: App {
         configurations: [modelConfiguration]
       )
       print("[DEBUG] ModelContainer created successfully")
-
-      // Initialize shared services with the main context immediately
-      let context = modelContainer.mainContext
-      SongLibrary.shared.setModelContext(context)
-      PlaybackController.shared.setModelContext(context)
-      PlaylistManager.shared.setModelContext(context)
-      ListeningHistoryTracker.shared.setModelContext(context)
-      MetadataService.shared.setModelContext(context)
-      LyricsService.shared.setModelContext(context)
-      #if os(iOS)
-        WatchSyncService.shared.setModelContext(context)
-      #endif
-
-      // Setup preferences and theme
-      _ = UserPreferences.getOrCreate(in: context)
 
       // Update Siri App Shortcuts
       if #available(iOS 17.0, macOS 14.0, *) {

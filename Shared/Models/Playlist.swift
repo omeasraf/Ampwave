@@ -47,19 +47,19 @@ final class Playlist: Identifiable, Hashable {
 
   var orderedSongs: [LibrarySong] {
     let songMap = Dictionary(uniqueKeysWithValues: songs.map { ($0.id, $0) })
-    
+
     // First, get songs in the saved order
     var ordered = songOrder.compactMap { songMap[$0] }
-    
+
     // Handle any songs that are in the 'songs' relationship but not in 'songOrder'
     // (e.g. from a previous version or external sync)
     let orderedIDs = Set(songOrder)
     let missingSongs = songs.filter { !orderedIDs.contains($0.id) }
-    
+
     if !missingSongs.isEmpty {
       ordered.append(contentsOf: missingSongs)
     }
-    
+
     return ordered
   }
 
@@ -132,17 +132,17 @@ final class Playlist: Identifiable, Hashable {
     // We must move in songOrder, not songs relationship
     // First ensure songOrder is up to date with all songs
     syncOrderWithSongs()
-    
+
     songOrder.move(fromOffsets: source, toOffset: destination)
     touch()
   }
 
   private func syncOrderWithSongs() {
     let currentIDs = Set(songs.map { $0.id })
-    
+
     // Remove IDs that are no longer in songs
     songOrder.removeAll { !currentIDs.contains($0) }
-    
+
     // Add IDs that are in songs but not in songOrder
     let existingIDs = Set(songOrder)
     for song in songs {

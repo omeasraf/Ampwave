@@ -19,7 +19,7 @@ struct ContentView: View {
       themeManager.backgroundColor.ignoresSafeArea()
 
       OpenTabView(isPlayerExpanded: $isPlayerExpanded)
-        .sheet(isPresented: $isPlayerExpanded) {
+        .fullScreenCover(isPresented: $isPlayerExpanded) {
           OpenPlayerView()
         }
     }

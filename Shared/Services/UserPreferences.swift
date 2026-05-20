@@ -83,8 +83,10 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     let actualIsDark: Bool
     switch self {
     case .ampwave: actualIsDark = isDark
-    case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight: actualIsDark = false
-    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula, .nordDark, .everforestDark, .kanagawaWave:
+    case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight:
+      actualIsDark = false
+    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula,
+      .nordDark, .everforestDark, .kanagawaWave:
       actualIsDark = true
     case .custom: actualIsDark = isDark
     }
@@ -257,7 +259,20 @@ final class ThemeManager {
 
   var accentColor: Color { themeConfig.accent }
   var backgroundColor: Color { themeConfig.background }
-  var cardBackgroundColor: Color { themeConfig.cardBackground }
+  var cardBackgroundColor: Color {
+    if coloredSurfaces {
+      return themeConfig.cardBackground
+    } else {
+      // Use platform-native neutral surfaces when colored surfaces are disabled
+      #if os(macOS)
+        return Color(nsColor: .controlBackgroundColor)
+      #elseif os(iOS)
+        return Color(uiColor: .secondarySystemGroupedBackground)
+      #else
+        return themeConfig.isDark ? Color(white: 0.12) : Color(white: 0.94)
+      #endif
+    }
+  }
 
   var colorScheme: ColorScheme? {
     if currentTheme == .custom {
@@ -266,7 +281,8 @@ final class ThemeManager {
       return raw == "light" ? .light : .dark
     }
     switch currentTheme {
-    case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight: return .light
+    case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight:
+      return .light
     case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula:
       return .dark
     default: return nil
@@ -408,17 +424,17 @@ final class UserPreferences: Identifiable {
   }
   @Attribute(originalName: "openPlayerGlassBackground") var _openPlayerGlassBackground: Bool?
 
-  var fullAppBackground: Bool? {
+  var coloredSurfaces: Bool? {
     get {
-      _fullAppBackground ?? UserDefaults.standard.bool(forKey: "com.ampwave.fullAppBackground")
+      _coloredSurfaces ?? UserDefaults.standard.bool(forKey: "com.ampwave.coloredSurfaces")
     }
     set {
-      _fullAppBackground = newValue
-      UserDefaults.standard.set(newValue ?? false, forKey: "com.ampwave.fullAppBackground")
+      _coloredSurfaces = newValue
+      UserDefaults.standard.set(newValue ?? false, forKey: "com.ampwave.coloredSurfaces")
       save()
     }
   }
-  @Attribute(originalName: "fullAppBackground") var _fullAppBackground: Bool?
+  @Attribute(originalName: "fullAppBackground") var _coloredSurfaces: Bool?
 
   var showFullArtworkGradient: Bool? {
     get {
@@ -444,6 +460,19 @@ final class UserPreferences: Identifiable {
     }
   }
   @Attribute(originalName: "miniPlayerFloating") var _miniPlayerFloating: Bool?
+
+  var fullScreenArtworkExpanded: Bool? {
+    get {
+      _fullScreenArtworkExpanded
+        ?? UserDefaults.standard.object(forKey: "com.ampwave.fullScreenArtworkExpanded") as? Bool
+    }
+    set {
+      _fullScreenArtworkExpanded = newValue
+      UserDefaults.standard.set(newValue ?? false, forKey: "com.ampwave.fullScreenArtworkExpanded")
+      save()
+    }
+  }
+  @Attribute(originalName: "fullScreenArtworkExpanded") var _fullScreenArtworkExpanded: Bool?
   var isPremiumUser: Bool?
   var customColorSchemeRaw: String? {
     get {
@@ -502,10 +531,12 @@ final class UserPreferences: Identifiable {
     UserDefaults.standard.set(
       openPlayerGlassBackground ?? true, forKey: "com.ampwave.openPlayerGlassBackground")
     UserDefaults.standard.set(
-      fullAppBackground ?? false, forKey: "com.ampwave.fullAppBackground")
+      coloredSurfaces ?? true, forKey: "com.ampwave.coloredSurfaces")
     UserDefaults.standard.set(
       showFullArtworkGradient ?? true, forKey: "com.ampwave.showFullArtworkGradient")
     UserDefaults.standard.set(miniPlayerFloating ?? false, forKey: "com.ampwave.miniPlayerFloating")
+    UserDefaults.standard.set(
+      fullScreenArtworkExpanded ?? false, forKey: "com.ampwave.fullScreenArtworkExpanded")
   }
 
   var customColorScheme: ColorScheme? {
@@ -548,9 +579,10 @@ final class UserPreferences: Identifiable {
     self.selectedThemeRaw = AppTheme.ampwave.rawValue
     self.fullArtworkBackground = true
     self.openPlayerGlassBackground = true
-    self.fullAppBackground = false
+    self.coloredSurfaces = true
     self.showFullArtworkGradient = true
     self.miniPlayerFloating = false
+    self.fullScreenArtworkExpanded = false
     self.isPremiumUser = true
     self.customColorSchemeRaw = "dark"
   }
@@ -572,9 +604,12 @@ final class UserPreferences: Identifiable {
         }
         if existing.fullArtworkBackground == nil { existing.fullArtworkBackground = true }
         if existing.openPlayerGlassBackground == nil { existing.openPlayerGlassBackground = true }
-        if existing.fullAppBackground == nil { existing.fullAppBackground = false }
+        if existing.coloredSurfaces == nil {
+          existing.coloredSurfaces = UserDefaults.standard.object(forKey: "com.ampwave.coloredSurfaces") as? Bool ?? true
+        }
         if existing.showFullArtworkGradient == nil { existing.showFullArtworkGradient = true }
         if existing.miniPlayerFloating == nil { existing.miniPlayerFloating = false }
+        if existing.fullScreenArtworkExpanded == nil { existing.fullScreenArtworkExpanded = false }
         if existing.wordSyncedLyricsEnabled == nil { existing.wordSyncedLyricsEnabled = false }
         if existing.copyMusicToStorage == nil { existing.copyMusicToStorage = true }
         if existing.isPremiumUser == nil { existing.isPremiumUser = true }
@@ -598,9 +633,31 @@ extension ThemeManager {
   /// Uses platform semantic colors and does not force a custom global accent (Liquid Glass / system chrome).
   var usesSystemAppearance: Bool { currentTheme == .ampwave }
 
-  var fullArtworkBackground: Bool { userPreferences?.fullArtworkBackground ?? false }
-  var openPlayerGlassBackground: Bool { userPreferences?.openPlayerGlassBackground ?? true }
-  var fullAppBackground: Bool { userPreferences?.fullAppBackground ?? false }
-  var showFullArtworkGradient: Bool { userPreferences?.showFullArtworkGradient ?? true }
-  var miniPlayerFloating: Bool { userPreferences?.miniPlayerFloating ?? false }
+  var fullArtworkBackground: Bool {
+    userPreferences?.fullArtworkBackground
+      ?? UserDefaults.standard.bool(forKey: "com.ampwave.fullArtworkBackground")
+  }
+  var openPlayerGlassBackground: Bool {
+    userPreferences?.openPlayerGlassBackground
+      ?? UserDefaults.standard.object(forKey: "com.ampwave.openPlayerGlassBackground") as? Bool
+      ?? true
+  }
+  var coloredSurfaces: Bool {
+    userPreferences?.coloredSurfaces
+      ?? UserDefaults.standard.bool(forKey: "com.ampwave.coloredSurfaces")
+  }
+  var showFullArtworkGradient: Bool {
+    userPreferences?.showFullArtworkGradient
+      ?? UserDefaults.standard.object(forKey: "com.ampwave.showFullArtworkGradient") as? Bool
+      ?? true
+  }
+  var miniPlayerFloating: Bool {
+    userPreferences?.miniPlayerFloating
+      ?? UserDefaults.standard.bool(forKey: "com.ampwave.miniPlayerFloating")
+  }
+  var fullScreenArtworkExpanded: Bool {
+    userPreferences?.fullScreenArtworkExpanded
+      ?? UserDefaults.standard.object(forKey: "com.ampwave.fullScreenArtworkExpanded") as? Bool
+      ?? false
+  }
 }

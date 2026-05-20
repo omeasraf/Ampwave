@@ -130,7 +130,7 @@ struct SongEditSheet: View {
                   .background(themeManager.accentColor.opacity(0.1))
                   .foregroundStyle(themeManager.accentColor)
                   .clipShape(Capsule())
-                
+
                 Spacer()
               }
 
@@ -312,27 +312,28 @@ struct SongEditSheet: View {
       .tint(themeManager.accentColor)
       .navigationTitle("Edit Song")
       .sheet(isPresented: $isShowingArtworkSelection) {
-        ArtworkSelectionSheet(title: title, artist: artist, isPresented: $isShowingArtworkSelection) { url in
+        ArtworkSelectionSheet(title: title, artist: artist, isPresented: $isShowingArtworkSelection)
+        { url in
           Task {
             if let data = await MetadataService.shared.performRequest(url: url) {
               #if os(iOS)
-              if let uiImage = UIImage(data: data) {
-                await MainActor.run {
-                  artworkData = data
-                  artworkImage = Image(uiImage: uiImage)
-                  isRemoteArtwork = true
-                  artworkPath = nil // Clear current path since we have new data
+                if let uiImage = UIImage(data: data) {
+                  await MainActor.run {
+                    artworkData = data
+                    artworkImage = Image(uiImage: uiImage)
+                    isRemoteArtwork = true
+                    artworkPath = nil  // Clear current path since we have new data
+                  }
                 }
-              }
               #else
-              if let nsImage = NSImage(data: data) {
-                await MainActor.run {
-                  artworkData = data
-                  artworkImage = Image(nsImage: nsImage)
-                  isRemoteArtwork = true
-                  artworkPath = nil
+                if let nsImage = NSImage(data: data) {
+                  await MainActor.run {
+                    artworkData = data
+                    artworkImage = Image(nsImage: nsImage)
+                    isRemoteArtwork = true
+                    artworkPath = nil
+                  }
                 }
-              }
               #endif
             }
           }
@@ -460,11 +461,19 @@ struct SongEditSheet: View {
       if let metadata = await MetadataService.shared.fetchMetadata(for: song) {
         await MainActor.run {
           // Apply changes only if not edited by user
-          if !song.userEditedFields.contains("title"), let newTitle = metadata.title { title = newTitle }
-          if !song.userEditedFields.contains("artist"), let newArtist = metadata.artist { artist = newArtist }
-          if !song.userEditedFields.contains("album"), let newAlbum = metadata.album { album = newAlbum }
-          if !song.userEditedFields.contains("year"), let newYear = metadata.year { year = String(newYear) }
-          
+          if !song.userEditedFields.contains("title"), let newTitle = metadata.title {
+            title = newTitle
+          }
+          if !song.userEditedFields.contains("artist"), let newArtist = metadata.artist {
+            artist = newArtist
+          }
+          if !song.userEditedFields.contains("album"), let newAlbum = metadata.album {
+            album = newAlbum
+          }
+          if !song.userEditedFields.contains("year"), let newYear = metadata.year {
+            year = String(newYear)
+          }
+
           if metadata.artworkURL != nil {
             isShowingArtworkSelection = true
           }
@@ -493,7 +502,7 @@ struct SongEditSheet: View {
       if let newPath = await library.cacheArtwork(data) {
         song.artworkPath = newPath
         song.artworkSource = .user
-        
+
         // Update album artwork if primary
         if let album = song.albumReference,
           album.artworkPath == nil || album.songs.first?.id == song.id
@@ -522,11 +531,7 @@ struct SongEditSheet: View {
     // Save lyrics
     LyricsService.shared.saveLyrics(for: song, content: lyrics)
 
-    // Persist changes
-    if let modelContext = library.modelContext {
-      do {
-        try modelContext.save()
-      } catch {}
-    }
+    // Persist changes using library service to update search index version
+    library.saveContext()
   }
 }

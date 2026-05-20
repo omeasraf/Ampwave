@@ -10,6 +10,7 @@
   import SwiftData
   import UIKit
   import Observation
+  import ImageIO
 
   public class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     var interfaceController: CPInterfaceController?
@@ -39,6 +40,7 @@
       _ scene: CPTemplateApplicationScene, didDisconnect controller: CPInterfaceController
     ) {
       print("[DEBUG] CarPlay: Disconnected")
+      CPNowPlayingTemplate.shared.remove(self)
       self.interfaceController = nil
     }
 
@@ -59,13 +61,22 @@
       nowPlaying.add(self)
     }
 
+    private var playbackObservationTask: Task<Void, Never>?
+
     private func observePlaybackChanges() {
-      _ = withObservationTracking {
-        _ = playback.currentItem
-      } onChange: {
-        Task { @MainActor in
-          self.updateNowPlayingButtons()
-          self.observePlaybackChanges()
+      playbackObservationTask?.cancel()
+      playbackObservationTask = Task { @MainActor in
+        while !Task.isCancelled {
+          _ = withObservationTracking {
+            playback.currentItem
+          } onChange: {
+            Task { @MainActor in
+              self.updateNowPlayingButtons()
+            }
+          }
+          // Wait for next change or cancellation
+          try? await Task.sleep(nanoseconds: 1_000_000_000) // Poll every second as fallback, though Observation handles it
+          if Task.isCancelled { break }
         }
       }
     }
@@ -114,11 +125,9 @@
       let recentlyPlayed = createRecentlyPlayedTemplate()
       let libraryTemplate = createLibraryTemplate()
       let playlistsTemplate = createPlaylistsTemplate()
-      let searchTemplate = CPSearchTemplate()
-      searchTemplate.delegate = self
 
       let tabBar = CPTabBarTemplate(templates: [
-        recentlyPlayed, libraryTemplate, playlistsTemplate, searchTemplate,
+        recentlyPlayed, libraryTemplate, playlistsTemplate,
       ])
       interfaceController?.setRootTemplate(tabBar, animated: true, completion: nil)
     }
@@ -158,12 +167,21 @@
         createLibraryNavigationItem(title: "Songs", systemImage: "music.note") { [weak self] in
           self?.showAllSongs()
         },
+        createLibraryNavigationItem(title: "Search", systemImage: "magnifyingglass") { [weak self] in
+          self?.showSearch()
+        },
       ]
 
       let section = CPListSection(items: items)
       let template = CPListTemplate(title: "Library", sections: [section])
       template.tabImage = UIImage(systemName: "music.note.list")
       return template
+    }
+
+    private func showSearch() {
+      let searchTemplate = CPSearchTemplate()
+      searchTemplate.delegate = self
+      interfaceController?.pushTemplate(searchTemplate, animated: true, completion: nil)
     }
 
     private func createLibraryNavigationItem(
@@ -182,6 +200,8 @@
     }
 
     private func showArtists() {
+      // Optimization: Get artist names more efficiently if possible, but for now just ensure it's on a background task if it were bigger.
+      // Since library.songs is already in memory, this is mostly CPU bound.
       let artistNames = Array(Set(library.songs.map { $0.artist })).sorted()
       let items = artistNames.map { artistName in
         let item = CPListItem(text: artistName, detailText: nil)
@@ -281,7 +301,8 @@
       let playlists = playlistManager.playlists
 
       let items = playlists.map { playlist in
-        let item = CPListItem(text: playlist.name, detailText: "\(playlist.orderedSongs.count) songs")
+        let item = CPListItem(
+          text: playlist.name, detailText: "\(playlist.orderedSongs.count) songs")
         item.accessoryType = .disclosureIndicator
         item.handler = { [weak self] _, completion in
           Task { @MainActor in
@@ -327,16 +348,27 @@
       }
 
       // Resolve and load from disk
-      guard let url = PathManager.resolve(path),
-        let data = try? Data(contentsOf: url),
-        let image = UIImage(data: data)
+      guard let url = PathManager.resolve(path) else { return nil }
+
+      // Optimization: Use CGImageSource to downsample without loading the full image into memory
+      let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceThumbnailMaxPixelSize: 180, // Max size for CarPlay @3x
+      ]
+
+      guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
       else {
         return nil
       }
 
+      let resizedImage = UIImage(cgImage: cgImage)
+
       // Insert into cache for next time
-      ImageCache.shared.insert(image, for: path)
-      return image
+      ImageCache.shared.insert(resizedImage, for: path)
+      return resizedImage
     }
   }
 

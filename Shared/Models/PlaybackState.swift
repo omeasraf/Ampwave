@@ -18,6 +18,8 @@ final class PlaybackState: Identifiable {
   var lastQueueIndex: Int
   var lastSourceRaw: String?
   var lastPlaylistId: UUID?
+  var isVocalSliderVisible: Bool = false
+  var vocalLevel: Float = 1.0
 
   init(
     lastSongId: UUID? = nil,
@@ -25,7 +27,9 @@ final class PlaybackState: Identifiable {
     lastQueueIds: [UUID] = [],
     lastQueueIndex: Int = 0,
     lastSourceRaw: String? = nil,
-    lastPlaylistId: UUID? = nil
+    lastPlaylistId: UUID? = nil,
+    isVocalSliderVisible: Bool = false,
+    vocalLevel: Float = 1.0
   ) {
     self.id = UUID()
     self.lastSongId = lastSongId
@@ -34,6 +38,8 @@ final class PlaybackState: Identifiable {
     self.lastQueueIndex = lastQueueIndex
     self.lastSourceRaw = lastSourceRaw
     self.lastPlaylistId = lastPlaylistId
+    self.isVocalSliderVisible = isVocalSliderVisible
+    self.vocalLevel = vocalLevel
   }
 
   static func getOrCreate(in modelContext: ModelContext) -> PlaybackState {

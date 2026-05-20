@@ -24,23 +24,14 @@ public class WidgetSyncService {
     duration: TimeInterval,
     lyrics: SyncedLyric? = nil
   ) {
-    // Check if any widgets are active before syncing
-    WidgetCenter.shared.getCurrentConfigurations { result in
-      switch result {
-      case .success(let info):
-        if !info.isEmpty {
-          self.performSync(
-            song: song,
-            isPlaying: isPlaying,
-            currentTime: currentTime,
-            duration: duration,
-            lyrics: lyrics
-          )
-        }
-      case .failure:
-        break
-      }
-    }
+    // Sync playback status directly to shared container
+    self.performSync(
+      song: song,
+      isPlaying: isPlaying,
+      currentTime: currentTime,
+      duration: duration,
+      lyrics: lyrics
+    )
   }
 
   private static let widgetArtFileName = "widget_now_playing_art.jpg"

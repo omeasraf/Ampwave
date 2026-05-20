@@ -10,15 +10,17 @@ import Foundation
 import SwiftData
 
 @Observable
-@MainActor
-final class SongLibrary {
-  static let shared = SongLibrary()
-
-  private let fileManager = FileManager.default
-  private(set) var songs: [LibrarySong] = []
-  private(set) var albums: [Album] = []
-  private(set) var artists: [Artist] = []
-
+  @MainActor
+  final class SongLibrary {
+    static let shared = SongLibrary()
+  
+    private let fileManager = FileManager.default
+    private(set) var songs: [LibrarySong] = []
+    private(set) var albums: [Album] = []
+    private(set) var artists: [Artist] = []
+    private(set) var libraryVersion: Int = 0
+  
+    private var isLoaded = false
   nonisolated let songsDirectory: URL
   nonisolated let artworkCacheDirectory: URL
 
@@ -32,23 +34,14 @@ final class SongLibrary {
   private var totalMetadataFetches: Int = 0
   private var isGenreBackfillActive: Bool = false
 
-  var modelContext: ModelContext? {
-    didSet {
-      if modelContext != nil {
-        // Automatically check for songs needing metadata on startup
-        Task {
-          await fetchMetadataForNewSongs()
-        }
-      }
-    }
-  }
+  var modelContext: ModelContext?
 
   private static let audioExtensions: Set<String> = [
     "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "aiff", "wma", "alac", "m4b",
   ]
 
   private init() {
-    let baseDir = PathManager.documentsDirectory.standardizedFileURL
+    let baseDir = PathManager.baseDirectory.standardizedFileURL
     let songsDir = baseDir.appendingPathComponent("Songs", isDirectory: true).standardizedFileURL
     let artworkDir = baseDir.appendingPathComponent("Artwork", isDirectory: true)
       .standardizedFileURL
@@ -61,11 +54,15 @@ final class SongLibrary {
     try? fm.createDirectory(at: artworkDir, withIntermediateDirectories: true)
   }
 
+  func notifyLibraryChange() {
+    libraryVersion += 1
+  }
+
   // MARK: - Duplicate Detection
 
   private func normalizeForMatching(_ text: String) -> String {
     var normalized = text.lowercased()
-    
+
     // Remove common parenthetical additions and featured artists
     let patterns = [
       "\\(.*?remastered.*?\\)", "\\[.*?remastered.*?\\]",
@@ -80,14 +77,16 @@ final class SongLibrary {
       "\\(.*?hq.*?\\)", "\\[.*?hq.*?\\]",
       "\\(.*?high quality.*?\\)", "\\[.*?high quality.*?\\]",
       "remastered", "radio edit", "deluxe edition",
-      "feat\\.", "ft\\.", "featuring", "official video", "official audio"
+      "feat\\.", "ft\\.", "featuring", "official video", "official audio",
     ]
-    
+
     for pattern in patterns {
-      normalized = normalized.replacingOccurrences(of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
+      normalized = normalized.replacingOccurrences(
+        of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
     }
-    
-    return normalized
+
+    return
+      normalized
       .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
       .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
       .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -103,10 +102,10 @@ final class SongLibrary {
   nonisolated func findDuplicates() -> [DuplicateGroup] {
     // We need to run this on a background context or ensure we're not blocking MainActor
     // for long periods, but since it's nonisolated, we must fetch the data ourselves.
-    
+
     // For safety and simplicity, let's keep it isolated to the actor that owns the data
     // but ensure we're using it correctly.
-    
+
     // Re-evaluating: If I make it nonisolated, I can't access `self.songs`.
     // The crash happened because of cross-thread access to external storage.
     // The safest way is to run it on MainActor (where songs live) but keep it efficient.
@@ -134,7 +133,7 @@ final class SongLibrary {
         // Access artists.first safely on MainActor
         let artist = normalizeForMatching(song.artists.first ?? song.artist)
         let album = normalizeForMatching(song.album ?? "")
-        
+
         let key = "\(title)|\(artist)|\(album)"
         metaGroups[key, default: []].append(song)
       }
@@ -172,7 +171,8 @@ final class SongLibrary {
     }
   }
 
-  private func refineByDuration(_ songs: [LibrarySong], tolerance: TimeInterval) -> [[LibrarySong]] {
+  private func refineByDuration(_ songs: [LibrarySong], tolerance: TimeInterval) -> [[LibrarySong]]
+  {
     var subgroups: [[LibrarySong]] = []
     for song in songs {
       var found = false
@@ -193,7 +193,7 @@ final class SongLibrary {
   /// Calculates a quality score for a song to determine which version to keep.
   func calculateQualityScore(for song: LibrarySong) -> Int {
     var score = 0
-    
+
     // Format priority
     let format = song.format?.lowercased() ?? ""
     if format.contains("flac") {
@@ -205,12 +205,12 @@ final class SongLibrary {
     } else if format.contains("mp3") {
       score += 400
     }
-    
+
     // Bitrate contribution (secondary)
     if let bitRate = song.bitRate {
-      score += bitRate / 10 // e.g., 320kbps adds 32 points
+      score += bitRate / 10  // e.g., 320kbps adds 32 points
     }
-    
+
     // Sample rate and bit depth contribution
     if let sampleRate = song.sampleRate {
       score += Int(sampleRate / 1000)
@@ -218,11 +218,11 @@ final class SongLibrary {
     if let bitDepth = song.bitDepth {
       score += bitDepth
     }
-    
+
     // Metadata completeness
     if song.artworkPath != nil { score += 10 }
     if song.lyrics != nil { score += 5 }
-    
+
     return score
   }
 
@@ -231,16 +231,17 @@ final class SongLibrary {
     let duplicateGroups = findDuplicates()
     guard !duplicateGroups.isEmpty else { return }
 
-    print("[DEBUG] SongLibrary.mergeSongDuplicates: Found \(duplicateGroups.count) duplicate groups")
+    print(
+      "[DEBUG] SongLibrary.mergeSongDuplicates: Found \(duplicateGroups.count) duplicate groups")
 
     var deletedCount = 0
     for group in duplicateGroups {
       // Only auto-merge if identical hash or extremely high confidence metadata match
       // For metadata matches, we only auto-merge if both have the same album name (not "Unknown Album")
       let isHashMatch = group.reason == "Identical File Hash"
-      let isHighConfMeta = group.reason == "Matching Metadata & Duration" && 
-                          group.songs.first?.album != nil && 
-                          group.songs.first?.album != "Unknown Album"
+      let isHighConfMeta =
+        group.reason == "Matching Metadata & Duration" && group.songs.first?.album != nil
+        && group.songs.first?.album != "Unknown Album"
 
       guard isHashMatch || isHighConfMeta else { continue }
 
@@ -249,7 +250,7 @@ final class SongLibrary {
         let s1Score = calculateQualityScore(for: s1)
         let s2Score = calculateQualityScore(for: s2)
         if s1Score != s2Score { return s1Score > s2Score }
-        return s1.importedDate < s2.importedDate // Prefer older if scores are equal
+        return s1.importedDate < s2.importedDate  // Prefer older if scores are equal
       }
 
       let primary = sortedGroup[0]
@@ -270,7 +271,9 @@ final class SongLibrary {
         let url = getFileURL(for: duplicate)
         if duplicate.storageMode == .copied && FileManager.default.fileExists(atPath: url.path) {
           // Check if any other song uses this exact file path (rare but possible)
-          let otherUsingFile = songs.contains { $0.id != duplicate.id && getFileURL(for: $0).path == url.path }
+          let otherUsingFile = songs.contains {
+            $0.id != duplicate.id && getFileURL(for: $0).path == url.path
+          }
           if !otherUsingFile {
             try? FileManager.default.removeItem(at: url)
           }
@@ -453,6 +456,11 @@ final class SongLibrary {
   // MARK: - Loading
 
   func loadSongs() async {
+    if isLoaded && !songs.isEmpty {
+      print("[DEBUG] SongLibrary.loadSongs: Already loaded, skipping")
+      return
+    }
+    
     print("[DEBUG] SongLibrary.loadSongs: Loading songs from database")
     guard let modelContext = modelContext else {
       print("[DEBUG] SongLibrary.loadSongs: Error - No modelContext")
@@ -474,6 +482,9 @@ final class SongLibrary {
         // Refresh songs after merge
         songs = try modelContext.fetch(descriptor)
       }
+      
+      isLoaded = true
+      notifyLibraryChange()
     } catch {
       print("[DEBUG] SongLibrary.loadSongs: Error fetching songs: \(error)")
       songs = []
@@ -528,10 +539,28 @@ final class SongLibrary {
       return
     }
 
+    // 0. Smart Scan Check
+    let fm = FileManager.default
+    let lastScanTime = UserDefaults.standard.double(forKey: "com.ampwave.lastDiskScanTime")
+    let songsDir = self.songsDirectory
+    
+    if let attributes = try? fm.attributesOfItem(atPath: songsDir.path),
+       let modDate = attributes[.modificationDate] as? Date {
+      
+      let lastScanDate = Date(timeIntervalSince1970: lastScanTime)
+      if modDate < lastScanDate {
+        print("[DEBUG] indexOnStartup: Directory hasn't changed since last scan (\(lastScanDate)). Skipping scan.")
+        indexingStatus = .complete
+        isIndexing = false
+        // Still run metadata backfill check just in case
+        await fetchMetadataForNewSongs()
+        return
+      }
+    }
+
     indexingStatus = .indexing("Scanning…")
 
     // 1. Scan disk in background
-    let songsDir = self.songsDirectory
     let audioURLs = await Task.detached(priority: .userInitiated) {
       self.findAudioFiles(in: songsDir)
     }.value
@@ -543,8 +572,10 @@ final class SongLibrary {
     let existingSongs = (try? modelContext.fetch(descriptor)) ?? []
     print("[DEBUG] Found \(existingSongs.count) existing songs in database")
 
-    if existingSongs.isEmpty && !self.songs.isEmpty {
-      print("[DEBUG] DB returned empty but cache is not. Aborting index.")
+    // Safety check: If we found no files on disk but have many in DB, 
+    // it's likely a mount/permission issue or folder was moved. Don't mass delete.
+    if audioURLs.isEmpty && existingSongs.count > 0 {
+      print("[DEBUG] indexOnStartup: Safety triggered. Found 0 files on disk but \(existingSongs.count) in DB. Aborting sync to prevent accidental deletion.")
       indexingStatus = .complete
       isIndexing = false
       return
@@ -561,16 +592,22 @@ final class SongLibrary {
     var deletedSongs: [LibrarySong] = []
 
     for song in existingSongs {
-      if song.storageModeRaw == LibrarySong.StorageMode.referenced.rawValue {
+      // REFERENCED SONGS: We don't delete these automatically in the startup scan.
+      // Bookmark resolution and permission issues make automatic deletion too risky.
+      if song.storageMode == .referenced {
         let url = getFileURL(for: song)
-        if FileManager.default.fileExists(atPath: url.path) {
-          continue
-        } else {
-          deletedSongs.append(song)
-          continue
+        let secured = url.startAccessingSecurityScopedResource()
+        let exists = FileManager.default.fileExists(atPath: url.path)
+        if secured { url.stopAccessingSecurityScopedResource() }
+        
+        if !exists {
+          print("[DEBUG] indexOnStartup: Referenced song file not accessible/missing: \(song.title)")
+          // We still don't delete it automatically, just log it.
         }
+        continue
       }
 
+      // COPIED SONGS: Check if they still exist in our managed directory
       let expectedURL = getFileURL(for: song).standardizedFileURL
       let expectedPath = expectedURL.path
 
@@ -579,32 +616,34 @@ final class SongLibrary {
         continue
       }
 
-      // File is NOT at expected location. Check if it moved.
+      // File is NOT at expected location. Check if it moved within our directory.
       var foundMoved = false
       if let possibleURLs = fileNameToURLs[song.fileName] {
         for possibleURL in possibleURLs {
           if await self.fileHash(at: possibleURL) == song.fileHash {
-            // Move it back
-            try? fileManager.createDirectory(
-              at: expectedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            do {
-              try fileManager.moveItem(at: possibleURL, to: expectedURL)
-              accountedForPaths.insert(expectedPath)
-              foundMoved = true
-            } catch {}
+            // Found it at a new path in our directory - update it
+            print("[DEBUG] indexOnStartup: Found moved file for \(song.title) at \(possibleURL.lastPathComponent)")
+            // We don't move it back here (to avoid disk churn), just account for it
+            accountedForPaths.insert(possibleURL.standardizedFileURL.path)
+            foundMoved = true
             break
           }
         }
       }
 
       if !foundMoved {
+        // Only mark for deletion if we are reasonably sure it's gone from our managed folder
+        print("[DEBUG] indexOnStartup: Marking copied song for deletion (not found on disk): \(song.title)")
         deletedSongs.append(song)
       }
     }
 
     // Batch delete
-    for song in deletedSongs {
-      modelContext.delete(song)
+    if !deletedSongs.isEmpty {
+      print("[DEBUG] indexOnStartup: Deleting \(deletedSongs.count) missing songs")
+      for song in deletedSongs {
+        modelContext.delete(song)
+      }
     }
 
     // 4. Import new files
@@ -630,11 +669,44 @@ final class SongLibrary {
     }
 
     saveContext()
+    await pruneEmptyAlbums()
     await reindexMissingTechnicalMetadata()
     await loadSongs()
 
     indexingStatus = .complete
     isIndexing = false
+    
+    // 5. Update last scan time
+    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "com.ampwave.lastDiskScanTime")
+    
+    // 6. Check for missing metadata
+    await fetchMetadataForNewSongs()
+  }
+
+  /// Removes albums that have no songs associated with them
+  private func pruneEmptyAlbums() async {
+    guard let modelContext = modelContext else { return }
+    print("[DEBUG] SongLibrary.pruneEmptyAlbums: Checking for empty albums")
+    
+    do {
+      let descriptor = FetchDescriptor<Album>()
+      let allAlbums = try modelContext.fetch(descriptor)
+      
+      var prunedCount = 0
+      for album in allAlbums {
+        if album.songs.isEmpty {
+          modelContext.delete(album)
+          prunedCount += 1
+        }
+      }
+      
+      if prunedCount > 0 {
+        print("[DEBUG] SongLibrary.pruneEmptyAlbums: Deleted \(prunedCount) empty albums")
+        saveContext()
+      }
+    } catch {
+      print("[DEBUG] SongLibrary.pruneEmptyAlbums: Error: \(error)")
+    }
   }
 
   nonisolated private func findAudioFiles(in directory: URL, currentDepth: Int = 0) -> [URL] {
@@ -898,7 +970,15 @@ final class SongLibrary {
       channels: metadata.channels,
       format: metadata.format,
       storageMode: storageMode,
-      bookmarkData: bookmarkData
+      bookmarkData: bookmarkData,
+      titleConfidence: metadata.titleConfidence,
+      artistConfidence: metadata.artistConfidence,
+      albumConfidence: metadata.albumConfidence,
+      metadataSourceTitle: metadata.metadataSourceTitle,
+      metadataSourceArtist: metadata.metadataSourceArtist,
+      metadataSourceAlbum: metadata.metadataSourceAlbum,
+      isLive: metadata.isLive,
+      isMedley: metadata.isMedley
     )
 
     // Set initial artwork source
@@ -1019,7 +1099,15 @@ final class SongLibrary {
       channels: metadata.channels,
       format: metadata.format,
       storageMode: storageMode,
-      bookmarkData: bookmarkData
+      bookmarkData: bookmarkData,
+      titleConfidence: metadata.titleConfidence,
+      artistConfidence: metadata.artistConfidence,
+      albumConfidence: metadata.albumConfidence,
+      metadataSourceTitle: metadata.metadataSourceTitle,
+      metadataSourceArtist: metadata.metadataSourceArtist,
+      metadataSourceAlbum: metadata.metadataSourceAlbum,
+      isLive: metadata.isLive,
+      isMedley: metadata.isMedley
     )
 
     // Set initial artwork source
@@ -1101,6 +1189,15 @@ final class SongLibrary {
           song.bitRate = metadata.bitRate
           song.channels = metadata.channels
           song.format = metadata.format
+          
+          song.titleConfidence = metadata.titleConfidence
+          song.artistConfidence = metadata.artistConfidence
+          song.albumConfidence = metadata.albumConfidence
+          song.metadataSourceTitle = metadata.metadataSourceTitle
+          song.metadataSourceArtist = metadata.metadataSourceArtist
+          song.metadataSourceAlbum = metadata.metadataSourceAlbum
+          song.isLive = metadata.isLive
+          song.isMedley = metadata.isMedley
         }
 
         if index % 10 == 0 {
@@ -1143,7 +1240,7 @@ final class SongLibrary {
 
   // MARK: - Metadata Fetching from API
 
-  private func fetchMetadataForSong(_ song: LibrarySong) async {
+  private func fetchMetadataForSong(_ song: LibrarySong, isPartOfBatch: Bool = false) async {
     print("[DEBUG] SongLibrary.fetchMetadataForSong: Starting for \(song.title)")
     guard let modelContext = modelContext else {
       print("[DEBUG] SongLibrary.fetchMetadataForSong: Error - No modelContext")
@@ -1153,7 +1250,7 @@ final class SongLibrary {
     let preferences = UserPreferences.getOrCreate(in: modelContext)
 
     // 0. Genre tags when full metadata already ran but genre is still empty
-    if preferences.autoFetchMetadata && !preferences.isOfflineMode
+    if preferences.autoFetchMetadata && !preferences.isOfflineMode && NetworkMonitor.shared.isOnline
       && song.metadataCheckAttempted
       && (song.genre == nil || song.genre?.isEmpty == true)
     {
@@ -1170,8 +1267,6 @@ final class SongLibrary {
     }
 
     // 1. Online Metadata & Artwork
-    // Only fetch if metadata is missing/incomplete AND we haven't already tried.
-    // IMPROVED: Be more thorough. Fetch if any key field is missing or generic.
     let isGenericAlbum =
       song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true
     let isGenericArtist = song.artist == "Unknown Artist" || song.artist.isEmpty
@@ -1181,22 +1276,17 @@ final class SongLibrary {
     let needsMetadata =
       song.artworkPath == nil || isGenericAlbum || isGenericArtist || isMissingKeyInfo
 
-    if preferences.autoFetchMetadata && needsMetadata && !song.metadataCheckAttempted {
+    if preferences.autoFetchMetadata && needsMetadata && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode {
       // Only increment if not already part of a batch fetch
-      if totalMetadataFetches <= 1 {
+      if !isPartOfBatch && totalMetadataFetches <= 1 {
         totalMetadataFetches = 1
         pendingMetadataFetches += 1
       }
 
       // Mark as attempted early to prevent race conditions or repeats on restart
+      // (This is redundant if called from fetchMetadataForNewSongs, but good for direct calls)
       song.metadataCheckAttempted = true
-      saveContext()
-
-      defer {
-        pendingMetadataFetches -= 1
-        saveContext()
-      }
-
+      
       let metadataService = MetadataService.shared
       if metadataService.modelContext == nil {
         metadataService.setModelContext(modelContext)
@@ -1210,12 +1300,17 @@ final class SongLibrary {
       } else {
         print("[DEBUG] SongLibrary.fetchMetadataForSong: No metadata found for \(song.title)")
       }
+      
+      if !isPartOfBatch {
+        pendingMetadataFetches -= 1
+        saveContext()
+      }
     }
 
     // 2. Synced Lyrics
     // Fetch if no synced lyrics AND we haven't already tried.
     let hasSyncedLyrics = !LRCParser.parse(song.lyrics ?? "").isEmpty
-    if preferences.autoFetchLyrics && !hasSyncedLyrics && !song.lyricsCheckAttempted {
+    if preferences.autoFetchLyrics && !hasSyncedLyrics && !song.lyricsCheckAttempted && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode {
       print(
         "[DEBUG] SongLibrary.fetchMetadataForSong: Missing synced lyrics, calling LyricsService")
 
@@ -1235,8 +1330,20 @@ final class SongLibrary {
     print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Starting batch fetch")
     guard let modelContext = modelContext else { return }
 
+    let preferences = UserPreferences.getOrCreate(in: modelContext)
+    
+    // Safety: Skip if offline or auto-fetch is disabled
+    guard preferences.autoFetchMetadata else {
+      print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Auto-fetch disabled, skipping")
+      return
+    }
+    
+    if !NetworkMonitor.shared.isOnline || preferences.isOfflineMode {
+      print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Offline, skipping online fetch")
+      return
+    }
+
     // Simplify predicate to avoid compiler timeout.
-    // We'll filter for specific missing metadata fields in memory.
     let descriptor = FetchDescriptor<LibrarySong>(
       predicate: #Predicate<LibrarySong> { song in
         song.metadataCheckAttempted == false
@@ -1246,14 +1353,17 @@ final class SongLibrary {
     do {
       let uncheckedSongs = try modelContext.fetch(descriptor)
       let songsToFetch = uncheckedSongs.filter { song in
-        let isGeneric = song.album == "Unknown Album" || song.artist == "Unknown Artist"
-        let isMissingInfo =
-          song.artworkPath == nil || song.genre == nil || song.year == nil || song.year == 0
-        return isGeneric || isMissingInfo
+        // Only fetch if core info is missing (Title/Artist) or if no artwork/genre
+        let isEssentialMissing = song.title.contains("Untitled") || song.artist == "Unknown Artist" || song.artist.isEmpty
+        let isSecondaryMissing = song.artworkPath == nil || song.genre == nil || song.genre?.isEmpty == true
+        
+        return isEssentialMissing || isSecondaryMissing
       }
 
       if songsToFetch.isEmpty {
         print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: No songs needing metadata fetch")
+        pendingMetadataFetches = 0
+        totalMetadataFetches = 0
         return
       }
 
@@ -1266,15 +1376,29 @@ final class SongLibrary {
       for song in songsToFetch {
         // Double check if context is still valid
         guard self.modelContext != nil else { break }
-        await fetchMetadataForSong(song)
+        
+        // Mark as attempted BEFORE the call to prevent infinite loops if it crashes or fails
+        song.metadataCheckAttempted = true
+        
+        await fetchMetadataForSong(song, isPartOfBatch: true)
 
-        // Brief pause between songs to allow system to breathe
-        try? await Task.sleep(nanoseconds: 200_000_000)  // 0.2s
+        // Decrement here to ensure it happens regardless of what fetchMetadataForSong does
+        pendingMetadataFetches -= 1
+
+        // Smaller pause
+        try? await Task.sleep(nanoseconds: 50_000_000)  // 0.05s
       }
+
+      // Ensure we hit zero at the end
+      pendingMetadataFetches = 0
+      totalMetadataFetches = 0
+      saveContext()
 
       print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Finished batch fetch")
     } catch {
       print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Error: \(error)")
+      pendingMetadataFetches = 0
+      totalMetadataFetches = 0
     }
   }
 
@@ -1316,7 +1440,7 @@ final class SongLibrary {
       metadataService.setModelContext(modelContext)
     }
     await metadataService.refreshMetadata(for: album)
-    
+
     // Also refresh all songs in the album
     for song in album.songs {
       await metadataService.refreshMetadata(for: song)
@@ -1329,10 +1453,10 @@ final class SongLibrary {
     if let modelContext = modelContext, metadataService.modelContext == nil {
       metadataService.setModelContext(modelContext)
     }
-    
+
     // Refresh artist info
     await metadataService.fetchMetadata(for: artist)
-    
+
     // Refresh all songs by this artist
     let artistSongs = getSongs(byArtist: artist.name)
     for song in artistSongs {
@@ -1352,83 +1476,137 @@ final class SongLibrary {
 
     var needsSave = false
 
-    // Update song fields only if they're empty or better
+    // Update song fields only if they're empty or generic (Preserve user edits)
     if let title = metadata.title, !title.isEmpty,
-      song.title.contains("Untitled") || song.title == song.fileName
+      !song.userEditedFields.contains("title"),
+      (song.titleConfidence < 0.8 || song.title == song.fileName || song.title.contains("Untitled"))
     {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating title to \(title)")
       song.title = title
+      song.titleConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: title)
+      song.metadataSourceTitle = metadata.source.rawValue
       needsSave = true
     }
 
     if let artist = metadata.artist, !artist.isEmpty,
-      song.artist == "Unknown Artist" || song.artist.isEmpty
+      !song.userEditedFields.contains("artist"),
+      (song.artistConfidence < 0.8 || song.artist == "Unknown Artist" || song.artist.isEmpty)
     {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating artist to \(artist)")
       song.artist = artist
+      song.artistConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: artist)
+      song.metadataSourceArtist = metadata.source.rawValue
       needsSave = true
     }
 
     if let album = metadata.album, !album.isEmpty,
-      song.album == nil || song.album?.isEmpty == true || song.album == "Unknown Album"
+      !song.userEditedFields.contains("album"),
+      (song.albumConfidence < 0.8 || song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true)
     {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating album to \(album)")
       song.album = album
+      song.albumConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: album)
+      song.metadataSourceAlbum = metadata.source.rawValue
       needsSave = true
     }
 
-    if let year = metadata.year, song.year == nil || song.year == 0 {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating year to \(year)")
+    if let year = metadata.year,
+      !song.userEditedFields.contains("year"),
+      song.year == nil || song.year == 0
+    {
       song.year = year
       needsSave = true
     }
 
-    if let genre = metadata.genre, !genre.isEmpty, song.genre == nil || song.genre?.isEmpty == true
+    if let genre = metadata.genre, !genre.isEmpty,
+      !song.userEditedFields.contains("genre"),
+      song.genre == nil || song.genre?.isEmpty == true
     {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating genre to \(genre)")
       song.genre = genre
       needsSave = true
     }
 
     if let albumArtist = metadata.albumArtist, !albumArtist.isEmpty,
+      !song.userEditedFields.contains("albumArtist"),
       song.albumArtist == nil || song.albumArtist?.isEmpty == true
     {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating albumArtist to \(albumArtist)")
       song.albumArtist = albumArtist
       needsSave = true
     }
 
+    if let composer = metadata.composer, !composer.isEmpty,
+      !song.userEditedFields.contains("composer"),
+      song.composer == nil || song.composer?.isEmpty == true
+    {
+      song.composer = composer
+      needsSave = true
+    }
+
+    if let lyricist = metadata.lyricist, !lyricist.isEmpty,
+      !song.userEditedFields.contains("lyricist"),
+      song.lyricist == nil || song.lyricist?.isEmpty == true
+    {
+        song.lyricist = lyricist
+        needsSave = true
+    }
+
+    if let isrc = metadata.isrc, !isrc.isEmpty {
+      song.isrc = isrc
+      needsSave = true
+    }
+
+    if let appleMusicURL = metadata.appleMusicURL {
+      song.appleMusicURL = appleMusicURL.absoluteString
+      needsSave = true
+    }
+
+    // Update related models
+    if let albumRef = song.albumReference {
+        if let desc = metadata.albumDescription, (albumRef.albumDescription == nil || albumRef.albumDescription?.isEmpty == true) {
+            albumRef.albumDescription = desc
+        }
+        if albumRef.appleMusicId == nil {
+            albumRef.appleMusicId = metadata.appleMusicId
+        }
+    }
+    
+    let artistNames = ArtistParser.parseArtists(from: metadata.albumArtist ?? metadata.artist ?? song.artist)
+    if let primaryArtist = artistNames.first {
+        let artist = getArtist(named: primaryArtist)
+        if let artist = artist {
+            if let bio = metadata.artistBio, (artist.biography == nil || artist.biography?.isEmpty == true) {
+                artist.biography = bio
+            }
+            if artist.appleMusicId == nil {
+                artist.appleMusicId = metadata.appleMusicId
+            }
+        }
+    }
+
     if let duration = metadata.duration, duration > 0, song.duration <= 0 {
-      print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating duration to \(duration)")
       song.duration = duration
       needsSave = true
     }
 
     // Download and cache artwork if available
     if let artworkURL = metadata.artworkURL {
-      // If we prefer online, or if we don't have artwork yet, fetch it.
-      // We skip if we already have remote artwork to satisfy "once" requirement.
-      let shouldFetchArtwork =
-        (preferences.preferOnlineArtwork && !song.isRemoteArtwork) || song.artworkPath == nil
+      // Only replace if no artwork or if remote artwork is preferred and not user-selected
+      let isUserSelected = song.artworkSource == .user
+      let hasEmbeddedArt = song.embeddedArtworkPath != nil
 
-      if shouldFetchArtwork {
-        print(
-          "[DEBUG] SongLibrary.applyFetchedMetadata: Fetching online artwork (preferOnline: \(preferences.preferOnlineArtwork))"
-        )
+      // If preferEmbeddedArtwork is true and we have embedded art, don't replace
+      let shouldRespectEmbedded = preferences.preferEmbeddedArtwork && hasEmbeddedArt
+
+      if song.artworkPath == nil
+        || (preferences.preferOnlineArtwork && !isUserSelected && !shouldRespectEmbedded)
+      {
         if let artworkPath = await MetadataService.shared.downloadArtwork(from: artworkURL) {
-          print("[DEBUG] SongLibrary.applyFetchedMetadata: Artwork downloaded to \(artworkPath)")
           song.artworkPath = artworkPath
           song.isRemoteArtwork = true
           song.artworkSource = .online
           needsSave = true
-
+          
           // Update album artwork too
           if let album = song.albumReference {
-            print("[DEBUG] SongLibrary.applyFetchedMetadata: Updating album artwork")
             album.artworkPath = artworkPath
           }
-        } else {
-          print("[DEBUG] SongLibrary.applyFetchedMetadata: Failed to download artwork")
         }
       }
     }
@@ -1651,10 +1829,15 @@ final class SongLibrary {
   func deleteSong(_ song: LibrarySong) {
     guard let modelContext = modelContext else { return }
 
-    // 1. Delete file
-    let url = getFileURL(for: song)
-    if fileManager.fileExists(atPath: url.path) {
-      try? fileManager.removeItem(at: url)
+    // 1. Delete file only if it was copied into our internal library
+    if song.storageMode == .copied {
+      let url = getFileURL(for: song)
+      if fileManager.fileExists(atPath: url.path) {
+        print("[DEBUG] SongLibrary.deleteSong: Deleting copied file: \(url.path)")
+        try? fileManager.removeItem(at: url)
+      }
+    } else {
+      print("[DEBUG] SongLibrary.deleteSong: Skipping file deletion for referenced song")
     }
 
     // 2. Remove from database
@@ -1670,11 +1853,13 @@ final class SongLibrary {
   func deleteAlbum(_ album: Album) {
     guard let modelContext = modelContext else { return }
 
-    // 1. Delete all song files in the album
+    // 1. Delete all song files in the album only if they were copied
     for song in album.songs {
-      let url = getFileURL(for: song)
-      if fileManager.fileExists(atPath: url.path) {
-        try? fileManager.removeItem(at: url)
+      if song.storageMode == .copied {
+        let url = getFileURL(for: song)
+        if fileManager.fileExists(atPath: url.path) {
+          try? fileManager.removeItem(at: url)
+        }
       }
     }
 
@@ -1695,7 +1880,7 @@ final class SongLibrary {
 
   // MARK: - Persistence
 
-  private func saveContext() {
+  func saveContext() {
     print("[DEBUG] SongLibrary.saveContext: Saving modelContext")
     guard let modelContext = modelContext else {
       print("[DEBUG] SongLibrary.saveContext: Error - No modelContext")
@@ -1703,6 +1888,7 @@ final class SongLibrary {
     }
     do {
       try modelContext.save()
+      notifyLibraryChange()
       print("[DEBUG] SongLibrary.saveContext: Successfully saved")
     } catch {
       print("[DEBUG] SongLibrary.saveContext: Error saving: \(error)")

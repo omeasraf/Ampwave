@@ -137,5 +137,21 @@ struct MusicBrainzCountedTag: Codable {
 struct MusicBrainzRecordingDetailResponse: Codable {
   let id: String
   let title: String
+  let length: Int?
+  let firstReleaseDate: String?
   let tags: [MusicBrainzCountedTag]?
+  let genres: [MusicBrainzGenre]?
+  let artistCredit: [MusicBrainzArtistCredit]?
+  let releases: [MusicBrainzReleaseRef]?
+
+  enum CodingKeys: String, CodingKey {
+    case id
+    case title
+    case length
+    case firstReleaseDate = "first-release-date"
+    case tags
+    case genres
+    case artistCredit = "artist-credit"
+    case releases
+  }
 }

@@ -229,14 +229,17 @@ struct SettingsView: View {
             set: { preferences.openPlayerGlassBackground = $0 }
           ))
 
-        Toggle(
-          "Full App Background",
-          isOn: Binding(
-            get: { preferences.fullAppBackground ?? false },
-            set: { preferences.fullAppBackground = $0 }
-          )
-        )
-        .disabled(true)
+        Toggle(isOn: Binding(
+          get: { preferences.coloredSurfaces ?? true },
+          set: { preferences.coloredSurfaces = $0 }
+        )) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Colored Surfaces")
+            Text("Enable colored backgrounds behind cards and controls")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
 
         //        if preferences.fullArtworkBackground ?? false {
         //          Toggle(
@@ -432,8 +435,26 @@ struct SettingsView: View {
             Text(mode.displayName).tag(mode)
           }
         }
-
       }
+
+      NavigationLink {
+        EqualizerSettingsView()
+      } label: {
+        HStack {
+          Label("Equalizer", systemImage: "slider.horizontal.3")
+          Spacer()
+          if EQManager.shared.isEnabled {
+            Text(EQManager.shared.currentPresetName)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          } else {
+            Text("Off")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+      }
+
     } header: {
       Text("Playback")
     } footer: {
@@ -497,9 +518,9 @@ struct SettingsView: View {
     } header: {
       Text("Library")
     } footer: {
-        Text(
-            "Turn off 'Copy Imported Music' to keep files in their original location; the app will reference them instead."
-        )
+      Text(
+        "Turn off 'Copy Imported Music' to keep files in their original location; the app will reference them instead."
+      )
     }
   }
 

@@ -15,24 +15,27 @@ struct VocalSlider: View {
   private let minVocal: Float = 0.05
 
   var body: some View {
-    VStack(spacing: 8) {
+    VStack(spacing: 12) {
       GeometryReader { geometry in
         ZStack(alignment: .bottom) {
-
-          // Background track - Thick capsule with material
-
+          // Background track
           Capsule()
-            .fill(.white.opacity(0.15))
-            .background(.ultraThinMaterial)
+            .fill(.white.opacity(0.2))
 
-          // Active level - Bright white
+          // Active level
           Capsule()
             .fill(.white)
-            .frame(height: geometry.size.height * CGFloat(value))
-            .shadow(color: .white.opacity(0.3), radius: 5)
-          Image(systemName: "waveform.path")
-            .frame(height: geometry.size.height)
-            .foregroundStyle(value > 0.5 ? .black : .white)
+            .frame(height: max(geometry.size.height * CGFloat(value), 20))
+            .shadow(color: .white.opacity(0.5), radius: 10)
+
+          // Icon
+          VStack {
+            Spacer()
+            Image(systemName: "waveform.path")
+              .font(.system(size: 20, weight: .bold))
+              .foregroundStyle(value > 0.3 ? .black : .white)
+              .padding(.bottom, 80)
+          }
         }
         .clipShape(Capsule())
         .gesture(
@@ -41,7 +44,6 @@ struct VocalSlider: View {
               isDragging = true
               let height = geometry.size.height
               let rawValue = 1.0 - Float(gesture.location.y / height)
-              // Enforce minimum of 10%
               value = min(max(rawValue, minVocal), 1.0)
             }
             .onEnded { _ in
@@ -49,12 +51,16 @@ struct VocalSlider: View {
             }
         )
       }
-      .frame(width: 44, height: 200)  // Slightly wider like iOS 17 sliders
+      .frame(width: 44, height: 200)
     }
-    .padding(6)
-    .background(.ultraThinMaterial)
+    .padding(10)
+    .background(.ultraThickMaterial)
     .clipShape(Capsule())
-    .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
+    .overlay {
+      Capsule()
+        .stroke(.white.opacity(0.2), lineWidth: 1)
+    }
+    .shadow(color: .black.opacity(0.5), radius: 30)
   }
 }
 

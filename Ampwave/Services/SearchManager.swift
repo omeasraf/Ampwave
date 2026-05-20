@@ -69,7 +69,7 @@ final class SearchManager {
     let library = SongLibrary.shared
     let playlists = PlaylistManager.shared
     return
-      "\(library.songs.count)-\(library.albums.count)-\(library.artists.count)-\(playlists.playlists.count)"
+      "\(library.songs.count)-\(library.albums.count)-\(library.artists.count)-\(playlists.playlists.count)-\(library.libraryVersion)"
   }
 }
 
@@ -342,6 +342,7 @@ private enum SearchFuzzyEngine {
   static func normalize(_ value: String) -> String {
     value
       .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(of: "[''\"\"“”]", with: "", options: .regularExpression)
       .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)
       .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
       .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -370,8 +371,53 @@ private enum SearchFuzzyEngine {
     needle: String, needleTokens: [String], haystackTokens: [String], haystackText: String
   ) -> Double {
     guard !needle.isEmpty, !haystackText.isEmpty else { return 0 }
-    if haystackText.contains(needle) { return 2.0 }
-    return tokenOverlapScore(needleTokens: needleTokens, haystackTokens: haystackTokens) * 1.5
+
+    // 1. Exact phrase match (Highest priority)
+    if haystackText.contains(needle) { return 4.5 }
+
+    // 2. Proximity/Sliding Window Match (Handles minor typos/missing words)
+    let proximityScore = calculateProximityScore(needleTokens: needleTokens, haystackTokens: haystackTokens)
+    if proximityScore > 0.6 {
+      return proximityScore * 3.5
+    }
+
+    // 3. General bag-of-words overlap (Fallback)
+    let overlap = tokenOverlapScore(needleTokens: needleTokens, haystackTokens: haystackTokens)
+    guard overlap >= 0.4 else {
+      return overlap * 0.5
+    }
+
+    return overlap * 2.0
+  }
+
+  /// Checks if the needle tokens appear in the haystack close to each other in sequence.
+  private static func calculateProximityScore(needleTokens: [String], haystackTokens: [String]) -> Double {
+    guard needleTokens.count >= 3, haystackTokens.count >= needleTokens.count else { return 0 }
+    
+    var maxScore: Double = 0
+    let windowSize = needleTokens.count + 5 // Allow for 5 "missing" or "extra" words
+    
+    // Slide through haystack
+    for i in 0..<(haystackTokens.count - needleTokens.count) {
+      let window = haystackTokens[i..<min(i + windowSize, haystackTokens.count)]
+      
+      var matchesInOrder = 0
+      var lastMatchIdx = -1
+      
+      for token in needleTokens {
+        if let matchIdx = window.firstIndex(where: { $0.hasPrefix(token) }), matchIdx > lastMatchIdx {
+          matchesInOrder += 1
+          lastMatchIdx = matchIdx
+        }
+      }
+      
+      let score = Double(matchesInOrder) / Double(needleTokens.count)
+      maxScore = max(maxScore, score)
+      
+      if maxScore >= 0.95 { break } // Good enough
+    }
+    
+    return maxScore
   }
 
   private static func tokenOverlapScore(needleTokens: [String], haystackTokens: [String]) -> Double
