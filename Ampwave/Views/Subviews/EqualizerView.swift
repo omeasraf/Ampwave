@@ -62,6 +62,7 @@ private func gainLabel(_ g: Float) -> String {
 private struct EQCurveCanvas: View {
     let gains: [Float]
     let accentColor: Color
+    let gridLineColor: Color
     let isEnabled: Bool
 
     var body: some View {
@@ -77,7 +78,7 @@ private struct EQCurveCanvas: View {
                 var line = Path()
                 line.move(to: CGPoint(x: 0, y: y))
                 line.addLine(to: CGPoint(x: size.width, y: y))
-                ctx.stroke(line, with: .color(.white.opacity(opacity)),
+                ctx.stroke(line, with: .color(gridLineColor.opacity(opacity * 2.5)),
                            style: StrokeStyle(lineWidth: db == 0 ? 1.2 : 0.7, dash: db == 0 ? [] : [4, 5]))
             }
 
@@ -130,7 +131,7 @@ private struct EQHandlesView: View {
 
                         // Handle
                         Circle()
-                            .fill(active ? accentColor : Color(white: 0.92))
+                            .fill(active ? accentColor : Color.primary.opacity(0.85))
                             .overlay(Circle().strokeBorder(accentColor.opacity(active ? 0 : 0.55), lineWidth: 1.5))
                             .frame(width: active ? 22 : 16, height: active ? 22 : 16)
                             .shadow(color: accentColor.opacity(active ? 0.7 : 0.25), radius: active ? 10 : 4)
@@ -171,6 +172,7 @@ private struct PresetChip: View {
     let isSelected: Bool
     let isUserDefined: Bool
     let accentColor: Color
+    let cardBackgroundColor: Color
     let onTap: () -> Void
     let onDelete: (() -> Void)?
 
@@ -179,14 +181,14 @@ private struct PresetChip: View {
             HStack(spacing: 5) {
                 Text(name)
                     .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? Color(white: 0.07) : .white)
+                    .foregroundStyle(isSelected ? Color(white: 0.06) : .primary)
                     .lineLimit(1)
 
                 if isUserDefined, let onDelete {
                     Button(action: onDelete) {
                         Image(systemName: "xmark")
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(isSelected ? Color(white: 0.07).opacity(0.55) : .white.opacity(0.4))
+                            .foregroundStyle(isSelected ? Color(white: 0.06).opacity(0.55) : .secondary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -195,8 +197,9 @@ private struct PresetChip: View {
             .padding(.vertical, 8)
             .background(
                 isSelected
-                    ? AnyView(Capsule().fill(accentColor))
-                    : AnyView(Capsule().fill(Color(white: 0.18)))
+                    ? AnyShapeStyle(accentColor)
+                    : AnyShapeStyle(cardBackgroundColor)
+                , in: Capsule()
             )
         }
         .buttonStyle(.plain)
@@ -212,7 +215,7 @@ private struct DBScaleView: View {
             ForEach([12, 6, 0, -6, -12], id: \.self) { db in
                 Text(db > 0 ? "+\(db)" : "\(db)")
                     .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.3))
+                    .foregroundStyle(.secondary.opacity(0.7))
                 Spacer()
             }
         }
@@ -270,10 +273,10 @@ struct EqualizerView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Equalizer")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Text(eq.currentPresetName)
                     .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
             }
 
@@ -296,6 +299,7 @@ struct EqualizerView: View {
                         isSelected: eq.currentPresetName == preset.name,
                         isUserDefined: false,
                         accentColor: themeManager.accentColor,
+                        cardBackgroundColor: themeManager.cardBackgroundColor,
                         onTap: { withAnimation(.spring(response: 0.28)) { eq.applyPreset(preset) } },
                         onDelete: nil
                     )
@@ -303,7 +307,7 @@ struct EqualizerView: View {
 
                 if !eq.userPresets.isEmpty {
                     Rectangle()
-                        .fill(Color(white: 0.28))
+                        .fill(.secondary.opacity(0.25))
                         .frame(width: 1, height: 18)
                         .padding(.horizontal, 2)
                 }
@@ -314,6 +318,7 @@ struct EqualizerView: View {
                         isSelected: eq.currentPresetName == preset.name,
                         isUserDefined: true,
                         accentColor: themeManager.accentColor,
+                        cardBackgroundColor: themeManager.cardBackgroundColor,
                         onTap: { withAnimation(.spring(response: 0.28)) { eq.applyPreset(preset) } },
                         onDelete: {
                             withAnimation {
@@ -338,6 +343,7 @@ struct EqualizerView: View {
                 EQCurveCanvas(
                     gains: eq.bands,
                     accentColor: themeManager.accentColor,
+                    gridLineColor: .secondary,
                     isEnabled: eq.isEnabled
                 )
                 EQHandlesView(
@@ -350,7 +356,7 @@ struct EqualizerView: View {
             .frame(height: 180)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
-        .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 14))
+        .background(themeManager.cardBackgroundColor, in: RoundedRectangle(cornerRadius: 14))
         .opacity(eq.isEnabled ? 1 : 0.5)
         .animation(.easeInOut(duration: 0.18), value: eq.isEnabled)
     }
@@ -364,7 +370,7 @@ struct EqualizerView: View {
             ForEach(0..<EQManager.bandLabels.count, id: \.self) { i in
                 Text(EQManager.bandLabels[i])
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.35))
+                    .foregroundStyle(.secondary.opacity(0.7))
                     .frame(maxWidth: .infinity)
             }
         }
@@ -383,10 +389,10 @@ struct EqualizerView: View {
                     Text("Reset")
                         .font(.system(size: 13, weight: .medium))
                 }
-                .foregroundStyle(.white.opacity(0.65))
+                .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(Color(white: 0.17), in: Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
             }
             .buttonStyle(.plain)
 
@@ -404,10 +410,10 @@ struct EqualizerView: View {
                     Text(isSavingPreset ? "Cancel" : "Save Preset")
                         .font(.system(size: 13, weight: .medium))
                 }
-                .foregroundStyle(.white.opacity(0.65))
+                .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(Color(white: 0.17), in: Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
             }
             .buttonStyle(.plain)
         }
@@ -419,11 +425,11 @@ struct EqualizerView: View {
         HStack(spacing: 10) {
             TextField("Name your preset…", text: $newPresetName)
                 .font(.system(size: 15))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .tint(themeManager.accentColor)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
-                .background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 12))
+                .background(themeManager.cardBackgroundColor, in: RoundedRectangle(cornerRadius: 12))
                 .submitLabel(.done)
                 .onSubmit { commitSave() }
 
@@ -432,7 +438,7 @@ struct EqualizerView: View {
                     .font(.system(size: 34))
                     .foregroundStyle(
                         newPresetName.trimmingCharacters(in: .whitespaces).isEmpty
-                            ? Color(white: 0.3)
+                            ? Color.secondary.opacity(0.4)
                             : themeManager.accentColor
                     )
             }
@@ -457,10 +463,10 @@ struct EqualizerSheet: View {
 
     var body: some View {
         EqualizerView()
-            .background(Color(white: 0.09).ignoresSafeArea())
+            .background(themeManager.backgroundColor.ignoresSafeArea())
             .presentationDetents([.fraction(0.62)])
             .presentationDragIndicator(.visible)
-            .presentationBackground(Color(white: 0.09))
+            .presentationBackground(themeManager.backgroundColor)
             .presentationCornerRadius(24)
     }
 }
@@ -472,12 +478,12 @@ struct EqualizerSettingsView: View {
 
     var body: some View {
         EqualizerView()
-            .background(Color(white: 0.09).ignoresSafeArea())
+            .background(themeManager.backgroundColor.ignoresSafeArea())
             .navigationTitle("Equalizer")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbarBackground(Color(white: 0.09), for: .navigationBar)
+            .toolbarBackground(themeManager.backgroundColor, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
     }
 }

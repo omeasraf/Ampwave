@@ -70,7 +70,7 @@ public struct SiriSongReference: AppEntity {
 public struct PlaySongIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Play Song"
   public static var description = IntentDescription(
-    "Searches Apple Music first, falls back to your Ampwave library, and starts playback."
+    "Searches your music library and starts playback in Ampwave."
   )
   public static var openAppWhenRun: Bool = true
 

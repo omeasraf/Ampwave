@@ -149,14 +149,6 @@ struct FilterChip: View {
   let action: () -> Void
   @Environment(ThemeManager.self) private var themeManager
 
-  private var chipFillStyle: AnyShapeStyle {
-    if isSelected {
-      return AnyShapeStyle(.ultraThinMaterial)
-    } else {
-      return AnyShapeStyle(themeManager.cardBackgroundColor.opacity(0.72))
-    }
-  }
-
   var body: some View {
     Button(action: action) {
       Text(title)
@@ -164,17 +156,12 @@ struct FilterChip: View {
         .foregroundStyle(isSelected ? .primary : .secondary)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background {
-          Capsule()
-            .fill(chipFillStyle)
-            .overlay {
-              Capsule()
-                .stroke(
-                  isSelected ? themeManager.accentColor.opacity(0.35) : .white.opacity(0.08),
-                  lineWidth: 1
-                )
-            }
-        }
+        .glassEffect(
+          themeManager.coloredSurfaces
+            ? (isSelected ? .regular.tint(themeManager.accentColor.opacity(0.25)) : .regular)
+            : .identity,
+          in: Capsule()
+        )
     }
     .buttonStyle(.plain)
   }
@@ -303,7 +290,7 @@ struct RecentSearchChip: View {
       .foregroundStyle(.primary)
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
-      .background(.ultraThinMaterial, in: Capsule())
+      .glassEffect(.regular.interactive(), in: Capsule())
     }
     .buttonStyle(.plain)
   }
@@ -393,14 +380,7 @@ struct TopResultCard: View {
         .foregroundStyle(themeManager.accentColor)
     }
     .padding(18)
-    .background(
-      RoundedRectangle(cornerRadius: 24, style: .continuous)
-        .fill(.ultraThinMaterial)
-        .overlay {
-          RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .stroke(.white.opacity(0.08), lineWidth: 1)
-        }
-    )
+    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
   }
 }
 

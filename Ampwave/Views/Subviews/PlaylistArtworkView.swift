@@ -10,6 +10,7 @@ internal import SwiftUI
 struct PlaylistArtworkView: View {
   let playlist: Playlist
   let size: CGFloat
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     Group {
@@ -49,13 +50,14 @@ struct PlaylistArtworkView: View {
   }
 
   private var placeholderView: some View {
-    let color = playlist.icon?.color ?? .secondary
     let iconName = playlist.icon?.icon ?? "music.note"
+    let color: Color =
+      playlist.playlistType == .likedSongs
+        ? themeManager.accentColor
+        : (playlist.icon?.color ?? .secondary)
 
     return RoundedRectangle(cornerRadius: 8, style: .continuous)
-      .fill(
-        color.opacity(0.15)
-      )
+      .fill(color.opacity(0.15))
       .overlay(
         Image(systemName: iconName)
           .font(.system(size: size * 0.35))

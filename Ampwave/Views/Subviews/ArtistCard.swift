@@ -8,58 +8,52 @@
 internal import SwiftUI
 
 struct ArtistCard: View {
-  @Environment(ThemeManager.self) private var themeManager
   let artist: Artist
+  var artworkSize: CGFloat = 150
+
+  @Environment(ThemeManager.self) private var themeManager
+
+  private var isCompact: Bool { artworkSize < 130 }
+  private var innerPadding: CGFloat { isCompact ? 8 : 12 }
+  private var innerSpacing: CGFloat { isCompact ? 8 : 12 }
+  private var textSpacing: CGFloat { isCompact ? 3 : 5 }
+  private var titleFontSize: CGFloat { max(13, artworkSize * 0.105) }
+  private var subtitleFontSize: CGFloat { max(11, artworkSize * 0.085) }
 
   var body: some View {
     NavigationLink(destination: ArtistView(artist: artist)) {
-      VStack(alignment: .leading, spacing: 12) {
+      VStack(alignment: .leading, spacing: innerSpacing) {
         HStack {
           Spacer()
-          ArtistImageView(artworkPath: artist.artworkPath, size: 140)
+          ArtistImageView(artworkPath: artist.artworkPath, size: artworkSize)
             .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 5)
           Spacer()
         }
-        .padding(.top, 8)
+        .padding(.top, isCompact ? 4 : 8)
         .accessibilityHidden(true)
 
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: textSpacing) {
           Text(artist.name)
-            .font(.system(size: 16, weight: .semibold, design: .rounded))
+            .font(.system(size: titleFontSize, weight: .semibold, design: .rounded))
             .lineLimit(1)
             .foregroundStyle(.primary)
 
           Text("\(artist.songCount) songs")
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: subtitleFontSize, weight: .medium))
             .foregroundStyle(.secondary)
         }
         .padding(.bottom, 4)
       }
-      .padding(12)
-      .frame(width: 174, alignment: .leading)
-      .background(
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
-          .fill(cardBackground)
-          .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-              .stroke(.white.opacity(0.06), lineWidth: 1)
-          }
+      .padding(innerPadding)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .glassEffect(
+        themeManager.coloredSurfaces ? .regular : .identity,
+        in: RoundedRectangle(cornerRadius: 22, style: .continuous)
       )
     }
     .buttonStyle(.plain)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(artist.name), \(artist.songCount) songs")
     .accessibilityHint("Opens artist")
-  }
-
-  private var cardBackground: some ShapeStyle {
-    LinearGradient(
-      colors: [
-        themeManager.cardBackgroundColor.opacity(0.94),
-        themeManager.backgroundColor.opacity(0.82),
-      ],
-      startPoint: .topLeading,
-      endPoint: .bottomTrailing
-    )
   }
 }

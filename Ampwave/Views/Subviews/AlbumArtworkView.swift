@@ -10,6 +10,7 @@ internal import SwiftUI
 struct AlbumArtworkView: View {
   let artworkPath: String?
   let size: CGFloat
+  var cornerRadius: CGFloat = 8
   #if os(iOS)
     @State private var image: UIImage?
   #else
@@ -37,8 +38,8 @@ struct AlbumArtworkView: View {
       }
     }
     .frame(width: size, height: size)
-    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .shadow(color: .black.opacity(0.1), radius: 6, x: 0, y: 3)
+    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    .shadow(color: .black.opacity(cornerRadius > 0 ? 0.1 : 0), radius: 6, x: 0, y: 3)
     .task(id: artworkPath) {
       await MainActor.run {
         self.image = nil

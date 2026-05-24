@@ -563,7 +563,7 @@ final class UserPreferences: Identifiable {
     self.artworkQualityRaw = ArtworkQuality.high.rawValue
     self.autoFetchMetadata = true
     self.autoFetchLyrics = true
-    self.wordSyncedLyricsEnabled = false
+    self.wordSyncedLyricsEnabled = true
     self.copyMusicToStorage = true
     self.preferOnlineArtwork = true
     self.preferEmbeddedArtwork = true
@@ -610,7 +610,7 @@ final class UserPreferences: Identifiable {
         if existing.showFullArtworkGradient == nil { existing.showFullArtworkGradient = true }
         if existing.miniPlayerFloating == nil { existing.miniPlayerFloating = false }
         if existing.fullScreenArtworkExpanded == nil { existing.fullScreenArtworkExpanded = false }
-        if existing.wordSyncedLyricsEnabled == nil { existing.wordSyncedLyricsEnabled = false }
+        if existing.wordSyncedLyricsEnabled == nil { existing.wordSyncedLyricsEnabled = true }
         if existing.copyMusicToStorage == nil { existing.copyMusicToStorage = true }
         if existing.isPremiumUser == nil { existing.isPremiumUser = true }
         if existing.customColorSchemeRaw == nil { existing.customColorSchemeRaw = "dark" }

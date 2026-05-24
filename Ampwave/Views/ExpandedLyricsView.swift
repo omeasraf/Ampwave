@@ -329,8 +329,8 @@ struct CompactLyricsView: View {
         }
         .frame(height: 200)
         .background(artworkColor)
-        .cornerRadius(10)
-        .contentShape(Rectangle())
+        .cornerRadius(16)
+//        .contentShape(Rectangle())
         .onTapGesture {
           onExpand()
         }
@@ -369,8 +369,8 @@ struct CompactLyricsView: View {
         }
         .frame(height: 200)
         .background(artworkColor)
-        .cornerRadius(10)
-        .contentShape(Rectangle())
+        .cornerRadius(16)
+//        .contentShape(Rectangle())
         .onTapGesture {
           onExpand()
         }

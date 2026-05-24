@@ -215,17 +215,35 @@ struct GenresGridView: View {
 
   private func genreCell(name: String, count: Int) -> some View {
     let colors = GenrePalette.gradient(for: name)
+    let icon = GenrePalette.icon(for: name)
     return ZStack(alignment: .bottomLeading) {
+      // Main gradient
+      LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+
+      // Specular highlight blob (top-right)
+      Circle()
+        .fill(Color.white.opacity(0.18))
+        .frame(width: 100, height: 100)
+        .blur(radius: 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        .offset(x: 24, y: -28)
+
+      // Bottom scrim for text legibility
       LinearGradient(
-        colors: colors,
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-      )
-      LinearGradient(
-        colors: [.black.opacity(0.06), .black.opacity(0.42)],
-        startPoint: .top,
+        colors: [.clear, .black.opacity(0.55)],
+        startPoint: .center,
         endPoint: .bottom
       )
+
+      // Decorative genre icon (top-right, watermark style)
+      Image(systemName: icon)
+        .font(.system(size: 52, weight: .bold))
+        .foregroundStyle(.white.opacity(0.16))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        .padding(.trailing, 14)
+        .padding(.top, 12)
+
+      // Text
       VStack(alignment: .leading, spacing: 4) {
         Text(name)
           .font(.title2.weight(.bold))
@@ -234,13 +252,14 @@ struct GenresGridView: View {
           .minimumScaleFactor(0.72)
         Text("\(count) songs")
           .font(.subheadline.weight(.medium))
-          .foregroundStyle(.white.opacity(0.92))
+          .foregroundStyle(.white.opacity(0.9))
       }
       .padding(16)
     }
-    .frame(maxWidth: .infinity, minHeight: 124)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .shadow(color: .black.opacity(0.14), radius: 10, y: 5)
+    .frame(maxWidth: .infinity, minHeight: 140)
+    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    // Colored shadow — tinted with the genre's own palette color
+    .shadow(color: (colors.first ?? .black).opacity(0.42), radius: 14, x: 0, y: 7)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("\(name), \(count) songs")
     .accessibilityHint("View songs in this genre")
@@ -329,16 +348,16 @@ struct LibraryView: View {
             .padding(.vertical, 12)
             .padding(.horizontal, 16)
             .background(
-              RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(
-                  selectedTab == tab
-                    ? AnyShapeStyle(themeManager.accentColor.gradient)
-                    : AnyShapeStyle(.ultraThinMaterial)
-                )
-                .overlay {
-                  RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(.white.opacity(selectedTab == tab ? 0.08 : 0.06), lineWidth: 1)
-                }
+              selectedTab == tab
+                ? AnyShapeStyle(themeManager.accentColor.gradient)
+                : AnyShapeStyle(.clear),
+              in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            )
+            .glassEffect(
+              selectedTab == tab
+                ? .identity
+                : (themeManager.coloredSurfaces ? .regular.interactive() : .identity),
+              in: RoundedRectangle(cornerRadius: 18, style: .continuous)
             )
           }
           .buttonStyle(.plain)
@@ -356,6 +375,39 @@ struct AlbumsGridView: View {
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
+  @AppStorage("com.ampwave.albumGridSize") private var albumGridSizeRaw: String = "large"
+  /// Tracks the ScrollView's available width so the full-bleed large mode can pass exact column
+  /// widths to AlbumCard (avoiding a GeometryReader inside LazyVGrid which causes layout issues).
+  @State private var gridWidth: CGFloat = 400
+
+  private var isLargeMode: Bool { albumGridSizeRaw == "large" }
+  private var isSmallMode: Bool { albumGridSizeRaw == "small" }
+
+  private var artworkSize: CGFloat {
+    switch albumGridSizeRaw {
+    case "small":  return 90
+    case "medium": return 130
+    default:       return (gridWidth - 2) / 2   // large: fills half the available width
+    }
+  }
+
+  private var gridColumns: [GridItem] {
+    switch albumGridSizeRaw {
+    case "large":
+      // 2 columns, 2 pt gap — full bleed, no outer padding
+      return [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
+    case "small":
+      // 3 columns
+      return [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+      ]
+    default:
+      // medium — 2 columns with breathing room
+      return [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)]
+    }
+  }
 
   private var library: SongLibrary { SongLibrary.shared }
 
@@ -396,10 +448,6 @@ struct AlbumsGridView: View {
     }
   }
 
-  let columns = [
-    GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)
-  ]
-
   var body: some View {
     ScrollView {
       if filteredAlbums.isEmpty {
@@ -414,17 +462,40 @@ struct AlbumsGridView: View {
         )
         .padding(.top, 100)
       } else {
-        LazyVGrid(columns: columns, spacing: 18) {
+        LazyVGrid(
+          columns: gridColumns,
+          spacing: isLargeMode ? 2 : (isSmallMode ? 8 : 18)
+        ) {
           ForEach(filteredAlbums) { album in
-            AlbumCard(album: album)
+            AlbumCard(album: album, artworkSize: artworkSize, isFullBleed: isLargeMode)
           }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 16)
+        .padding(.horizontal, isLargeMode ? 0 : 20)
+        .padding(.top, isLargeMode ? 0 : 16)
         .padding(.bottom, 24)
       }
     }
+    // Capture available width for the large full-bleed column calculation
+    .background {
+      GeometryReader { geo in
+        Color.clear
+          .onChange(of: geo.size.width, initial: true) { _, w in gridWidth = w }
+      }
+    }
     .background(themeManager.backgroundColor)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Menu {
+          Picker("Album Size", selection: $albumGridSizeRaw) {
+            Label("Small", systemImage: "square.grid.3x3.fill").tag("small")
+            Label("Medium", systemImage: "square.grid.2x2.fill").tag("medium")
+            Label("Large", systemImage: "square.fill").tag("large")
+          }
+        } label: {
+          Image(systemName: "square.grid.2x2")
+        }
+      }
+    }
   }
 }
 
@@ -435,11 +506,30 @@ struct ArtistsGridView: View {
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
   @State private var artists: [Artist] = []
+  @AppStorage("com.ampwave.artistGridSize") private var artistGridSizeRaw: String = "large"
 
   private var library: SongLibrary { SongLibrary.shared }
 
   private var appSettings: AppSettings {
     settings.first ?? AppSettings.getOrCreate(in: modelContext)
+  }
+
+  private var artistArtworkSize: CGFloat {
+    artistGridSizeRaw == "small" ? 90 : 150
+  }
+
+  private var gridColumns: [GridItem] {
+    if artistGridSizeRaw == "small" {
+      return [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+      ]
+    }
+    return [
+      GridItem(.flexible(), spacing: 16),
+      GridItem(.flexible(), spacing: 16),
+    ]
   }
 
   var filteredArtists: [Artist] {
@@ -467,10 +557,6 @@ struct ArtistsGridView: View {
     }
   }
 
-  let columns = [
-    GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)
-  ]
-
   var body: some View {
     ScrollView {
       if artists.isEmpty {
@@ -488,9 +574,9 @@ struct ArtistsGridView: View {
         )
         .padding(.top, 100)
       } else {
-        LazyVGrid(columns: columns, spacing: 18) {
+        LazyVGrid(columns: gridColumns, spacing: artistGridSizeRaw == "small" ? 8 : 18) {
           ForEach(filteredArtists) { artist in
-            ArtistCard(artist: artist)
+            ArtistCard(artist: artist, artworkSize: artistArtworkSize)
           }
         }
         .padding(.horizontal, 20)
@@ -501,6 +587,18 @@ struct ArtistsGridView: View {
     .background(themeManager.backgroundColor)
     .task {
       await loadArtists()
+    }
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Menu {
+          Picker("Artist Size", selection: $artistGridSizeRaw) {
+            Label("Small", systemImage: "square.grid.3x3.fill").tag("small")
+            Label("Large", systemImage: "square.grid.2x2.fill").tag("large")
+          }
+        } label: {
+          Image(systemName: "square.grid.2x2")
+        }
+      }
     }
   }
 

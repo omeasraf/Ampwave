@@ -210,6 +210,15 @@ struct SongContextMenuModifier: ViewModifier {
           )
         }
 
+        Button {
+          _ = playlistManager.toggleDisliked(song: song)
+        } label: {
+          Label(
+            playlistManager.isDisliked(song: song) ? "Clear Dislike" : "Dislike Song",
+            systemImage: playlistManager.isDisliked(song: song) ? "hand.thumbsdown.slash" : "hand.thumbsdown"
+          )
+        }
+
         if library.getArtist(named: song.artist) != nil {
           Button {
             showArtist = true

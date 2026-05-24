@@ -136,10 +136,12 @@ final class MetadataService {
     let genreLabel = extractGenreLabel(genres: recording.genres, tags: recording.tags)
 
     // Fetch detailed metadata
+    let firstRelease = recording.releases?.first
+    let recordingArtist = recording.artistCredit?.first?.name ?? song.artist
     var metadata = FetchedMetadata(
       title: recording.title,
-      artist: recording.artistCredit?.first?.name ?? song.artist,
-      album: recording.releases?.first?.title,
+      artist: recordingArtist,
+      album: firstRelease?.title,
       year: releaseYear,
       genre: genreLabel,
       trackNumber: nil,
@@ -148,7 +150,8 @@ final class MetadataService {
       musicBrainzId: recording.id,
       artworkURL: nil,
       songDescription: song.songDescription,
-      albumArtist: nil,
+      albumArtist: firstRelease?.artistCredit?.first?.name ?? recordingArtist,
+      isrc: recording.isrcs?.first,
       source: .musicBrainz
     )
 
@@ -187,7 +190,7 @@ final class MetadataService {
   }
 
   private func fetchRecordingDetails(mbid: String) async -> MusicBrainzRecordingDetailResponse? {
-    let urlString = "\(musicBrainzDefaultURL)/recording/\(mbid)?inc=genres+tags+artist-credits+releases+release-groups&fmt=json"
+    let urlString = "\(musicBrainzDefaultURL)/recording/\(mbid)?inc=genres+tags+artist-credits+releases+release-groups+isrcs&fmt=json"
     guard let url = URL(string: urlString) else { return nil }
     guard let data = await performRequest(url: url) else { return nil }
     do {
@@ -787,6 +790,9 @@ final class MetadataService {
         }
         if albumRef.appleMusicId == nil {
             albumRef.appleMusicId = metadata.appleMusicId
+        }
+        if let explicit = metadata.isExplicit {
+            albumRef.isExplicit = explicit
         }
     }
     

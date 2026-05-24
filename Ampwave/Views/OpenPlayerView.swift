@@ -157,6 +157,26 @@ struct OpenPlayerView: View {
                 systemImage: "text.badge.plus"
               )
             }
+
+            if let song = playback.currentItem {
+              Button {
+                _ = playlistManager.toggleLike(song: song)
+              } label: {
+                Label(
+                  playlistManager.isLiked(song: song) ? "Remove from Favorites" : "Add to Favorites",
+                  systemImage: playlistManager.isLiked(song: song) ? "heart.slash" : "heart"
+                )
+              }
+
+              Button {
+                _ = playlistManager.toggleDisliked(song: song)
+              } label: {
+                Label(
+                  playlistManager.isDisliked(song: song) ? "Clear Dislike" : "Dislike Song",
+                  systemImage: playlistManager.isDisliked(song: song) ? "hand.thumbsdown.slash" : "hand.thumbsdown"
+                )
+              }
+            }
           } label: {
             Image(systemName: "ellipsis")
               .font(.system(size: 18, weight: .semibold))
@@ -269,8 +289,10 @@ struct OpenPlayerView: View {
                 ? themeManager.accentColor : .primary
             )
             .frame(width: 46, height: 46)
-            .background(
-              .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .glassEffect(
+              themeManager.coloredSurfaces ? .regular.interactive() : .identity,
+              in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
           }
           .contentTransition(.symbolEffect(.replace))
         }
@@ -396,8 +418,8 @@ struct OpenPlayerView: View {
         .frame(maxWidth: .infinity)
         .frame(height: 50)
         .background(
-          (userPreferences?.openPlayerGlassBackground ?? true)
-            ? AnyView(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.thinMaterial))
+          (userPreferences?.openPlayerGlassBackground ?? true) && themeManager.coloredSurfaces
+            ? AnyView(Color.clear.glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18, style: .continuous)))
             : AnyView(Color.clear)
         )
     }
@@ -486,6 +508,7 @@ private struct PlayerProgressView: View {
 
 private struct PlayerPlaybackControlsView: View {
   private var playback: PlaybackController { PlaybackController.shared }
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     HStack(spacing: 44) {
@@ -495,7 +518,10 @@ private struct PlayerPlaybackControlsView: View {
         Image(systemName: "backward.fill")
           .font(.system(size: 28))
           .frame(width: 52, height: 52)
-          .background(.thinMaterial, in: Circle())
+          .glassEffect(
+            themeManager.coloredSurfaces ? .regular.interactive() : .identity,
+            in: Circle()
+          )
       }
 
       Button {
@@ -516,7 +542,10 @@ private struct PlayerPlaybackControlsView: View {
         Image(systemName: "forward.fill")
           .font(.system(size: 28))
           .frame(width: 52, height: 52)
-          .background(.thinMaterial, in: Circle())
+          .glassEffect(
+            themeManager.coloredSurfaces ? .regular.interactive() : .identity,
+            in: Circle()
+          )
       }
     }
   }

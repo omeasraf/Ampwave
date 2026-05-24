@@ -24,7 +24,7 @@ struct MiniPlayerView: View {
       // Artwork thumbnail
       FixedArtworkThumbnail(
         artworkPath: playback.currentItem?.effectiveArtworkPath,
-        size: 44
+        size: 38
       )
       .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
       .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 3)
@@ -81,29 +81,6 @@ struct MiniPlayerView: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 10)
-    .background(.ultraThinMaterial)
-    .clipShape(RoundedRectangle(cornerRadius: isFloating ? 18 : 0, style: .continuous))
-    // Progress bar overlaid at the bottom edge — uses overlay to avoid layout expansion
-    .overlay(alignment: .bottom) {
-      if playback.currentItem != nil {
-        GeometryReader { geo in
-          ZStack(alignment: .leading) {
-            Capsule()
-              .fill(.secondary.opacity(0.3))
-            Capsule()
-              .fill(.primary.opacity(0.65))
-              .frame(width: max(geo.size.width * progress, 0))
-          }
-          .frame(height: 2)
-          .padding(.horizontal, 12)
-          .frame(maxHeight: .infinity, alignment: .bottom)
-          .padding(.bottom, 6)
-          .allowsHitTesting(false)
-        }
-        .frame(height: 14)  // keep the overlay from expanding the layout
-      }
-    }
-    .shadow(color: .black.opacity(isFloating ? 0.18 : 0), radius: 12, x: 0, y: 4)
     .padding(.horizontal, isFloating ? 12 : 0)
     .padding(.bottom, isFloating ? 8 : 0)
     .onTapGesture {

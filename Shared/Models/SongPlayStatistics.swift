@@ -57,4 +57,12 @@ final class SongPlayStatistics: Identifiable {
       isDisliked = false
     }
   }
+
+  /// Toggles dislike status
+  func toggleDislike() {
+    isDisliked.toggle()
+    if isDisliked {
+      isLiked = false
+    }
+  }
 }

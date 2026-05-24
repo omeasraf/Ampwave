@@ -570,14 +570,7 @@ struct RecommendationCard: View {
       .frame(width: 160, height: 60, alignment: .topLeading)
     }
     .padding(10)
-    .background(
-      RoundedRectangle(cornerRadius: 22, style: .continuous)
-        .fill(.ultraThinMaterial)
-        .overlay {
-          RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .stroke(.white.opacity(0.06), lineWidth: 1)
-        }
-    )
+    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
   }
 }
 
@@ -764,14 +757,7 @@ struct QuickAccessButton: View {
         Spacer()
       }
       .padding(16)
-      .background(
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
-          .fill(.ultraThinMaterial)
-          .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-              .stroke(.white.opacity(0.06), lineWidth: 1)
-          }
-      )
+      .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
     .buttonStyle(.plain)
   }
@@ -834,14 +820,7 @@ struct BrowseCard<Destination: View>: View {
           .multilineTextAlignment(.center)
       }
       .frame(width: 100, height: 100)
-      .background(
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
-          .fill(.ultraThinMaterial)
-          .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-              .stroke(.white.opacity(0.06), lineWidth: 1)
-          }
-      )
+      .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
     .buttonStyle(.plain)
   }

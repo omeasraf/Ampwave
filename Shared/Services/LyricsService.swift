@@ -66,6 +66,8 @@ final class LyricsService {
   }
 
   func fetchOnlineLyrics(for song: LibrarySong) async -> SyncedLyric? {
+    // LRCLIB — returns line-synced LRC, and word-synced enhanced LRC for many songs.
+    // The LRCParser already handles the <mm:ss.xx> word-offset format.
     let lrclibResult = await fetchFromLRCLIB(song: song)
 
     if let synced = lrclibResult.synced {

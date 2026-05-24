@@ -35,6 +35,7 @@ struct FetchedMetadata {
   var artistBio: String?
   var hasLyrics: Bool = false
   var lyrics: String?
+  var isExplicit: Bool?
   var artworkBackgroundColor: String?
   var artworkPrimaryTextColor: String?
   var artworkSecondaryTextColor: String?
@@ -63,6 +64,7 @@ struct FetchedMetadata {
     artistBio: String? = nil,
     hasLyrics: Bool = false,
     lyrics: String? = nil,
+    isExplicit: Bool? = nil,
     artworkBackgroundColor: String? = nil,
     artworkPrimaryTextColor: String? = nil,
     artworkSecondaryTextColor: String? = nil,
@@ -90,6 +92,7 @@ struct FetchedMetadata {
     self.artistBio = artistBio
     self.hasLyrics = hasLyrics
     self.lyrics = lyrics
+    self.isExplicit = isExplicit
     self.artworkBackgroundColor = artworkBackgroundColor
     self.artworkPrimaryTextColor = artworkPrimaryTextColor
     self.artworkSecondaryTextColor = artworkSecondaryTextColor

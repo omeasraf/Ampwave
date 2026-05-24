@@ -104,14 +104,14 @@ struct OpenTabView: View {
     }
 
     #if os(iOS)
+      .tabBarMinimizeBehavior(.onScrollDown)
       .tabViewBottomAccessory {
         MiniPlayerView(isExpanded: $isPlayerExpanded)
-        .background(themeManager.backgroundColor)
       }
     #else
       .safeAreaInset(edge: .bottom) {
         MiniPlayerView(isExpanded: $isPlayerExpanded)
-        .background(.ultraThinMaterial)
+          .background(.ultraThinMaterial)
       }
     #endif
     .ignoresSafeArea(.keyboard)

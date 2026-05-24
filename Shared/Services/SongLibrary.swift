@@ -1353,10 +1353,13 @@ import SwiftData
     do {
       let uncheckedSongs = try modelContext.fetch(descriptor)
       let songsToFetch = uncheckedSongs.filter { song in
-        // Only fetch if core info is missing (Title/Artist) or if no artwork/genre
         let isEssentialMissing = song.title.contains("Untitled") || song.artist == "Unknown Artist" || song.artist.isEmpty
-        let isSecondaryMissing = song.artworkPath == nil || song.genre == nil || song.genre?.isEmpty == true
-        
+        let isSecondaryMissing = song.artworkPath == nil
+          || song.genre == nil || song.genre?.isEmpty == true
+          || song.year == nil
+          || song.composer == nil
+          || song.trackNumber == nil
+          || song.albumArtist == nil || song.albumArtist?.isEmpty == true
         return isEssentialMissing || isSecondaryMissing
       }
 
@@ -1895,59 +1898,40 @@ import SwiftData
     }
   }
 
-  /// One-time MusicBrainz tag pass for songs missing `genre` (runs after library load).
+  /// Full metadata backfill: fetches all available metadata (genre, year, composer, artwork, ISRC, etc.)
+  /// for songs that previously had a fetch attempt but are still missing key fields.
+  /// Runs once per version key; bump the key to re-run for all users.
   func runGenreBackfillOncePerInstall() async {
-    let key = "Ampwave.genreBackfill.v1"
+    let key = "Ampwave.fullMetadataBackfill.v1"
     guard !UserDefaults.standard.bool(forKey: key) else { return }
     guard let modelContext = modelContext else { return }
     let prefs = UserPreferences.getOrCreate(in: modelContext)
-    guard prefs.autoFetchMetadata, !prefs.isOfflineMode else {
-      UserDefaults.standard.set(true, forKey: key)
+    guard prefs.autoFetchMetadata, !prefs.isOfflineMode, NetworkMonitor.shared.isOnline else {
       return
     }
     defer { UserDefaults.standard.set(true, forKey: key) }
 
     MetadataService.shared.setModelContext(modelContext)
-    let targets = songs.filter { $0.genre == nil || $0.genre?.isEmpty == true }
-    print("[DEBUG] Genre backfill: Found \(targets.count) songs without genres")
-    if targets.isEmpty { return }
 
-    let songsToFetch = Array(targets.prefix(120))
-    totalMetadataFetches = songsToFetch.count
-    isGenreBackfillActive = true
-    await MainActor.run {
-      indexingStatus = .fetchingMetadata(current: 0, total: songsToFetch.count)
+    // Target songs with any incomplete metadata field, regardless of prior attempt
+    let targets = songs.filter { song in
+      song.genre == nil || song.genre?.isEmpty == true
+      || song.year == nil
+      || song.composer == nil
+      || song.trackNumber == nil
+      || song.albumArtist == nil || song.albumArtist?.isEmpty == true
+      || song.artworkPath == nil
     }
-    print("[DEBUG] Genre backfill: Starting fetch for \(songsToFetch.count) songs")
+    guard !targets.isEmpty else { return }
+    print("[DEBUG] Full metadata backfill: \(targets.count) songs need complete metadata")
 
-    for (index, song) in songsToFetch.enumerated() {
-      pendingMetadataFetches += 1
-      defer {
-        pendingMetadataFetches -= 1
-      }
-
-      if let genre = await MetadataService.shared.fetchGenreTags(for: song), !genre.isEmpty {
-        song.genre = genre
-        try? modelContext.save()
-      }
-
-      // Update status with remaining count
-      if index < songsToFetch.count - 1 {
-        await MainActor.run {
-          indexingStatus = .fetchingMetadata(current: index + 1, total: songsToFetch.count)
-        }
-      }
-
-      try? await Task.sleep(nanoseconds: 1_600_000_000)
+    // Reset the check flag so fetchMetadataForNewSongs picks them up
+    for song in targets {
+      song.metadataCheckAttempted = false
     }
+    try? modelContext.save()
 
-    print("[DEBUG] Genre backfill: Completed")
-    // Mark as complete
-    await MainActor.run {
-      indexingStatus = .complete
-    }
-    totalMetadataFetches = 0
-    isGenreBackfillActive = false
+    await fetchMetadataForNewSongs()
   }
 
   /// Distinct genre labels with song counts. Splits compound tags (e.g. `Rock/Pop`) on `/` and `,`.

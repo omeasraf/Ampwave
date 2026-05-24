@@ -208,13 +208,16 @@ final class PlaylistManager {
 
   func toggleLike(song: LibrarySong) -> Bool {
     guard let likedPlaylist = likedSongsPlaylist else { return false }
+    let historyTracker = ListeningHistoryTracker.shared
 
     if likedPlaylist.contains(song) {
       likedPlaylist.removeSong(song)
+      historyTracker.setLiked(false, for: song)
       save()
       return false  // Now unliked
     } else {
       likedPlaylist.addSong(song)
+      historyTracker.setLiked(true, for: song)
       save()
       return true  // Now liked
     }
@@ -223,6 +226,30 @@ final class PlaylistManager {
   func isLiked(song: LibrarySong) -> Bool {
     guard let likedPlaylist = likedSongsPlaylist else { return false }
     return likedPlaylist.contains(song)
+  }
+
+  func setDisliked(_ isDisliked: Bool, for song: LibrarySong) {
+    let historyTracker = ListeningHistoryTracker.shared
+
+    if isDisliked {
+      likedSongsPlaylist?.removeSong(song)
+      historyTracker.setLiked(false, for: song)
+      historyTracker.setDisliked(true, for: song)
+    } else {
+      historyTracker.setDisliked(false, for: song)
+    }
+
+    save()
+  }
+
+  func toggleDisliked(song: LibrarySong) -> Bool {
+    let newValue = !isDisliked(song: song)
+    setDisliked(newValue, for: song)
+    return newValue
+  }
+
+  func isDisliked(song: LibrarySong) -> Bool {
+    ListeningHistoryTracker.shared.isDisliked(song: song)
   }
 
   func getLikedSongs() -> [LibrarySong] {

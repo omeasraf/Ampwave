@@ -193,8 +193,7 @@ struct ArtistView: View {
         Image(systemName: "play.fill")
           .font(.system(size: 18))
           .frame(width: 54, height: 54)
-          .background(.ultraThinMaterial)
-          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+          .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
       }
     }
   }

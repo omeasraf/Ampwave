@@ -54,6 +54,19 @@ struct MusicBrainzArtistRef: Codable {
 struct MusicBrainzReleaseRef: Codable {
   let id: String
   let title: String
+  let date: String?
+  let artistCredit: [MusicBrainzArtistCredit]?
+  let country: String?
+  let status: String?
+
+  enum CodingKeys: String, CodingKey {
+    case id
+    case title
+    case date
+    case artistCredit = "artist-credit"
+    case country
+    case status
+  }
 }
 
 struct MusicBrainzReleaseSearchResponse: Codable {
@@ -143,6 +156,7 @@ struct MusicBrainzRecordingDetailResponse: Codable {
   let genres: [MusicBrainzGenre]?
   let artistCredit: [MusicBrainzArtistCredit]?
   let releases: [MusicBrainzReleaseRef]?
+  let isrcs: [String]?
 
   enum CodingKeys: String, CodingKey {
     case id
@@ -153,5 +167,6 @@ struct MusicBrainzRecordingDetailResponse: Codable {
     case genres
     case artistCredit = "artist-credit"
     case releases
+    case isrcs
   }
 }

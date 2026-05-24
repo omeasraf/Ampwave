@@ -156,6 +156,34 @@ final class ListeningHistoryTracker {
     return allStats.first(where: { $0.songId == song.id })
   }
 
+  func setLiked(_ isLiked: Bool, for song: LibrarySong) {
+    guard modelContext != nil else { return }
+
+    let stats = getOrCreateStatistics(for: song)
+    stats.isLiked = isLiked
+    if isLiked {
+      stats.isDisliked = false
+    }
+
+    try? modelContext?.save()
+  }
+
+  func setDisliked(_ isDisliked: Bool, for song: LibrarySong) {
+    guard modelContext != nil else { return }
+
+    let stats = getOrCreateStatistics(for: song)
+    stats.isDisliked = isDisliked
+    if isDisliked {
+      stats.isLiked = false
+    }
+
+    try? modelContext?.save()
+  }
+
+  func isDisliked(song: LibrarySong) -> Bool {
+    getStatistics(for: song)?.isDisliked ?? false
+  }
+
   /// Gets recently played songs (unique, ordered by most recent)
   func getRecentlyPlayed(limit: Int = 20) -> [LibrarySong] {
     guard let modelContext = modelContext else { return [] }

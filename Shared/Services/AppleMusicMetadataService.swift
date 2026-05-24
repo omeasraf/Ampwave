@@ -167,12 +167,22 @@ final class AppleMusicMetadataService {
     
     private func mapSongToMetadata(_ song: MKSONG, albumDescription: String? = nil, artistBio: String? = nil) -> FetchedMetadata {
         let composers = song.composers?.compactMap { $0.name }.joined(separator: " / ")
-        let genres = song.genreNames.joined(separator: " / ")
-        
-        // Improve collaboration artist mapping
+        let genres = song.genreNames.filter { $0 != "Music" }.joined(separator: " / ")
+
         let artists = song.artists?.compactMap { $0.name } ?? []
         let combinedArtist = artists.isEmpty ? song.artistName : artists.joined(separator: " & ")
-        
+
+        // Use album artist from the album relationship when available
+        let albumArtist = song.albums?.first?.artistName ?? combinedArtist
+
+        let isExplicit: Bool? = {
+            switch song.contentRating {
+            case .explicit: return true
+            case .clean: return false
+            default: return nil
+            }
+        }()
+
         return FetchedMetadata(
             title: song.title,
             artist: combinedArtist,
@@ -184,13 +194,14 @@ final class AppleMusicMetadataService {
             duration: song.duration,
             appleMusicId: song.id.rawValue,
             artworkURL: song.artwork?.url(width: 1000, height: 1000),
-            albumArtist: combinedArtist,
+            albumArtist: albumArtist,
             composer: composers ?? song.composerName,
             isrc: song.isrc,
             appleMusicURL: song.url,
             albumDescription: albumDescription,
             artistBio: artistBio,
             hasLyrics: song.hasLyrics,
+            isExplicit: isExplicit,
             artworkBackgroundColor: hexString(from: song.artwork?.backgroundColor),
             artworkPrimaryTextColor: hexString(from: song.artwork?.primaryTextColor),
             artworkSecondaryTextColor: hexString(from: song.artwork?.secondaryTextColor),

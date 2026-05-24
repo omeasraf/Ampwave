@@ -234,8 +234,8 @@ struct SettingsView: View {
           set: { preferences.coloredSurfaces = $0 }
         )) {
           VStack(alignment: .leading, spacing: 2) {
-            Text("Colored Surfaces")
-            Text("Enable colored backgrounds behind cards and controls")
+            Text("Show Surfaces")
+            Text("When off, cards and buttons show only images and text — no glass or color backgrounds")
               .font(.caption)
               .foregroundStyle(.secondary)
           }
@@ -255,6 +255,7 @@ struct SettingsView: View {
         //          set: { preferences.miniPlayerFloating = $0 }
         //        ))
       }
+
     } header: {
       Text("Layout")
     }
