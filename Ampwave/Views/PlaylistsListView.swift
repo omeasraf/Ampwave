@@ -13,6 +13,7 @@ struct PlaylistsListView: View {
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
   @State private var showingCreateSheet = false
+  @State private var showingCreateSmartSheet = false
   @State private var showUnpinAlert = false
   @State private var searchText = ""
 
@@ -78,8 +79,17 @@ struct PlaylistsListView: View {
 
   var body: some View {
     List {
-      Button {
-        showingCreateSheet = true
+      Menu {
+        Button {
+          showingCreateSheet = true
+        } label: {
+          Label("New Playlist", systemImage: "music.note.list")
+        }
+        Button {
+          showingCreateSmartSheet = true
+        } label: {
+          Label("New Smart Playlist", systemImage: "wand.and.stars")
+        }
       } label: {
         Label("New Playlist", systemImage: "plus.circle.fill")
           .font(.system(size: 16, weight: .semibold))
@@ -87,6 +97,9 @@ struct PlaylistsListView: View {
       .listRowBackground(themeManager.backgroundColor)
       .sheet(isPresented: $showingCreateSheet) {
         CreatePlaylistSheet()
+      }
+      .sheet(isPresented: $showingCreateSmartSheet) {
+        CreateSmartPlaylistSheet()
       }
 
       ForEach(filteredPlaylists) { playlist in
@@ -100,8 +113,15 @@ struct PlaylistsListView: View {
             )
 
             VStack(alignment: .leading, spacing: 2) {
-              Text(playlist.name)
-                .font(.system(size: 16, weight: .medium))
+              HStack(spacing: 4) {
+                Text(playlist.name)
+                  .font(.system(size: 16, weight: .medium))
+                if playlist.playlistType == .smart {
+                  Image(systemName: "wand.and.stars")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                }
+              }
 
               Text(
                 "\(playlist.songCount) song\(playlist.songCount == 1 ? "" : "s")"

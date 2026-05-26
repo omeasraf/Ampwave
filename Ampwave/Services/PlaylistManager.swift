@@ -207,25 +207,30 @@ final class PlaylistManager {
   // MARK: - Like/Unlike Songs
 
   func toggleLike(song: LibrarySong) -> Bool {
-    guard let likedPlaylist = likedSongsPlaylist else { return false }
-    let historyTracker = ListeningHistoryTracker.shared
-
-    if likedPlaylist.contains(song) {
-      likedPlaylist.removeSong(song)
-      historyTracker.setLiked(false, for: song)
-      save()
-      return false  // Now unliked
-    } else {
-      likedPlaylist.addSong(song)
-      historyTracker.setLiked(true, for: song)
-      save()
-      return true  // Now liked
-    }
+    let newValue = !isLiked(song: song)
+    setLiked(newValue, for: song)
+    return newValue
   }
 
   func isLiked(song: LibrarySong) -> Bool {
     guard let likedPlaylist = likedSongsPlaylist else { return false }
     return likedPlaylist.contains(song)
+  }
+
+  func setLiked(_ isLiked: Bool, for song: LibrarySong) {
+    guard let likedPlaylist = likedSongsPlaylist else { return }
+    let historyTracker = ListeningHistoryTracker.shared
+
+    if isLiked {
+      likedPlaylist.addSong(song)
+      historyTracker.setLiked(true, for: song)
+      historyTracker.setDisliked(false, for: song)
+    } else {
+      likedPlaylist.removeSong(song)
+      historyTracker.setLiked(false, for: song)
+    }
+
+    save()
   }
 
   func setDisliked(_ isDisliked: Bool, for song: LibrarySong) {
@@ -345,12 +350,23 @@ final class PlaylistManager {
   private func applySmartRules(_ rules: SmartPlaylistRules, to songs: [LibrarySong])
     -> [LibrarySong]
   {
-    let filtered = songs.filter { song in
-      let results = rules.rules.map { rule in
-        evaluateRule(rule, for: song)
-      }
+    guard !rules.rules.isEmpty else { return songs }
 
-      return rules.matchAll ? results.allSatisfy { $0 } : results.contains { $0 }
+    // Group rules by field — same semantics as SmartPlaylistEvaluator
+    let groups = SmartPlaylistEvaluator.fieldGroups(from: rules.rules)
+
+    let filtered = songs.filter { song in
+      groups.allSatisfy { groupRules in
+        var result = evaluateRule(groupRules[0], for: song)
+        for rule in groupRules.dropFirst() {
+          let r = evaluateRule(rule, for: song)
+          switch rule.connector {
+          case .and: result = result && r
+          case .or:  result = result || r
+          }
+        }
+        return result
+      }
     }
 
     // Apply sorting based on limit settings

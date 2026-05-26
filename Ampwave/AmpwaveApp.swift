@@ -98,10 +98,16 @@ struct AmpwaveApp: App {
             .modifier(AppThemeChrome())
             .onAppear {
               print("[DEBUG] App completely loaded and onAppear")
+              // Re-register shortcuts once the scene is fully live so Siri
+              // picks up the latest phrase list even if init() ran too early.
+              if #available(iOS 17.0, macOS 14.0, *) {
+                AmpwaveShortcuts.updateAppShortcutParameters()
+              }
             }
         #endif
       }
       .environment(ThemeManager.shared)
+      .environment(SleepTimerService.shared)
       .onOpenURL { AmpwaveURLRouter.handle($0) }
     }
     .modelContainer(modelContainer)
@@ -114,6 +120,7 @@ struct AmpwaveApp: App {
             .modifier(AppThemeChrome())
         }
         .environment(ThemeManager.shared)
+        .environment(SleepTimerService.shared)
       }
       .windowStyle(.hiddenTitleBar)
       .windowResizability(.automatic)

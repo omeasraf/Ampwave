@@ -154,6 +154,14 @@ final class RecommendationEngine {
     }
   }
 
+  // MARK: - Radio Queue
+
+  /// Builds a radio queue seeded by a single song — up to `limit` similar songs,
+  /// excluding the seed itself. Call sites: PlaybackController.playRadio(from:).
+  func buildRadioQueue(seed: LibrarySong, limit: Int = 25) -> [LibrarySong] {
+    findSimilarSongs(to: [seed], exclude: [seed], limit: limit)
+  }
+
   // MARK: - Similar Songs
 
   /// Finds songs similar to a given set of songs
@@ -642,6 +650,9 @@ final class RecommendationEngine {
       score += min(Double(stats.playCount) * 0.08, 1.4)
       if stats.isLiked { score += 2.0 }
       if stats.isDisliked { score -= 2.5 }
+      if let rating = stats.userRating {
+        score += Double(rating - 3) * 0.65
+      }
       score -= min(Double(stats.skipCount) * 0.35, 1.75)
 
       if let lastPlayedAt = stats.lastPlayedAt {
@@ -697,6 +708,9 @@ final class RecommendationEngine {
       score -= Double(stats.playCount) * 0.04
       score -= Double(stats.skipCount) * 0.3
       if stats.isLiked { score += 0.6 }
+      if let rating = stats.userRating {
+        score += Double(rating - 3) * 0.18
+      }
     }
     if song.effectiveArtworkPath != nil { score += 0.2 }
     if song.genre != nil { score += 0.15 }

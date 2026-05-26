@@ -2,36 +2,25 @@
 //  AlbumCard.swift
 //  Ampwave
 //
-//  Reusable album card component with context menu.
+//  Reusable album card — Apple Music–style: artwork fills the column,
+//  title + artist text sits directly below, no glass card container.
 //
 
 internal import SwiftUI
 
 struct AlbumCard: View {
   let album: Album
+  /// Hint for the artwork corner radius when used in contexts without a grid.
   var artworkSize: CGFloat = 180
-  /// When true the card is rendered edge-to-edge with no background or padding (large grid mode).
+  /// In full-bleed (large grid) mode the artwork has no corner radius and no extra padding.
   var isFullBleed: Bool = false
 
   @Environment(ThemeManager.self) private var themeManager
   @State private var isEditingShown = false
 
-  // Scale inner spacing/fonts for very small thumbnails (small-grid mode)
-  private var innerPadding: CGFloat { artworkSize < 100 ? 8 : 12 }
-  private var innerSpacing: CGFloat { artworkSize < 100 ? 6 : 12 }
-  private var textSpacing: CGFloat { artworkSize < 100 ? 3 : 5 }
-  private var titleFontSize: CGFloat { artworkSize < 100 ? 13 : 16 }
-  private var subtitleFontSize: CGFloat { artworkSize < 100 ? 11 : 13 }
-  private var metaFontSize: CGFloat { artworkSize < 100 ? 10 : 12 }
-  private var artworkCornerRadius: CGFloat { max(10, artworkSize * 0.11) }
-
   var body: some View {
     NavigationLink(destination: AlbumView(album: album)) {
-      if isFullBleed {
-        fullBleedContent
-      } else {
-        glassCardContent
-      }
+      cardContent
     }
     .buttonStyle(.plain)
     .accessibilityElement(children: .combine)
@@ -45,17 +34,33 @@ struct AlbumCard: View {
     }
   }
 
-  // MARK: - Full-bleed (large grid)
+  // MARK: - Card layout
 
-  private var fullBleedContent: some View {
+  private var cardContent: some View {
     VStack(alignment: .leading, spacing: 0) {
-      AlbumArtworkView(artworkPath: album.artworkPath, size: artworkSize, cornerRadius: 0)
+      // Square artwork that fills the full column width.
+      // `Color.clear.aspectRatio(1, .fit)` accepts the width proposed by the
+      // flexible grid column and constrains height to match.  The overlay then
+      // passes that exact size to AlbumArtworkView via GeometryReader.
+      Color.clear
+        .aspectRatio(1, contentMode: .fit)
+        .overlay {
+          GeometryReader { geo in
+            let w = geo.size.width
+            AlbumArtworkView(
+              artworkPath: album.artworkPath,
+              size: w,
+              cornerRadius: isFullBleed ? 0 : max(8, w * 0.1)
+            )
+          }
+        }
         .accessibilityHidden(true)
 
-      VStack(alignment: .leading, spacing: 4) {
+      // Text sits directly below the artwork with a small gap.
+      VStack(alignment: .leading, spacing: 3) {
         Text(album.name)
           .font(.system(size: 14, weight: .semibold, design: .rounded))
-          .lineLimit(1)
+          .lineLimit(2)
           .foregroundStyle(.primary)
 
         if let artist = album.artist {
@@ -65,54 +70,11 @@ struct AlbumCard: View {
             .lineLimit(1)
         }
       }
-      .padding(.horizontal, 10)
-      .padding(.top, 8)
-      .padding(.bottom, 10)
+      .padding(.horizontal, isFullBleed ? 10 : 4)
+      .padding(.top, 7)
+      .padding(.bottom, isFullBleed ? 10 : 4)
     }
-    // No glass, no fixed width — fills the column width given by LazyVGrid
-  }
-
-  // MARK: - Glass card (medium / small grid)
-
-  private var glassCardContent: some View {
-    VStack(alignment: .leading, spacing: innerSpacing) {
-      AlbumArtworkView(
-        artworkPath: album.artworkPath,
-        size: artworkSize,
-        cornerRadius: artworkCornerRadius
-      )
-      .accessibilityHidden(true)
-
-      VStack(alignment: .leading, spacing: textSpacing) {
-        Text(album.name)
-          .font(.system(size: titleFontSize, weight: .semibold, design: .rounded))
-          .lineLimit(2)
-          .foregroundStyle(.primary)
-
-        if let artist = album.artist {
-          Text(artist)
-            .font(.system(size: subtitleFontSize, weight: .medium))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
-
-        HStack(spacing: 6) {
-          Text("\(album.songCount) songs")
-          if let year = album.year {
-            Text("•")
-            Text(String(year))
-          }
-        }
-        .font(.system(size: metaFontSize, weight: .medium))
-        .foregroundStyle(.secondary.opacity(0.9))
-      }
-    }
-    .padding(innerPadding)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .glassEffect(
-      themeManager.coloredSurfaces ? .regular : .identity,
-      in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-    )
   }
 
   // MARK: - Accessibility

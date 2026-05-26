@@ -43,6 +43,8 @@ struct MarqueeText: View {
         resetAnimation()
       }
     }
+    // Recreate marquee measurement/animation state when the title changes.
+    .id(text)
     .frame(height: 38)
     .clipped()
     .mask {

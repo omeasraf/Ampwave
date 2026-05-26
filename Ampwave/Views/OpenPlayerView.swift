@@ -3,6 +3,7 @@
 //  Ampwave
 //
 
+import AVFoundation
 import SwiftData
 internal import SwiftUI
 
@@ -15,13 +16,18 @@ internal import SwiftUI
 struct OpenPlayerView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(ThemeManager.self) private var themeManager
+  @Environment(SleepTimerService.self) private var sleepTimer
   @State private var showingQueue = false
   @State private var isLyricsExpanded = false
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
   @State private var showingTechnicalInfo = false
   @State private var showingEqualizer = false
+  @State private var showingSleepTimerOptions = false
   @State private var artworkColor: Color = .clear
+  #if os(iOS)
+    @State private var isAirPlayActive = false
+  #endif
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -176,6 +182,23 @@ struct OpenPlayerView: View {
                   systemImage: playlistManager.isDisliked(song: song) ? "hand.thumbsdown.slash" : "hand.thumbsdown"
                 )
               }
+
+              Menu {
+                Button("Clear Rating") {
+                  ListeningHistoryTracker.shared.setRating(nil, for: song)
+                }
+                ForEach(1...5, id: \.self) { rating in
+                  Button(String(repeating: "★", count: rating)) {
+                    ListeningHistoryTracker.shared.setRating(rating, for: song)
+                  }
+                }
+              } label: {
+                let currentRating = ListeningHistoryTracker.shared.rating(for: song) ?? 0
+                Label(
+                  currentRating > 0 ? "Rating: \(currentRating)/5" : "Rate Song",
+                  systemImage: "star"
+                )
+              }
             }
           } label: {
             Image(systemName: "ellipsis")
@@ -205,6 +228,38 @@ struct OpenPlayerView: View {
           Text("Choose a playlist for this song.")
         }
       }
+      .confirmationDialog(
+        "Sleep Timer",
+        isPresented: $showingSleepTimerOptions,
+        titleVisibility: .visible
+      ) {
+        Button("15 Minutes") {
+          sleepTimer.startCountdown(minutes: 15)
+        }
+        Button("30 Minutes") {
+          sleepTimer.startCountdown(minutes: 30)
+        }
+        Button("45 Minutes") {
+          sleepTimer.startCountdown(minutes: 45)
+        }
+        Button("1 Hour") {
+          sleepTimer.startCountdown(minutes: 60)
+        }
+        Button("End of Current Song") {
+          sleepTimer.startEndOfSong()
+        }
+        Button("End of Queue") {
+          sleepTimer.startEndOfQueue()
+        }
+        if sleepTimer.isActive {
+          Button("Turn Off Timer", role: .destructive) {
+            sleepTimer.cancel()
+          }
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(sleepTimer.isActive ? sleepTimer.statusText : "Choose when playback should stop.")
+      }
     }
     #if os(iOS)
       .fullScreenCover(isPresented: $isLyricsExpanded) {
@@ -223,6 +278,30 @@ struct OpenPlayerView: View {
     .task(id: playback.currentItem?.id) {
       await updateArtworkColor()
     }
+    .onAppear {
+      updateIdleTimerState()
+      #if os(iOS)
+        checkAirPlayRoute()
+      #endif
+    }
+    .onChange(of: playback.currentItem?.id) { _, _ in
+      updateIdleTimerState()
+    }
+    .onChange(of: playback.isPlaying) { _, _ in
+      updateIdleTimerState()
+    }
+    .onDisappear {
+      #if os(iOS)
+        UIApplication.shared.isIdleTimerDisabled = false
+      #endif
+    }
+    #if os(iOS)
+      .onReceive(
+        NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+      ) { _ in
+        checkAirPlayRoute()
+      }
+    #endif
   }
 
   private var playerBackground: some View {
@@ -275,26 +354,50 @@ struct OpenPlayerView: View {
         Spacer()
 
         if let song = playback.currentItem {
-          Button {
-            PlaylistManager.shared.toggleLike(song: song)
-          } label: {
-            Image(
-              systemName: PlaylistManager.shared.isLiked(
-                song: song
-              ) ? "heart.fill" : "heart"
-            )
-            .font(.system(size: 24))
-            .foregroundStyle(
-              PlaylistManager.shared.isLiked(song: song)
-                ? themeManager.accentColor : .primary
-            )
-            .frame(width: 46, height: 46)
-            .glassEffect(
-              themeManager.coloredSurfaces ? .regular.interactive() : .identity,
-              in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-            )
+          HStack(spacing: 10) {
+            Button {
+              HapticManager.shared.dislike()
+              _ = PlaylistManager.shared.toggleDisliked(song: song)
+            } label: {
+              Image(
+                systemName: PlaylistManager.shared.isDisliked(song: song)
+                  ? "hand.thumbsdown.fill" : "hand.thumbsdown"
+              )
+              .font(.system(size: 20))
+              .foregroundStyle(
+                PlaylistManager.shared.isDisliked(song: song)
+                  ? .red : .primary
+              )
+              .frame(width: 42, height: 42)
+              .glassEffect(
+                themeManager.coloredSurfaces ? .regular.interactive() : .identity,
+                in: Circle()
+              )
+            }
+            .contentTransition(.symbolEffect(.replace))
+
+            Button {
+              HapticManager.shared.like()
+              PlaylistManager.shared.toggleLike(song: song)
+            } label: {
+              Image(
+                systemName: PlaylistManager.shared.isLiked(
+                  song: song
+                ) ? "heart.fill" : "heart"
+              )
+              .font(.system(size: 24))
+              .foregroundStyle(
+                PlaylistManager.shared.isLiked(song: song)
+                  ? themeManager.accentColor : .primary
+              )
+              .frame(width: 46, height: 46)
+              .glassEffect(
+                themeManager.coloredSurfaces ? .regular.interactive() : .identity,
+                in: Circle()
+              )
+            }
+            .contentTransition(.symbolEffect(.replace))
           }
-          .contentTransition(.symbolEffect(.replace))
         }
       }
     }
@@ -342,43 +445,73 @@ struct OpenPlayerView: View {
   }
 
   private var extraControls: some View {
-    HStack(spacing: 12) {
-      playerUtilityButton(
-        icon: "text.quote",
-        isActive: isLyricsExpanded
-      ) {
-        isLyricsExpanded = true
+    VStack(spacing: 10) {
+      HStack(spacing: 12) {
+        playerUtilityButton(
+          icon: "text.quote",
+          isActive: isLyricsExpanded
+        ) {
+          isLyricsExpanded = true
+        }
+
+        playerUtilityButton(
+          icon: "shuffle",
+          isActive: playback.shuffleMode != .off
+        ) {
+          playback.toggleShuffle()
+        }
+
+        playerUtilityButton(
+          icon: repeatIcon,
+          isActive: playback.repeatMode != .off
+        ) {
+          playback.cycleRepeatMode()
+        }
+
+        playerUtilityButton(
+          icon: "moon.zzz",
+          isActive: sleepTimer.isActive
+        ) {
+          showingSleepTimerOptions = true
+        }
+
+        playerUtilityButton(
+          icon: "antenna.radiowaves.left.and.right",
+          isActive: playback.currentSource == .radio
+        ) {
+          if let song = playback.currentItem {
+            HapticManager.shared.radioStart()
+            playback.playRadio(from: song)
+          }
+        }
+
+        playerUtilityButton(icon: "list.bullet", isActive: false) {
+          showingQueue = true
+        }
+        .sheet(isPresented: $showingQueue) {
+          QueueSheetView()
+        }
+
+        playerUtilityButton(
+          icon: "slider.horizontal.3",
+          isActive: EQManager.shared.isEnabled
+        ) {
+          showingEqualizer = true
+        }
+        .sheet(isPresented: $showingEqualizer) {
+          EqualizerSheet()
+        }
+
+        #if os(iOS)
+          airPlayUtilityButton
+        #endif
       }
 
-      playerUtilityButton(
-        icon: "shuffle",
-        isActive: playback.shuffleMode != .off
-      ) {
-        playback.toggleShuffle()
-      }
-
-      playerUtilityButton(
-        icon: repeatIcon,
-        isActive: playback.repeatMode != .off
-      ) {
-        playback.cycleRepeatMode()
-      }
-
-      playerUtilityButton(icon: "list.bullet", isActive: false) {
-        showingQueue = true
-      }
-      .sheet(isPresented: $showingQueue) {
-        QueueSheetView()
-      }
-
-      playerUtilityButton(
-        icon: "slider.horizontal.3",
-        isActive: EQManager.shared.isEnabled
-      ) {
-        showingEqualizer = true
-      }
-      .sheet(isPresented: $showingEqualizer) {
-        EqualizerSheet()
+      if sleepTimer.isActive {
+        Text(sleepTimer.statusText)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(themeManager.accentColor)
+          .frame(maxWidth: .infinity, alignment: .center)
       }
     }
   }
@@ -411,20 +544,47 @@ struct OpenPlayerView: View {
     isActive: Bool,
     action: @escaping () -> Void
   ) -> some View {
-    Button(action: action) {
+    Button {
+      HapticManager.shared.select()
+      action()
+    } label: {
       Image(systemName: icon)
         .font(.system(size: 18, weight: .semibold))
         .foregroundStyle(isActive ? themeManager.accentColor : .primary)
+        .frame(width: 36, height: 36)
+        .glassEffect(
+          themeManager.coloredSurfaces ? .regular.interactive() : .identity,
+          in: Circle()
+        )
         .frame(maxWidth: .infinity)
         .frame(height: 50)
-        .background(
-          (userPreferences?.openPlayerGlassBackground ?? true) && themeManager.coloredSurfaces
-            ? AnyView(Color.clear.glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18, style: .continuous)))
-            : AnyView(Color.clear)
-        )
     }
     .buttonStyle(.plain)
   }
+
+  #if os(iOS)
+    @ViewBuilder
+    private var airPlayUtilityButton: some View {
+      let tint: UIColor = isAirPlayActive ? UIColor(themeManager.accentColor) : .label
+      AirPlayButton(tintColor: tint)
+        .frame(width: 36, height: 36)
+        .glassEffect(
+          themeManager.coloredSurfaces ? .regular.interactive() : .identity,
+          in: Circle()
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: 50)
+    }
+
+    private func checkAirPlayRoute() {
+      let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+      let externalPortTypes: [AVAudioSession.Port] = [
+        .airPlay, .bluetoothA2DP, .bluetoothLE, .bluetoothHFP,
+        .carAudio, .HDMI, .displayPort,
+      ]
+      isAirPlayActive = outputs.contains { externalPortTypes.contains($0.portType) }
+    }
+  #endif
 
   private func updateArtworkColor() async {
     guard let path = playback.currentItem?.effectiveArtworkPath,
@@ -452,6 +612,13 @@ struct OpenPlayerView: View {
         artworkColor = color
       }
     }
+  }
+
+  private func updateIdleTimerState() {
+    #if os(iOS)
+      UIApplication.shared.isIdleTimerDisabled =
+        playback.currentItem != nil && playback.isPlaying
+    #endif
   }
 }
 
@@ -513,6 +680,7 @@ private struct PlayerPlaybackControlsView: View {
   var body: some View {
     HStack(spacing: 44) {
       Button {
+        HapticManager.shared.skip()
         playback.playPrevious()
       } label: {
         Image(systemName: "backward.fill")
@@ -525,6 +693,7 @@ private struct PlayerPlaybackControlsView: View {
       }
 
       Button {
+        HapticManager.shared.playPause()
         playback.playPause()
       } label: {
         Image(
@@ -537,6 +706,7 @@ private struct PlayerPlaybackControlsView: View {
       .contentTransition(.symbolEffect(.replace))
 
       Button {
+        HapticManager.shared.skip()
         playback.playNext()
       } label: {
         Image(systemName: "forward.fill")

@@ -149,6 +149,10 @@ public struct PlayMusicIntent: AudioPlaybackIntent {
 
   public init() {}
 
+  public static var parameterSummary: some ParameterSummary {
+    Summary("Play \(\.$query) on Ampwave")
+  }
+
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: PlayMusicIntent.perform (query: \(query))")
     if let songResult = try? await SiriPlaybackRouter.shared.playSong(songTitle: query) {
@@ -261,79 +265,94 @@ public struct AddToPlaylistIntent: AppIntent {
 struct AmpwaveShortcuts: AppShortcutsProvider {
   @AppShortcutsBuilder
   static var appShortcuts: [AppShortcut] {
+    // ── Song-specific (entity parameter — allowed in phrases) ────────────────
     AppShortcut(
       intent: PlaySongIntent(),
       phrases: [
         "Play \(\.$song) on \(.applicationName)",
-        "Play song on \(.applicationName)",
-        "Play \(.applicationName) song",
-        "Play \(.applicationName) music",
+        "Play \(\.$song) in \(.applicationName)",
+        "Play the song \(\.$song) on \(.applicationName)",
       ],
       shortTitle: "Play Song",
       systemImageName: "music.note"
     )
-    AppShortcut(
-      intent: PlayLikedSongsIntent(),
-      phrases: [
-        "Play liked songs in \(.applicationName)",
-        "Start liked songs in \(.applicationName)",
-      ],
-      shortTitle: "Play Liked",
-      systemImageName: "heart.fill"
-    )
-    AppShortcut(
-      intent: ResumePlaybackIntent(),
-      phrases: [
-        "Resume music in \(.applicationName)",
-        "Continue in \(.applicationName)",
-      ],
-      shortTitle: "Resume",
-      systemImageName: "play.fill"
-    )
+
+    // ── Generic search — String param, so Siri prompts for it ────────────────
     AppShortcut(
       intent: PlayMusicIntent(),
       phrases: [
-        "Play music in \(.applicationName)",
-        "Play in \(.applicationName)",
-        "Search and play in \(.applicationName)",
+        "Play music on \(.applicationName)",
+        "Play something on \(.applicationName)",
+        "Search and play on \(.applicationName)",
       ],
       shortTitle: "Play Music",
       systemImageName: "magnifyingglass"
     )
+
+    // ── Artist — String param, Siri prompts ──────────────────────────────────
     AppShortcut(
       intent: PlayArtistIntent(),
       phrases: [
-        "Play an artist in \(.applicationName)",
-        "Start artist music in \(.applicationName)",
+        "Play an artist on \(.applicationName)",
+        "Play artist music on \(.applicationName)",
       ],
       shortTitle: "Play Artist",
       systemImageName: "music.mic"
     )
+
+    // ── Playlist — String param, Siri prompts ────────────────────────────────
     AppShortcut(
       intent: PlaySpecificPlaylistIntent(),
       phrases: [
-        "Play a playlist in \(.applicationName)",
-        "Start playlist in \(.applicationName)",
-        "Play \(.applicationName) playlist",
-        "Play my playlist in \(.applicationName)",
+        "Play a playlist on \(.applicationName)",
+        "Start a playlist on \(.applicationName)",
+        "Play my playlist on \(.applicationName)",
       ],
       shortTitle: "Play Playlist",
       systemImageName: "music.note.list"
     )
+
+    // ── Liked songs ──────────────────────────────────────────────────────────
+    AppShortcut(
+      intent: PlayLikedSongsIntent(),
+      phrases: [
+        "Play liked songs on \(.applicationName)",
+        "Play my favorites on \(.applicationName)",
+        "Play favorites on \(.applicationName)",
+      ],
+      shortTitle: "Play Liked",
+      systemImageName: "heart.fill"
+    )
+
+    // ── Resume ───────────────────────────────────────────────────────────────
+    AppShortcut(
+      intent: ResumePlaybackIntent(),
+      phrases: [
+        "Resume \(.applicationName)",
+        "Continue playing on \(.applicationName)",
+        "Resume music on \(.applicationName)",
+      ],
+      shortTitle: "Resume",
+      systemImageName: "play.fill"
+    )
+
+    // ── Like current song ────────────────────────────────────────────────────
     AppShortcut(
       intent: LikeCurrentSongIntent(),
       phrases: [
-        "Like this song in \(.applicationName)",
-        "Favorite this song in \(.applicationName)",
+        "Like this song on \(.applicationName)",
+        "Favorite this song on \(.applicationName)",
       ],
       shortTitle: "Like Song",
       systemImageName: "heart"
     )
+
+    // ── Add to playlist ──────────────────────────────────────────────────────
     AppShortcut(
       intent: AddToPlaylistIntent(),
       phrases: [
-        "Add this to a playlist in \(.applicationName)",
-        "Add this song to my playlist in \(.applicationName)",
+        "Add this song to a playlist on \(.applicationName)",
+        "Add to playlist on \(.applicationName)",
       ],
       shortTitle: "Add to Playlist",
       systemImageName: "plus.circle"

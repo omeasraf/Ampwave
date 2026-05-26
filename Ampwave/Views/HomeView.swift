@@ -28,6 +28,7 @@ struct HomeView: View {
   @State private var genreRecommendations: [Recommendation] = []
   @State private var recentlyPlayedSongs: [LibrarySong] = []
   @State private var mostPlayedSongs: [(song: LibrarySong, count: Int)] = []
+  @State private var radioMixes: [RadioMix] = []
   @State private var isLoading = true
   @State private var showError = false
   @State private var errorMessage = ""
@@ -108,6 +109,11 @@ struct HomeView: View {
               recommendations: forYouRecommendations,
               onSongPlayed: refreshHomeSections
             )
+          }
+
+          // Radio Mixes section
+          if !radioMixes.isEmpty {
+            RadioMixesSection(mixes: radioMixes)
           }
 
           if !genreRecommendations.isEmpty {
@@ -333,6 +339,7 @@ struct HomeView: View {
   private func refreshHomeSections() {
     recentlyPlayedSongs = historyTracker.getRecentlyPlayed(limit: 10)
     mostPlayedSongs = historyTracker.getMostPlayed(limit: 10)
+    radioMixes = RadioMixGenerator.shared.generateMixes()
   }
 }
 
@@ -402,15 +409,17 @@ struct SongCard: View {
       }
       .frame(width: 140, alignment: .leading)
     }
-    .padding(10)
-    .background(
-      RoundedRectangle(cornerRadius: 22, style: .continuous)
-        .fill(songCardBackground)
-        .overlay {
-          RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .stroke(.white.opacity(0.06), lineWidth: 1)
-        }
-    )
+    .padding(themeManager.coloredSurfaces ? 10 : 4)
+    .background {
+      if themeManager.coloredSurfaces {
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+          .fill(songCardBackground)
+          .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+              .stroke(.white.opacity(0.06), lineWidth: 1)
+          }
+      }
+    }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(song.title), \(song.artist)")
     .accessibilityHint("Plays this song")
@@ -571,6 +580,120 @@ struct RecommendationCard: View {
     }
     .padding(10)
     .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+  }
+}
+
+// MARK: - Radio Mixes Section
+
+struct RadioMixesSection: View {
+  let mixes: [RadioMix]
+  @Environment(ThemeManager.self) private var themeManager
+  private var playback: PlaybackController { PlaybackController.shared }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Text("Radio for You")
+          .font(.system(size: 24, weight: .bold, design: .rounded))
+        Spacer()
+      }
+      .padding(.horizontal, 20)
+
+      Text("Personalized stations based on your listening")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 20)
+        .padding(.top, -6)
+
+      ScrollView(.horizontal, showsIndicators: false) {
+        LazyHStack(spacing: 16) {
+          ForEach(mixes) { mix in
+            RadioMixCard(mix: mix)
+              .onTapGesture {
+                HapticManager.shared.radioStart()
+                playback.playQueue(mix.songs, startingAt: 0, from: .radio)
+              }
+          }
+        }
+        .padding(.horizontal, 20)
+      }
+    }
+    .padding(.vertical, 8)
+    .background(themeManager.backgroundColor)
+  }
+}
+
+// MARK: - Radio Mix Card
+
+struct RadioMixCard: View {
+  let mix: RadioMix
+  @Environment(ThemeManager.self) private var themeManager
+
+  private let cardSize: CGFloat = 160
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      // ── 2×2 artwork collage ───────────────────────────────────────────────
+      artworkCollage
+        .frame(width: cardSize, height: cardSize)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
+
+      // ── Text ─────────────────────────────────────────────────────────────
+      VStack(alignment: .leading, spacing: 2) {
+        Text(mix.name)
+          .font(.system(size: 15, weight: .semibold))
+          .lineLimit(1)
+          .foregroundStyle(.primary)
+
+        Text(mix.subtitle)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+          .multilineTextAlignment(.leading)
+      }
+      .frame(width: cardSize, alignment: .leading)
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("\(mix.name). \(mix.subtitle)")
+    .accessibilityHint("Plays this radio station")
+  }
+
+  // MARK: - Artwork Collage
+
+  @ViewBuilder
+  private var artworkCollage: some View {
+    let half = cardSize / 2
+    let paths = mix.artworkPaths
+
+    GeometryReader { _ in
+      ZStack {
+        // Gradient fallback background
+        LinearGradient(
+          colors: mix.gradientColors,
+          startPoint: .topLeading,
+          endPoint: .bottomTrailing
+        )
+
+        LazyVGrid(
+          columns: [
+            GridItem(.fixed(half), spacing: 0),
+            GridItem(.fixed(half), spacing: 0),
+          ],
+          spacing: 0
+        ) {
+          ForEach(0..<4, id: \.self) { idx in
+            let path = idx < paths.count ? paths[idx] : nil
+            AlbumArtworkView(
+              artworkPath: path,
+              size: half,
+              cornerRadius: 0
+            )
+            .frame(width: half, height: half)
+          }
+        }
+      }
+    }
   }
 }
 

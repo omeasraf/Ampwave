@@ -15,9 +15,12 @@ struct PlaylistView: View {
   @State private var showingEditSheet = false
   @State private var showingAddSongsSheet = false
   @State private var showingDeleteConfirmation = false
+  @State private var showingRulesSheet = false
   @State private var playlistJSONShareURL: URL?
   @State private var playlistM3UShareURL: URL?
   @Environment(ThemeManager.self) private var themeManager
+
+  private var isSmartPlaylist: Bool { playlist.playlistType == .smart }
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -35,37 +38,7 @@ struct PlaylistView: View {
       .listRowBackground(Color.clear)
       .listRowInsets(EdgeInsets())
 
-      if !playlist.orderedSongs.isEmpty {
-        Section {
-          ForEach(playlist.orderedSongs) { song in
-            SongRow(
-              song: song,
-              isCurrent: playback.currentItem?.id == song.id
-            )
-            .contentShape(Rectangle())
-            .onTapGesture {
-              playback.playPlaylist(
-                playlist,
-                startingAt: playlist.orderedSongs.firstIndex(where: {
-                  $0.id == song.id
-                }) ?? 0
-              )
-            }
-          }
-          .onDelete(perform: deleteSongs)
-          .onMove(perform: moveSongs)
-        }
-        .listRowBackground(themeManager.cardBackgroundColor)
-      } else {
-        Section {
-          ContentUnavailableView(
-            "Empty Playlist",
-            systemImage: "music.note.list",
-            description: Text("Add songs to get started")
-          )
-        }
-        .listRowBackground(themeManager.cardBackgroundColor)
-      }
+      songSection
     }
     .listStyle(platformListStyle)
     .background(themeManager.backgroundColor)
@@ -77,99 +50,7 @@ struct PlaylistView: View {
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Menu {
-          if playlist.playlistType != .likedSongs {
-            Button {
-              showingEditSheet = true
-            } label: {
-              Label("Edit Details", systemImage: "pencil")
-            }
-          }
-
-          Button {
-            showingAddSongsSheet = true
-          } label: {
-            Label("Add Songs", systemImage: "plus")
-          }
-
-          if !playlist.orderedSongs.isEmpty, let url = playlistJSONShareURL {
-            ShareLink(
-              item: url,
-              subject: Text(playlist.name),
-              message: Text(
-                "Portable playlist export from Ampwave with stable track identifiers and metadata."
-              ),
-              preview: SharePreview(
-                playlist.name,
-                icon: Image(systemName: "music.note.list")
-              )
-            ) {
-              Label("Share JSON Playlist…", systemImage: "square.and.arrow.up")
-            }
-          }
-
-          if !playlist.orderedSongs.isEmpty, let url = playlistM3UShareURL {
-            ShareLink(
-              item: url,
-              subject: Text(playlist.name),
-              message: Text(
-                "Extended M3U playlist from Ampwave with metadata-based track resolution."
-              ),
-              preview: SharePreview(
-                playlist.name,
-                icon: Image(systemName: "music.note.list")
-              )
-            ) {
-              Label("Share M3U Playlist…", systemImage: "music.note.list")
-            }
-          }
-
-          Button {
-            isEditing.toggle()
-          } label: {
-            Label(
-              isEditing ? "Done" : "Edit Order",
-              systemImage: isEditing
-                ? "checkmark" : "arrow.up.arrow.down"
-            )
-          }
-
-          Divider()
-
-          if playlist.playlistType != .likedSongs {
-            Button {
-              playlistManager.togglePin(playlist)
-            } label: {
-              Label(
-                playlist.isPinned ? "Unpin" : "Pin",
-                systemImage: playlist.isPinned
-                  ? "pin.slash" : "pin"
-              )
-            }
-          }
-
-          #if os(iOS)
-            Button {
-              WatchSyncService.shared.updateSyncStatus(
-                for: playlist, shouldSync: !playlist.shouldSyncToWatch)
-            } label: {
-              Label(
-                playlist.shouldSyncToWatch ? "Remove from Watch" : "Sync to Watch",
-                systemImage: playlist.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
-              )
-            }
-          #endif
-
-          if playlist.playlistType == .custom
-            || playlist.playlistType == .smart
-          {
-            Divider()
-
-            Button(role: .destructive) {
-              showingDeleteConfirmation = true
-            } label: {
-              Label("Delete Playlist", systemImage: "trash")
-            }
-          }
+          playlistMenuContent
         } label: {
           Image(systemName: "ellipsis.circle")
         }
@@ -183,6 +64,9 @@ struct PlaylistView: View {
     }
     .sheet(isPresented: $showingAddSongsSheet) {
       AddSongsToPlaylistSheet(playlist: playlist)
+    }
+    .sheet(isPresented: $showingRulesSheet) {
+      SmartPlaylistRulesSheet(playlist: playlist)
     }
     .alert("Delete Playlist?", isPresented: $showingDeleteConfirmation) {
       Button("Cancel", role: .cancel) {}
@@ -206,6 +90,161 @@ struct PlaylistView: View {
         playlist: playlist,
         library: library
       )
+    }
+  }
+
+  @ViewBuilder
+  private var songSection: some View {
+    if playlist.orderedSongs.isEmpty {
+      emptySongsSection
+    } else if isSmartPlaylist {
+      smartSongListSection
+    } else {
+      editableSongListSection
+    }
+  }
+
+  private var smartSongListSection: some View {
+    Section {
+      ForEach(playlist.orderedSongs) { song in
+        SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
+          .contentShape(Rectangle())
+          .onTapGesture {
+            let idx = playlist.orderedSongs.firstIndex(where: { $0.id == song.id }) ?? 0
+            playback.playPlaylist(playlist, startingAt: idx)
+          }
+      }
+    }
+    .listRowBackground(themeManager.cardBackgroundColor)
+  }
+
+  private var editableSongListSection: some View {
+    Section {
+      ForEach(playlist.orderedSongs) { song in
+        SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
+          .contentShape(Rectangle())
+          .onTapGesture {
+            let idx = playlist.orderedSongs.firstIndex(where: { $0.id == song.id }) ?? 0
+            playback.playPlaylist(playlist, startingAt: idx)
+          }
+      }
+      .onDelete(perform: deleteSongs)
+      .onMove(perform: moveSongs)
+    }
+    .listRowBackground(themeManager.cardBackgroundColor)
+  }
+
+  private var emptySongsSection: some View {
+    Section {
+      if isSmartPlaylist {
+        ContentUnavailableView(
+          "No Matching Songs",
+          systemImage: "music.note.list",
+          description: Text("Adjust your rules to find matching songs")
+        )
+      } else {
+        ContentUnavailableView(
+          "Empty Playlist",
+          systemImage: "music.note.list",
+          description: Text("Add songs to get started")
+        )
+      }
+    }
+    .listRowBackground(themeManager.cardBackgroundColor)
+  }
+
+  @ViewBuilder
+  private var playlistMenuContent: some View {
+    if isSmartPlaylist {
+      Button { showingRulesSheet = true } label: {
+        Label("Edit Rules", systemImage: "slider.horizontal.3")
+      }
+      Button { playlistManager.updateSmartPlaylist(playlist) } label: {
+        Label("Refresh", systemImage: "arrow.clockwise")
+      }
+      Button { showingEditSheet = true } label: {
+        Label("Edit Name", systemImage: "pencil")
+      }
+    } else {
+      if playlist.playlistType != .likedSongs {
+        Button { showingEditSheet = true } label: {
+          Label("Edit Details", systemImage: "pencil")
+        }
+      }
+      Button { showingAddSongsSheet = true } label: {
+        Label("Add Songs", systemImage: "plus")
+      }
+    }
+
+    shareLinks
+
+    if !isSmartPlaylist {
+      Button {
+        isEditing.toggle()
+      } label: {
+        Label(
+          isEditing ? "Done" : "Edit Order",
+          systemImage: isEditing ? "checkmark" : "arrow.up.arrow.down"
+        )
+      }
+    }
+
+    Divider()
+
+    if playlist.playlistType != .likedSongs {
+      Button { playlistManager.togglePin(playlist) } label: {
+        Label(
+          playlist.isPinned ? "Unpin" : "Pin",
+          systemImage: playlist.isPinned ? "pin.slash" : "pin"
+        )
+      }
+    }
+
+    #if os(iOS)
+      Button {
+        WatchSyncService.shared.updateSyncStatus(
+          for: playlist, shouldSync: !playlist.shouldSyncToWatch)
+      } label: {
+        Label(
+          playlist.shouldSyncToWatch ? "Remove from Watch" : "Sync to Watch",
+          systemImage: playlist.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
+        )
+      }
+    #endif
+
+    if playlist.playlistType == .custom || playlist.playlistType == .smart {
+      Divider()
+      Button(role: .destructive) { showingDeleteConfirmation = true } label: {
+        Label("Delete Playlist", systemImage: "trash")
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var shareLinks: some View {
+    if !playlist.orderedSongs.isEmpty, let url = playlistJSONShareURL {
+      ShareLink(
+        item: url,
+        subject: Text(playlist.name),
+        message: Text(
+          "Portable playlist export from Ampwave with stable track identifiers and metadata."
+        ),
+        preview: SharePreview(playlist.name, icon: Image(systemName: "music.note.list"))
+      ) {
+        Label("Share JSON Playlist…", systemImage: "square.and.arrow.up")
+      }
+    }
+    if !playlist.orderedSongs.isEmpty, let url = playlistM3UShareURL {
+      ShareLink(
+        item: url,
+        subject: Text(playlist.name),
+        message: Text(
+          "Extended M3U playlist from Ampwave with metadata-based track resolution."
+        ),
+        preview: SharePreview(playlist.name, icon: Image(systemName: "music.note.list"))
+      ) {
+        Label("Share M3U Playlist…", systemImage: "music.note.list")
+      }
     }
   }
 

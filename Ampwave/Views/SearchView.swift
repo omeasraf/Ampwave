@@ -157,9 +157,7 @@ struct FilterChip: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .glassEffect(
-          themeManager.coloredSurfaces
-            ? (isSelected ? .regular.tint(themeManager.accentColor.opacity(0.25)) : .regular)
-            : .identity,
+          .identity,
           in: Capsule()
         )
     }

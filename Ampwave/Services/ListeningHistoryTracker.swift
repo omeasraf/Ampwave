@@ -184,6 +184,23 @@ final class ListeningHistoryTracker {
     getStatistics(for: song)?.isDisliked ?? false
   }
 
+  func setRating(_ rating: Int?, for song: LibrarySong) {
+    guard modelContext != nil else { return }
+
+    let stats = getOrCreateStatistics(for: song)
+    if let rating {
+      stats.userRating = min(max(rating, 1), 5)
+    } else {
+      stats.userRating = nil
+    }
+
+    try? modelContext?.save()
+  }
+
+  func rating(for song: LibrarySong) -> Int? {
+    getStatistics(for: song)?.userRating
+  }
+
   /// Gets recently played songs (unique, ordered by most recent)
   func getRecentlyPlayed(limit: Int = 20) -> [LibrarySong] {
     guard let modelContext = modelContext else { return [] }

@@ -102,6 +102,41 @@ private func optimizedLevenshteinDistance(_ a: String, _ b: String, maxDistance:
   return previousRow[aLen] <= maxDistance
 }
 
+// MARK: - GridSizePicker
+
+/// Apple Music–style inline segmented icon control for grid density.
+struct GridSizePicker: View {
+  @Binding var selection: String
+  let options: [(id: String, icon: String)]
+
+  @Environment(ThemeManager.self) private var themeManager
+
+  var body: some View {
+    HStack(spacing: 0) {
+      ForEach(options, id: \.id) { option in
+        Button {
+          HapticManager.shared.select()
+          withAnimation(.easeInOut(duration: 0.15)) { selection = option.id }
+        } label: {
+          Image(systemName: option.icon)
+            .font(.system(size: 11, weight: .semibold))
+            .frame(width: 30, height: 26)
+            .foregroundStyle(selection == option.id ? themeManager.accentColor : .secondary)
+            .background(
+              selection == option.id
+                ? themeManager.accentColor.opacity(0.12)
+                : Color.clear,
+              in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .padding(3)
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+  }
+}
+
 // MARK: - LibrarySortMenu
 
 struct LibrarySortMenu: View {
@@ -150,7 +185,8 @@ struct LibrarySortMenu: View {
     case .songs:
       return [
         .titleAscending, .titleDescending, .artistAscending, .artistDescending,
-        .dateAddedDescending, .dateAddedAscending, .yearDescending, .yearAscending, .random,
+        .dateAddedDescending, .dateAddedAscending, .yearDescending, .yearAscending,
+        .ratingDescending, .ratingAscending, .random,
       ]
     case .albums:
       return [
@@ -354,9 +390,7 @@ struct LibraryView: View {
               in: RoundedRectangle(cornerRadius: 18, style: .continuous)
             )
             .glassEffect(
-              selectedTab == tab
-                ? .identity
-                : (themeManager.coloredSurfaces ? .regular.interactive() : .identity),
+              .identity,
               in: RoundedRectangle(cornerRadius: 18, style: .continuous)
             )
           }
@@ -445,7 +479,17 @@ struct AlbumsGridView: View {
       return albums.sorted { ($0.year ?? 0) < ($1.year ?? 0) }
     case .random:
       return albums.sorted { $0.id.uuidString < $1.id.uuidString }
+    case .ratingDescending:
+      return albums.sorted { albumRating($0) > albumRating($1) }
+    case .ratingAscending:
+      return albums.sorted { albumRating($0) < albumRating($1) }
     }
+  }
+
+  private func albumRating(_ album: Album) -> Double {
+    let ratings = album.songs.compactMap { ListeningHistoryTracker.shared.rating(for: $0) }
+    guard !ratings.isEmpty else { return 0 }
+    return Double(ratings.reduce(0, +)) / Double(ratings.count)
   }
 
   var body: some View {
@@ -485,15 +529,14 @@ struct AlbumsGridView: View {
     .background(themeManager.backgroundColor)
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
-        Menu {
-          Picker("Album Size", selection: $albumGridSizeRaw) {
-            Label("Small", systemImage: "square.grid.3x3.fill").tag("small")
-            Label("Medium", systemImage: "square.grid.2x2.fill").tag("medium")
-            Label("Large", systemImage: "square.fill").tag("large")
-          }
-        } label: {
-          Image(systemName: "square.grid.2x2")
-        }
+        GridSizePicker(
+          selection: $albumGridSizeRaw,
+          options: [
+            (id: "small",  icon: "square.grid.3x3.fill"),
+            (id: "medium", icon: "square.grid.2x2.fill"),
+            (id: "large",  icon: "rectangle.fill"),
+          ]
+        )
       }
     }
   }
@@ -590,14 +633,13 @@ struct ArtistsGridView: View {
     }
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
-        Menu {
-          Picker("Artist Size", selection: $artistGridSizeRaw) {
-            Label("Small", systemImage: "square.grid.3x3.fill").tag("small")
-            Label("Large", systemImage: "square.grid.2x2.fill").tag("large")
-          }
-        } label: {
-          Image(systemName: "square.grid.2x2")
-        }
+        GridSizePicker(
+          selection: $artistGridSizeRaw,
+          options: [
+            (id: "small", icon: "square.grid.3x3.fill"),
+            (id: "large", icon: "square.grid.2x2.fill"),
+          ]
+        )
       }
     }
   }

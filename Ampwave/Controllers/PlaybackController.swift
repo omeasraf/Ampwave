@@ -165,7 +165,7 @@ final class PlaybackController {
 
   // MARK: - Source Tracking
 
-  private var currentSource: PlaySource = .library
+  private(set) var currentSource: PlaySource = .library
   private var currentPlaylistId: UUID?
 
   private init() {
@@ -338,8 +338,20 @@ final class PlaybackController {
       let player = player
     else { return }
 
+    // If a crossfade is in progress and finished, it already advanced the queue
+    if crossfadeStarted {
+      completeCrossfade()
+      return
+    }
+
     // Ensure we are talking about the currently playing item that actually finished
     // AVQueuePlayer may have already moved currentItem forward, but 'item' is what just finished
+
+    let isEndOfQueue = currentQueueIndex >= max(queue.count - 1, 0)
+    if SleepTimerService.shared.handleTrackFinished(isEndOfQueue: isEndOfQueue) {
+      stopForSleepTimer(resetPosition: false)
+      return
+    }
 
     // If repeat one, we should restart the item
     if repeatMode == .one {
@@ -673,6 +685,36 @@ final class PlaybackController {
     play(queue[currentQueueIndex], from: source, playlistId: playlistId)
   }
 
+  func restoreSavedQueue(
+    _ songs: [LibrarySong],
+    currentIndex: Int,
+    shuffleMode: ShuffleMode,
+    repeatMode: RepeatMode
+  ) {
+    guard !songs.isEmpty else { return }
+
+    originalQueue = songs
+    queue = songs
+    currentQueueIndex = min(max(currentIndex, 0), songs.count - 1)
+    if self.shuffleMode != .off {
+      self.shuffleMode = .off
+    }
+    self.repeatMode = repeatMode
+    play(queue[currentQueueIndex], from: .library)
+    _ = shuffleMode  // Preserved in presets for future UX, but restore keeps explicit queue order.
+    saveState()
+  }
+
+  /// Starts a radio queue seeded by `song`.
+  /// The seed plays first, followed by up to 25 similar tracks discovered by
+  /// RecommendationEngine. Playback source is `.radio` so history/stats handle
+  /// it correctly.
+  func playRadio(from song: LibrarySong) {
+    let similar = RecommendationEngine.shared.buildRadioQueue(seed: song, limit: 25)
+    let radioQueue = [song] + similar
+    playQueue(radioQueue, startingAt: 0, from: .radio)
+  }
+
   func playAlbum(_ album: Album, startingAtTrack index: Int = 0) {
     let sortedSongs = album.songs.sorted {
       ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0)
@@ -709,6 +751,23 @@ final class PlaybackController {
     isPlaying = false
     historyTracker.songPaused()
     updateNowPlaying()
+  }
+
+  func stopForSleepTimer(resetPosition: Bool = false) {
+    player?.pause()
+    isPlaying = false
+    historyTracker.songPaused()
+
+    if resetPosition {
+      seek(to: 0)
+    } else {
+      if let currentItem {
+        currentTime = max(currentTime, currentItem.duration)
+      }
+      updateCurrentLyric()
+      updateNowPlaying()
+      saveState()
+    }
   }
 
   func playPause() {
@@ -794,6 +853,8 @@ final class PlaybackController {
   }
 
   func playNext() {
+    cleanupCrossfade()
+
     if let current = currentItem, currentTime < 10 {
       historyTracker.songEnded(skipped: true)
     } else {
@@ -1298,6 +1359,95 @@ final class PlaybackController {
       )
     }
   }
+  // MARK: - Crossfade
+
+  private var crossfadePlayer: AVPlayer?
+  private var crossfadeNextSong: LibrarySong?
+  private var crossfadeStarted = false
+
+  private func startCrossfade(to nextSong: LibrarySong) {
+    guard !crossfadeStarted else { return }
+    crossfadeStarted = true
+    crossfadeNextSong = nextSong
+
+    Task {
+      let item = await createPlayerItem(for: nextSong)
+      await MainActor.run {
+        let cf = AVPlayer(playerItem: item)
+        cf.volume = 0
+        self.crossfadePlayer = cf
+        cf.play()
+        print("[CROSSFADE] Started crossfade to \(nextSong.title)")
+      }
+    }
+  }
+
+  private func tickCrossfade() {
+    guard crossfadeStarted,
+      let cf = crossfadePlayer,
+      duration > 0,
+      let prefs = preferences,
+      prefs.crossfadeEnabled
+    else { return }
+
+    let remaining = max(0, duration - currentTime)
+    let fadeDuration = max(0.1, prefs.crossfadeDuration)
+    let progress = Float(max(0, min(1, 1 - (remaining / fadeDuration))))
+
+    player?.volume = (1 - progress) * effectiveOutputVolume
+    cf.volume = progress * effectiveOutputVolume
+
+    if progress >= 1.0 {
+      completeCrossfade()
+    }
+  }
+
+  private func completeCrossfade() {
+    guard let cf = crossfadePlayer,
+      let cfItem = cf.currentItem,
+      let nextSong = crossfadeNextSong
+    else {
+      cleanupCrossfade()
+      return
+    }
+
+    guard currentQueueIndex + 1 < queue.count else {
+      cleanupCrossfade()
+      return
+    }
+
+    cf.pause()
+    let nextIndex = currentQueueIndex + 1
+
+    cleanupPlayer()
+
+    let newPlayer = AVQueuePlayer(items: [cfItem])
+    newPlayer.volume = effectiveOutputVolume
+    self.player = newPlayer
+    self.addTimeObserver()
+    self.observePlayerItemChange()
+    newPlayer.play()
+
+    currentQueueIndex = nextIndex
+    currentItem = nextSong
+    isPlaying = true
+
+    prepareNextItem()
+    updateUIForNewItem()
+    historyTracker.songStarted(nextSong, source: currentSource, playlistId: currentPlaylistId)
+    saveState()
+
+    cleanupCrossfade()
+    print("[CROSSFADE] Completed crossfade — now playing \(nextSong.title)")
+  }
+
+  private func cleanupCrossfade() {
+    crossfadePlayer?.pause()
+    crossfadePlayer = nil
+    crossfadeNextSong = nil
+    crossfadeStarted = false
+  }
+
   // MARK: - Observers
 
   private func addTimeObserver() {
@@ -1317,6 +1467,25 @@ final class PlaybackController {
       guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
       self.currentTime = time.seconds
       self.updateCurrentLyric()
+
+      // Crossfade tick
+      if let prefs = self.preferences, prefs.crossfadeEnabled,
+        prefs.crossfadeDuration > 0, self.isPlaying, self.duration > 0
+      {
+        let remaining = self.duration - self.currentTime
+        let fadeDuration = prefs.crossfadeDuration
+
+        if !self.crossfadeStarted && remaining <= fadeDuration && remaining > 0 {
+          let nextIndex = self.currentQueueIndex + 1
+          if nextIndex < self.queue.count {
+            self.startCrossfade(to: self.queue[nextIndex])
+          }
+        }
+
+        if self.crossfadeStarted {
+          self.tickCrossfade()
+        }
+      }
 
       // Periodically save time (every 5 seconds)
       if Int(self.currentTime) % 5 == 0 {

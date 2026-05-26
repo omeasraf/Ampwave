@@ -10,6 +10,9 @@ internal import SwiftUI
 struct QueueSheetView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(ThemeManager.self) private var themeManager
+  @State private var presets: [QueuePreset] = QueuePresetService.loadPresets()
+  @State private var showingSavePresetAlert = false
+  @State private var presetName = ""
   private var playback: PlaybackController { PlaybackController.shared }
 
   var body: some View {
@@ -46,6 +49,28 @@ struct QueueSheetView: View {
           }
           .listRowBackground(themeManager.cardBackgroundColor)
         }
+
+        if !presets.isEmpty {
+          Section("Saved Queues") {
+            ForEach(presets) { preset in
+              Button {
+                if QueuePresetService.restorePreset(preset, playback: playback) {
+                  dismiss()
+                }
+              } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text(preset.name)
+                    .font(.system(size: 15, weight: .semibold))
+                  Text("\(preset.songIDs.count) songs")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                }
+              }
+            }
+            .onDelete(perform: deletePresets)
+          }
+          .listRowBackground(themeManager.cardBackgroundColor)
+        }
       }
       .background(themeManager.backgroundColor)
       .scrollContentBackground(.hidden)
@@ -56,6 +81,15 @@ struct QueueSheetView: View {
           ToolbarItem(placement: .topBarLeading) {
             EditButton()
           }
+          ToolbarItem(placement: .principal) {
+            if !playback.queue.isEmpty {
+              Button("Save Queue") {
+                presetName = queueDefaultName
+                showingSavePresetAlert = true
+              }
+              .font(.caption.weight(.semibold))
+            }
+          }
           ToolbarItem(placement: .topBarTrailing) {
             Button("Done") {
               dismiss()
@@ -64,6 +98,16 @@ struct QueueSheetView: View {
           }
         }
       #endif
+      .alert("Save Queue Preset", isPresented: $showingSavePresetAlert) {
+        TextField("Preset Name", text: $presetName)
+        Button("Save") {
+          _ = QueuePresetService.saveCurrentQueue(named: presetName, playback: playback)
+          presets = QueuePresetService.loadPresets()
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("Save the current queue and position for quick access later.")
+      }
     }
   }
 
@@ -94,5 +138,20 @@ struct QueueSheetView: View {
       let actualDestination = offset + (destination > sourceIndex ? destination - 1 : destination)
       playback.moveSong(from: actualSource, to: actualDestination)
     }
+  }
+
+  private var queueDefaultName: String {
+    if let current = playback.currentItem {
+      return "Queue from \(current.title)"
+    }
+    return "Saved Queue"
+  }
+
+  private func deletePresets(at offsets: IndexSet) {
+    let targets = offsets.map { presets[$0] }
+    for preset in targets {
+      QueuePresetService.deletePreset(id: preset.id)
+    }
+    presets = QueuePresetService.loadPresets()
   }
 }

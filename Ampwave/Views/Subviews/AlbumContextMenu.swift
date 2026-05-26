@@ -19,7 +19,6 @@ struct AlbumContextMenuModifier: ViewModifier {
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
   private var library: SongLibrary { SongLibrary.shared }
-
   private var isAlbumFavorited: Bool {
     !album.songs.isEmpty && album.songs.allSatisfy { playlistManager.isLiked(song: $0) }
   }
@@ -160,6 +159,7 @@ struct SongContextMenuModifier: ViewModifier {
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
   private var library: SongLibrary { SongLibrary.shared }
+  private var historyTracker: ListeningHistoryTracker { ListeningHistoryTracker.shared }
 
   private var availablePlaylists: [Playlist] {
     playlistManager.playlists.filter { $0.playlistType != .likedSongs }
@@ -192,6 +192,13 @@ struct SongContextMenuModifier: ViewModifier {
         }
 
         Button {
+          HapticManager.shared.radioStart()
+          playback.playRadio(from: song)
+        } label: {
+          Label("Go to Radio", systemImage: "antenna.radiowaves.left.and.right")
+        }
+
+        Button {
           if let onEdit {
             onEdit()
           } else {
@@ -202,6 +209,7 @@ struct SongContextMenuModifier: ViewModifier {
         }
 
         Button {
+          HapticManager.shared.like()
           _ = playlistManager.toggleLike(song: song)
         } label: {
           Label(
@@ -211,11 +219,29 @@ struct SongContextMenuModifier: ViewModifier {
         }
 
         Button {
+          HapticManager.shared.dislike()
           _ = playlistManager.toggleDisliked(song: song)
         } label: {
           Label(
             playlistManager.isDisliked(song: song) ? "Clear Dislike" : "Dislike Song",
             systemImage: playlistManager.isDisliked(song: song) ? "hand.thumbsdown.slash" : "hand.thumbsdown"
+          )
+        }
+
+        Menu {
+          Button("Clear Rating") {
+            historyTracker.setRating(nil, for: song)
+          }
+          ForEach(1...5, id: \.self) { rating in
+            Button(String(repeating: "★", count: rating)) {
+              historyTracker.setRating(rating, for: song)
+            }
+          }
+        } label: {
+          let currentRating = historyTracker.rating(for: song) ?? 0
+          Label(
+            currentRating > 0 ? "Rating: \(currentRating)/5" : "Rate Song",
+            systemImage: "star"
           )
         }
 

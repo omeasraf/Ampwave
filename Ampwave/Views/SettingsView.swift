@@ -17,6 +17,7 @@ struct SettingsView: View {
   @Environment(\.modelContext) private var modelContext
   @State private var importType: ImportType?
   @State private var isShowingImporter = false
+  @State private var isShowingBackupImporter = false
   @State private var importError: String?
   @State private var isImporting = false
   @State private var importProgress: Double = 0
@@ -26,6 +27,7 @@ struct SettingsView: View {
   @State private var showingResetConfirmation = false
   @State private var showingResetStatsConfirmation = false
   @State private var isResetting = false
+  @State private var backupExportURL: URL?
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -103,6 +105,15 @@ struct SettingsView: View {
         }
         importType = nil
         isShowingImporter = false
+      }
+    }
+    .fileImporter(
+      isPresented: $isShowingBackupImporter,
+      allowedContentTypes: [.json],
+      allowsMultipleSelection: false
+    ) { result in
+      Task { @MainActor in
+        await handleBackupImport(result)
       }
     }
     .alert("Clear Cache?", isPresented: $showingClearCacheConfirmation) {
@@ -515,6 +526,14 @@ struct SettingsView: View {
             set: { preferences.copyMusicToStorage = $0 }
           )
         )
+
+        Toggle(
+          "Live Library Monitoring",
+          isOn: Binding(
+            get: { LibraryMonitorService.shared.isEnabled },
+            set: { LibraryMonitorService.shared.isEnabled = $0 }
+          )
+        )
       }
     } header: {
       Text("Library")
@@ -657,6 +676,32 @@ struct SettingsView: View {
         Label("Review Missing Metadata", systemImage: "questionmark.circle")
       }
 
+      if let backupExportURL {
+        ShareLink(
+          item: backupExportURL,
+          subject: Text("Ampwave Backup"),
+          message: Text("Versioned library-state backup exported from Ampwave."),
+          preview: SharePreview(
+            "Ampwave Backup",
+            icon: Image(systemName: "externaldrive.badge.checkmark")
+          )
+        ) {
+          Label("Share Latest Backup", systemImage: "square.and.arrow.up")
+        }
+      }
+
+      Button {
+        exportBackup()
+      } label: {
+        Label("Export Backup", systemImage: "externaldrive.badge.plus")
+      }
+
+      Button {
+        isShowingBackupImporter = true
+      } label: {
+        Label("Restore Backup", systemImage: "arrow.clockwise.icloud")
+      }
+
       Button {
         showingClearCacheConfirmation = true
       } label: {
@@ -758,6 +803,34 @@ struct SettingsView: View {
     }
 
     isImporting = false
+  }
+
+  private func exportBackup() {
+    do {
+      backupExportURL = try LibraryBackupService.exportBackup(from: modelContext)
+    } catch {
+      importError = "Backup export failed: \(error.localizedDescription)"
+    }
+  }
+
+  private func handleBackupImport(_ result: Result<[URL], Error>) async {
+    importError = nil
+
+    do {
+      guard let url = try result.get().first else { return }
+      let secured = url.startAccessingSecurityScopedResource()
+      defer {
+        if secured { url.stopAccessingSecurityScopedResource() }
+      }
+
+      let data = try Data(contentsOf: url)
+      let summary = try LibraryBackupService.importBackup(data: data, into: modelContext)
+      importError = summary.userFacingText
+      await library.loadSongs()
+      await playlistManager.loadPlaylists()
+    } catch {
+      importError = "Backup restore failed: \(error.localizedDescription)"
+    }
   }
 
   private func handleFolderImport(_ result: Result<[URL], Error>) async {

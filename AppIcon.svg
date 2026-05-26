@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+
+    <!-- Deep dark background: very dark purple, subtle radial lift at center -->
+    <radialGradient id="bg" cx="50%" cy="45%" r="68%" gradientUnits="objectBoundingBox">
+      <stop offset="0%"   stop-color="#200B40"/>
+      <stop offset="100%" stop-color="#07020D"/>
+    </radialGradient>
+
+    <!-- Horizontal gradient across all bars: light pink → brand pink → deep crimson pink -->
+    <!-- gradientUnits="userSpaceOnUse" so the gradient spans the whole bar group -->
+    <linearGradient id="barGrad"
+                    x1="117" y1="0" x2="907" y2="0"
+                    gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#FF6DB5"/>
+      <stop offset="50%"  stop-color="#E83D89"/>
+      <stop offset="100%" stop-color="#C0206A"/>
+    </linearGradient>
+
+    <!-- Same gradient but used for the glow pass (larger blur radius) -->
+    <linearGradient id="barGradGlow"
+                    x1="117" y1="0" x2="907" y2="0"
+                    gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#FF6DB5"/>
+      <stop offset="50%"  stop-color="#E83D89"/>
+      <stop offset="100%" stop-color="#C0206A"/>
+    </linearGradient>
+
+    <!-- Soft bloom: blurred copy of bars renders behind the sharp bars -->
+    <filter id="bloom" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="22" result="blur"/>
+    </filter>
+
+  </defs>
+
+  <!-- ── Background ── -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!--
+    ── Bar layout ──
+    9 bars  ·  width 70 px  ·  gap 20 px  ·  step 90 px
+    Total width: 9×70 + 8×20 = 790 px
+    Horizontal margin: (1024 − 790) / 2 = 117 px  →  start x = 117
+
+    Heights (px), centered on y = 512:
+      Bar 1: 200   y = 412  (40 % of peak)
+      Bar 2: 320   y = 352  (64 %)
+      Bar 3: 425   y = 300  (85 %)   ← secondary accent
+      Bar 4: 500   y = 262  (100 %)  ← tallest / main beat
+      Bar 5: 375   y = 325  (75 %)
+      Bar 6: 275   y = 375  (55 %)
+      Bar 7: 400   y = 312  (80 %)   ← echo peak
+      Bar 8: 300   y = 362  (60 %)
+      Bar 9: 175   y = 437  (35 %)
+
+    rx = 35 (= width / 2) → fully rounded pill caps top & bottom
+  -->
+
+  <!-- ── Bloom pass (blurred, behind sharp bars) ── -->
+  <g filter="url(#bloom)" opacity="0.55">
+    <rect x="117" y="412" width="70" height="200" rx="35" fill="url(#barGradGlow)"/>
+    <rect x="207" y="352" width="70" height="320" rx="35" fill="url(#barGradGlow)"/>
+    <rect x="297" y="300" width="70" height="425" rx="35" fill="url(#barGradGlow)"/>
+    <rect x="387" y="262" width="70" height="500" rx="35" fill="url(#barGradGlow)"/>
+    <rect x="477" y="325" width="70" height="375" rx="35" fill="url(#barGradGlow)"/>
+    <rect x="567" y="375" width="70" height="275" rx="35" fill="url(#barGradGlow)"/>
+    <rect x="657" y="312" width="70" height="400" rx="35" fill="url(#barGradGlow)"/>
+    <rect x="747" y="362" width="70" height="300" rx="35" fill="url(#barGradGlow)"/>
+    <rect x="837" y="437" width="70" height="175" rx="35" fill="url(#barGradGlow)"/>
+  </g>
+
+  <!-- ── Sharp bars (foreground) ── -->
+  <rect x="117" y="412" width="70" height="200" rx="35" fill="url(#barGrad)"/>
+  <rect x="207" y="352" width="70" height="320" rx="35" fill="url(#barGrad)"/>
+  <rect x="297" y="300" width="70" height="425" rx="35" fill="url(#barGrad)"/>
+  <rect x="387" y="262" width="70" height="500" rx="35" fill="url(#barGrad)"/>
+  <rect x="477" y="325" width="70" height="375" rx="35" fill="url(#barGrad)"/>
+  <rect x="567" y="375" width="70" height="275" rx="35" fill="url(#barGrad)"/>
+  <rect x="657" y="312" width="70" height="400" rx="35" fill="url(#barGrad)"/>
+  <rect x="747" y="362" width="70" height="300" rx="35" fill="url(#barGrad)"/>
+  <rect x="837" y="437" width="70" height="175" rx="35" fill="url(#barGrad)"/>
+
+  <!-- ── Subtle top sheen on each bar (adds a specular feel at the cap) ── -->
+  <g opacity="0.18">
+    <rect x="117" y="412" width="70" height="60" rx="35"
+          fill="white"/>
+    <rect x="207" y="352" width="70" height="60" rx="35"
+          fill="white"/>
+    <rect x="297" y="300" width="70" height="60" rx="35"
+          fill="white"/>
+    <rect x="387" y="262" width="70" height="60" rx="35"
+          fill="white"/>
+    <rect x="477" y="325" width="70" height="60" rx="35"
+          fill="white"/>
+    <rect x="567" y="375" width="70" height="60" rx="35"
+          fill="white"/>
+    <rect x="657" y="312" width="70" height="60" rx="35"
+          fill="white"/>
+    <rect x="747" y="362" width="70" height="60" rx="35"
+          fill="white"/>
+    <rect x="837" y="437" width="70" height="60" rx="35"
+          fill="white"/>
+  </g>
+
+</svg>

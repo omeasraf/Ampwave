@@ -21,6 +21,7 @@ struct SongEditSheet: View {
   @State private var genre: String
   @State private var trackNumber: String
   @State private var lyrics: String
+  @State private var rating: Int
   @State private var isLoadingLyrics: Bool = false
 
   // Artwork
@@ -45,6 +46,7 @@ struct SongEditSheet: View {
   @State private var processingChain: String
 
   private var library: SongLibrary { SongLibrary.shared }
+  private var historyTracker: ListeningHistoryTracker { ListeningHistoryTracker.shared }
 
   init(song: LibrarySong, isPresented: Binding<Bool>) {
     self.song = song
@@ -58,6 +60,7 @@ struct SongEditSheet: View {
       initialValue: song.trackNumber.map(String.init) ?? ""
     )
     _lyrics = State(initialValue: song.lyrics ?? "")
+    _rating = State(initialValue: ListeningHistoryTracker.shared.rating(for: song) ?? 0)
 
     _isRemoteArtwork = State(initialValue: song.isRemoteArtwork)
     _artworkPath = State(initialValue: song.artworkPath)
@@ -253,6 +256,16 @@ struct SongEditSheet: View {
               .keyboardType(.numberPad)
             #endif
             .onChange(of: trackNumber) { markFieldAsEdited("trackNumber") }
+        }
+        .listRowBackground(themeManager.cardBackgroundColor)
+
+        Section("Preference") {
+          Picker("Rating", selection: $rating) {
+            Text("None").tag(0)
+            ForEach(1...5, id: \.self) { value in
+              Text(String(repeating: "★", count: value)).tag(value)
+            }
+          }
         }
         .listRowBackground(themeManager.cardBackgroundColor)
 
@@ -530,6 +543,7 @@ struct SongEditSheet: View {
 
     // Save lyrics
     LyricsService.shared.saveLyrics(for: song, content: lyrics)
+    historyTracker.setRating(rating == 0 ? nil : rating, for: song)
 
     // Persist changes using library service to update search index version
     library.saveContext()

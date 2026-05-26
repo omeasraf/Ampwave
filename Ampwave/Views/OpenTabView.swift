@@ -161,6 +161,8 @@ struct OpenTabView: View {
           print("[DEBUG] Background indexing complete")
         }
 
+        LibraryMonitorService.shared.start()
+
         print("[DEBUG] Service initialization complete")
       }
     }

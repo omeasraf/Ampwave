@@ -118,15 +118,15 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
       accent = Color.accentColor
     case .light:
       bg = Color(red: 250 / 255.0, green: 250 / 255.0, blue: 252 / 255.0)
-      accent = Color(red: 236 / 255.0, green: 72 / 255.0, blue: 153 / 255.0)
+      accent = Color(red: 232 / 255.0, green: 61 / 255.0, blue: 137 / 255.0)  // #E83D89
       card = Color(red: 244 / 255.0, green: 244 / 255.0, blue: 247 / 255.0)
     case .dark:
       bg = Color(red: 18 / 255.0, green: 18 / 255.0, blue: 20 / 255.0)
-      accent = Color(red: 236 / 255.0, green: 72 / 255.0, blue: 153 / 255.0)
+      accent = Color(red: 232 / 255.0, green: 61 / 255.0, blue: 137 / 255.0)  // #E83D89
       card = Color(red: 30 / 255.0, green: 30 / 255.0, blue: 33 / 255.0)
     case .oled:
       bg = .black
-      accent = Color(red: 236 / 255.0, green: 72 / 255.0, blue: 153 / 255.0)
+      accent = Color(red: 232 / 255.0, green: 61 / 255.0, blue: 137 / 255.0)  // #E83D89
       card = Color(red: 22 / 255.0, green: 22 / 255.0, blue: 24 / 255.0)
     case .roseGold:
       bg = Color(red: 0.98, green: 0.92, blue: 0.94)
@@ -259,20 +259,11 @@ final class ThemeManager {
 
   var accentColor: Color { themeConfig.accent }
   var backgroundColor: Color { themeConfig.background }
-  var cardBackgroundColor: Color {
-    if coloredSurfaces {
-      return themeConfig.cardBackground
-    } else {
-      // Use platform-native neutral surfaces when colored surfaces are disabled
-      #if os(macOS)
-        return Color(nsColor: .controlBackgroundColor)
-      #elseif os(iOS)
-        return Color(uiColor: .secondarySystemGroupedBackground)
-      #else
-        return themeConfig.isDark ? Color(white: 0.12) : Color(white: 0.94)
-      #endif
-    }
-  }
+  // cardBackgroundColor is intentionally NOT gated on coloredSurfaces.
+  // Only SongCard / ArtistCard / AlbumCard check that flag for their own
+  // backgrounds. List-row backgrounds in Settings, sheets, and the player
+  // must stay consistent regardless of the toggle.
+  var cardBackgroundColor: Color { themeConfig.cardBackground }
 
   var colorScheme: ColorScheme? {
     if currentTheme == .custom {
@@ -551,20 +542,28 @@ final class UserPreferences: Identifiable {
 
   init() {
     self.id = UUID()
+
+    // If the user configured these during onboarding, honour their choices.
+    // Keys are set by OnboardingView before UserPreferences is first created.
+    let ud = UserDefaults.standard
+    func onboardingBool(_ key: String, default fallback: Bool) -> Bool {
+      ud.object(forKey: key) != nil ? ud.bool(forKey: key) : fallback
+    }
+
     self.crossfadeEnabled = false
     self.crossfadeDuration = 2.0
-    self.gaplessPlayback = true
-    self.normalizeVolume = false
+    self.gaplessPlayback = onboardingBool("com.ampwave.onboarding.gaplessPlayback", default: true)
+    self.normalizeVolume = onboardingBool("com.ampwave.onboarding.normalizeVolume", default: false)
     self.defaultShuffleModeRaw = ShuffleMode.off.rawValue
     self.defaultRepeatModeRaw = RepeatMode.off.rawValue
     self.showNowPlayingOnLaunch = false
     self.expandPlayerAutomatically = false
     self.showLyricsByDefault = true
     self.artworkQualityRaw = ArtworkQuality.high.rawValue
-    self.autoFetchMetadata = true
-    self.autoFetchLyrics = true
+    self.autoFetchMetadata = onboardingBool("com.ampwave.onboarding.autoFetchMetadata", default: true)
+    self.autoFetchLyrics = onboardingBool("com.ampwave.onboarding.autoFetchLyrics", default: true)
     self.wordSyncedLyricsEnabled = true
-    self.copyMusicToStorage = true
+    self.copyMusicToStorage = onboardingBool("com.ampwave.onboarding.copyToStorage", default: true)
     self.preferOnlineArtwork = true
     self.preferEmbeddedArtwork = true
     self.organizeByAlbum = true
