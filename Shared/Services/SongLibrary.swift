@@ -510,12 +510,10 @@ import SwiftData
       albums = try modelContext.fetch(descriptor)
       print("[DEBUG] SongLibrary.loadAlbums: Fetched \(albums.count) albums")
 
-      // Merge duplicate albums if setting is enabled
-      let settings = AppSettings.getOrCreate(in: modelContext)
-      if settings.mergeAlbumDuplicates {
-        print("[DEBUG] SongLibrary.loadAlbums: Merging duplicate albums")
-        await mergeAlbumDuplicates(in: modelContext)
-      }
+      // Always merge duplicate albums to fix any historical splits caused by
+      // track-artist variations (e.g. "NF; mgk" vs "NF").
+      print("[DEBUG] SongLibrary.loadAlbums: Merging duplicate albums")
+      await mergeAlbumDuplicates(in: modelContext)
     } catch {
       print("[DEBUG] SongLibrary.loadAlbums: Error fetching albums: \(error)")
       albums = []
@@ -1693,9 +1691,11 @@ import SwiftData
   ///
   /// Priority (mirrors iTunes / Apple Music / Spotify behaviour):
   ///   1. Compilation flag (TCMP=1) → "Various Artists"
-  ///   2. Album Artist tag (TPE2 / aART) → use directly; it is the authoritative source
-  ///   3. No Album Artist → extract the primary artist from the track artist field
-  ///      so "NF; mgk" and "NF feat. James Arthur" both group with plain "NF" tracks
+  ///   2. Album Artist tag (TPE2 / aART) → extract primary artist from it.
+  ///      Some taggers write "NF; Britt Nicole" or "NF; fleurie" into the Album Artist
+  ///      field for collab tracks. extractPrimaryArtist strips the featured artists so
+  ///      every track on the same album resolves to the same canonical artist.
+  ///   3. No Album Artist → extract the primary artist from the track artist field.
   private func resolveAlbumArtist(
     albumArtist: String?,
     trackArtist: String,
@@ -1703,7 +1703,7 @@ import SwiftData
   ) -> String {
     if isCompilation { return "Various Artists" }
     if let aa = albumArtist, !aa.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      return aa.trimmingCharacters(in: .whitespacesAndNewlines)
+      return extractPrimaryArtist(from: aa.trimmingCharacters(in: .whitespacesAndNewlines))
     }
     return extractPrimaryArtist(from: trackArtist)
   }
@@ -1765,6 +1765,9 @@ import SwiftData
   /// Merges duplicate albums that refer to the same release.
   /// Uses the same normalised (name, resolved-artist) key so albums previously
   /// split by case differences or featured-artist variants are consolidated.
+  /// Also applies extractPrimaryArtist to the stored album artist so albums that
+  /// were split by old code (which used raw track-artist strings like "NF; mgk")
+  /// are healed into the correct single album.
   private func mergeAlbumDuplicates(in modelContext: ModelContext) async {
     do {
       let descriptor = FetchDescriptor<Album>(
@@ -1773,11 +1776,16 @@ import SwiftData
       let allAlbums = try modelContext.fetch(descriptor)
 
       // Group by normalised (name, canonical-artist) key.
+      // extractPrimaryArtist is applied so "NF; mgk" and "NF" map to the same key.
       var albumGroups: [String: [Album]] = [:]
       for album in allAlbums {
-        let artistKey = album.isCompilation
-          ? "various artists"
-          : normalizeForGrouping(album.artist ?? "")
+        let artistKey: String
+        if album.isCompilation {
+          artistKey = "various artists"
+        } else {
+          let primary = extractPrimaryArtist(from: album.artist ?? "")
+          artistKey = normalizeForGrouping(primary)
+        }
         let key = "\(normalizeForGrouping(album.name))|\(artistKey)"
         if albumGroups[key] == nil {
           albumGroups[key] = []

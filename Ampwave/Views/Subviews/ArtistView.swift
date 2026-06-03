@@ -229,10 +229,10 @@ struct ArtistView: View {
     ScrollView(.horizontal, showsIndicators: false) {
       LazyHStack(spacing: 16) {
         ForEach(viewModel.albums) { album in
-          NavigationLink(destination: AlbumView(album: album)) {
-            AlbumCard(album: album)
-          }
-          .buttonStyle(.plain)
+          // AlbumCard already wraps a NavigationLink; adding artworkSize + frame
+          // prevents the card from collapsing or expanding to fill the scroll width.
+          AlbumCard(album: album, artworkSize: 160)
+            .frame(width: 160)
         }
       }
       .padding(.horizontal, 20)

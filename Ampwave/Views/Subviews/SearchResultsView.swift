@@ -117,7 +117,8 @@ struct SearchResultsView: View {
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHStack(spacing: 16) {
           ForEach(albums) { album in
-            AlbumCard(album: album)
+            AlbumCard(album: album, artworkSize: 160)
+              .frame(width: 160)
               .onTapGesture {
                 onResultTapped()
               }

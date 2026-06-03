@@ -67,7 +67,7 @@ struct OpenPlayerView: View {
                           FullArtworkBackgroundView(artworkPath: playback.currentItem?.effectiveArtworkPath)
                               .frame(height: availableHeight * 0.62)
                               .overlay {
-                                  // Primary fade: artwork → theme background
+                                  // Primary fade:" artwork → theme background
                                   LinearGradient(
                                     stops: [
                                         .init(color: .clear, location: 0),
@@ -345,19 +345,29 @@ struct OpenPlayerView: View {
 
   private var playerBackground: some View {
     let coverArtAccent = userPreferences?.coverArtAccentPlayer ?? false
-    let topColor = coverArtAccent
-      ? rawArtworkColor.opacity(0.75)
-      : artworkColor.opacity(0.95)
-    let midColor = coverArtAccent
-      ? rawArtworkColor.opacity(0.30)
-      : themeManager.backgroundColor
-    // Bottom must match the tinted ScrollView background so the safe-area
-    // strip below the scroll content looks identical to the content area.
-    let bottomColor = coverArtAccent
-      ? rawArtworkColor.opacity(0.18)
-      : themeManager.backgroundColor.opacity(0.96)
+    let isFullBackground = userPreferences?.fullArtworkBackground ?? true
+
+    // When fullArtworkBackground is OFF, the top of the screen (navigation bar
+    // area) must NOT receive any artwork-derived tint — only the accent card and
+    // scroll body below carry the accent color.
+    let topColor: Color
+    let midColor: Color
+    let bottomColor: Color
+
+    if isFullBackground {
+      topColor = coverArtAccent ? rawArtworkColor.opacity(0.75) : artworkColor.opacity(0.95)
+      midColor = coverArtAccent ? rawArtworkColor.opacity(0.30) : themeManager.backgroundColor
+      bottomColor = coverArtAccent ? rawArtworkColor.opacity(0.18) : themeManager.backgroundColor.opacity(0.96)
+    } else {
+      // fullArtworkBackground OFF: top bar is always the plain theme background.
+      // coverArtAccent only affects the card tint and scroll body (handled in the
+      // ScrollView .background modifier), not the navigation bar region.
+      topColor = themeManager.backgroundColor
+      midColor = themeManager.backgroundColor
+      bottomColor = coverArtAccent ? rawArtworkColor.opacity(0.18) : themeManager.backgroundColor
+    }
+
     return ZStack {
-      // Solid base so semi-transparent gradient stops composite correctly.
       themeManager.backgroundColor.ignoresSafeArea()
       LinearGradient(
         colors: [topColor, midColor, bottomColor],

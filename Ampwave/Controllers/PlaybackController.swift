@@ -1450,6 +1450,8 @@ final class PlaybackController {
 
   // MARK: - Observers
 
+  private var lastStateSaveTime: TimeInterval = -999
+
   private func addTimeObserver() {
     guard let player = player else { return }
 
@@ -1458,7 +1460,10 @@ final class PlaybackController {
       timeObserver = nil
     }
 
-    let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
+    // 0.5 s is enough for lyric sync and progress display while keeping the
+    // main-thread update rate low. 0.1 s was causing every screen that embeds
+    // the mini player (Home, Search, Album, Artist) to redraw 10×/second.
+    let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
     let observer = player.addPeriodicTimeObserver(
       forInterval: interval,
       queue: .main
@@ -1487,8 +1492,9 @@ final class PlaybackController {
         }
       }
 
-      // Periodically save time (every 5 seconds)
-      if Int(self.currentTime) % 5 == 0 {
+      // Save at most once every 5 seconds (modulo check fires multiple ticks in a row)
+      if self.currentTime - self.lastStateSaveTime >= 5 {
+        self.lastStateSaveTime = self.currentTime
         self.saveState()
       }
     }
