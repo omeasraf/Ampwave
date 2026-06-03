@@ -39,6 +39,7 @@ final class Album: Identifiable, Hashable {
   }
   var createdDate: Date
   var isExplicit: Bool = false
+  var isCompilation: Bool = false
   var genre: [String]?
   var albumDescription: String?
   var appleMusicId: String?

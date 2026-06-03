@@ -25,6 +25,7 @@ struct OpenPlayerView: View {
   @State private var showingEqualizer = false
   @State private var showingSleepTimerOptions = false
   @State private var artworkColor: Color = .clear
+  @State private var rawArtworkColor: Color = .clear
   #if os(iOS)
     @State private var isAirPlayActive = false
   #endif
@@ -44,7 +45,8 @@ struct OpenPlayerView: View {
   var body: some View {
     NavigationStack {
       ZStack {
-        if userPreferences?.fullArtworkBackground ?? true {
+        let coverArtAccent = userPreferences?.coverArtAccentPlayer ?? false
+        if (userPreferences?.fullArtworkBackground ?? true) || coverArtAccent {
           playerBackground
         } else {
           themeManager.backgroundColor
@@ -61,9 +63,11 @@ struct OpenPlayerView: View {
                   VStack(spacing: 0) {
                       if isFullBackground {
                           // Taller artwork for full background mode
+                          let accentOn = userPreferences?.coverArtAccentPlayer ?? false
                           FullArtworkBackgroundView(artworkPath: playback.currentItem?.effectiveArtworkPath)
                               .frame(height: availableHeight * 0.62)
                               .overlay {
+                                  // Primary fade: artwork → theme background
                                   LinearGradient(
                                     stops: [
                                         .init(color: .clear, location: 0),
@@ -75,10 +79,30 @@ struct OpenPlayerView: View {
                                     endPoint: .bottom
                                   )
                               }
+                              .overlay {
+                                  // Accent tint layer: blends the bottom of the artwork
+                                  // into the same tinted color used for the scroll background.
+                                  if accentOn {
+                                      LinearGradient(
+                                        stops: [
+                                            .init(color: .clear, location: 0),
+                                            .init(color: rawArtworkColor.opacity(0.10), location: 0.65),
+                                            .init(color: rawArtworkColor.opacity(0.18), location: 1.0),
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                      )
+                                  }
+                              }
                       } else {
                           // Artwork same width as glass card
+                          let accentOn = userPreferences?.coverArtAccentPlayer ?? false
                           LargeArtworkImageView(
-                            artworkPath: playback.currentItem?.effectiveArtworkPath
+                            artworkPath: playback.currentItem?.effectiveArtworkPath,
+                            shadowColor: accentOn
+                              ? rawArtworkColor.opacity(0.55)
+                              : .black.opacity(0.15),
+                            shadowRadius: accentOn ? 32 : 20
                           )
                           .padding(.top, 10)
                           .padding(.bottom, 10)
@@ -105,6 +129,15 @@ struct OpenPlayerView: View {
                             } else {
                                 RoundedRectangle(cornerRadius: 32, style: .continuous)
                                     .fill(themeManager.cardBackgroundColor)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 32, style: .continuous)
+                                            .fill(coverArtCardTint)
+                                    )
+                                    .shadow(
+                                        color: coverArtCardTint.opacity(0.6),
+                                        radius: (userPreferences?.coverArtAccentPlayer ?? false) ? 20 : 0,
+                                        x: 0, y: 4
+                                    )
                             }
                         }
                       )
@@ -119,7 +152,13 @@ struct OpenPlayerView: View {
                       .padding(.bottom, 24)
               }
           }
-          .background(themeManager.backgroundColor)
+          .background {
+            let accentOn = userPreferences?.coverArtAccentPlayer ?? false
+            themeManager.backgroundColor
+            if accentOn {
+              rawArtworkColor.opacity(0.18)
+            }
+          }
         }
         .ignoresSafeArea(edges: (userPreferences?.fullArtworkBackground ?? true) ? .top : [])
       }
@@ -305,18 +344,34 @@ struct OpenPlayerView: View {
   }
 
   private var playerBackground: some View {
-    ZStack {
+    let coverArtAccent = userPreferences?.coverArtAccentPlayer ?? false
+    let topColor = coverArtAccent
+      ? rawArtworkColor.opacity(0.75)
+      : artworkColor.opacity(0.95)
+    let midColor = coverArtAccent
+      ? rawArtworkColor.opacity(0.30)
+      : themeManager.backgroundColor
+    // Bottom must match the tinted ScrollView background so the safe-area
+    // strip below the scroll content looks identical to the content area.
+    let bottomColor = coverArtAccent
+      ? rawArtworkColor.opacity(0.18)
+      : themeManager.backgroundColor.opacity(0.96)
+    return ZStack {
+      // Solid base so semi-transparent gradient stops composite correctly.
+      themeManager.backgroundColor.ignoresSafeArea()
       LinearGradient(
-        colors: [
-          artworkColor.opacity(0.95),
-          themeManager.backgroundColor,
-          themeManager.backgroundColor.opacity(0.96),
-        ],
+        colors: [topColor, midColor, bottomColor],
         startPoint: .top,
         endPoint: .bottom
       )
       .ignoresSafeArea()
     }
+  }
+
+  private var coverArtCardTint: Color {
+    (userPreferences?.coverArtAccentPlayer ?? false)
+      ? rawArtworkColor.opacity(0.12)
+      : .clear
   }
 
   private var trackInfoSection: some View {
@@ -446,7 +501,7 @@ struct OpenPlayerView: View {
 
   private var extraControls: some View {
     VStack(spacing: 10) {
-      HStack(spacing: 12) {
+      HStack(spacing: 0) {
         playerUtilityButton(
           icon: "text.quote",
           isActive: isLyricsExpanded
@@ -473,16 +528,6 @@ struct OpenPlayerView: View {
           isActive: sleepTimer.isActive
         ) {
           showingSleepTimerOptions = true
-        }
-
-        playerUtilityButton(
-          icon: "antenna.radiowaves.left.and.right",
-          isActive: playback.currentSource == .radio
-        ) {
-          if let song = playback.currentItem {
-            HapticManager.shared.radioStart()
-            playback.playRadio(from: song)
-          }
         }
 
         playerUtilityButton(icon: "list.bullet", isActive: false) {
@@ -529,9 +574,11 @@ struct OpenPlayerView: View {
   }
 
   private var tabSection: some View {
-    VStack(spacing: 16) {
+    let accentOn = userPreferences?.coverArtAccentPlayer ?? false
+    let lyricsColor = accentOn ? rawArtworkColor.opacity(0.22) : artworkColor
+    return VStack(spacing: 16) {
       CompactLyricsView(
-        artworkColor: artworkColor,
+        artworkColor: lyricsColor,
         onExpand: {
           isLyricsExpanded = true
         }
@@ -591,25 +638,29 @@ struct OpenPlayerView: View {
       let url = PathManager.resolve(path)
     else {
       artworkColor = .clear
+      rawArtworkColor = .clear
       return
     }
 
-    let color = await Task.detached(priority: .userInitiated) { () -> Color in
+    let colors = await Task.detached(priority: .userInitiated) { () -> (Color, Color) in
       #if os(iOS)
-        if let image = UIImage(contentsOfFile: url.path) {
-          return image.dominantColor()?.opacity(0.3) ?? .clear
+        if let image = UIImage(contentsOfFile: url.path),
+           let dominant = image.dominantColor() {
+          return (dominant.opacity(0.3), dominant)
         }
       #else
-        if let image = NSImage(contentsOfFile: url.path) {
-          return image.dominantColor()?.opacity(0.3) ?? .clear
+        if let image = NSImage(contentsOfFile: url.path),
+           let dominant = image.dominantColor() {
+          return (dominant.opacity(0.3), dominant)
         }
       #endif
-      return .clear
+      return (.clear, .clear)
     }.value
 
     await MainActor.run {
       withAnimation(.easeInOut) {
-        artworkColor = color
+        artworkColor = colors.0
+        rawArtworkColor = colors.1
       }
     }
   }

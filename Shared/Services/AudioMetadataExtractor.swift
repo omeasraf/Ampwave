@@ -32,6 +32,7 @@ struct ExtractedAudioMetadata: Sendable {
   var metadataSourceTitle: String = "unknown"
   var metadataSourceArtist: String = "unknown"
   var metadataSourceAlbum: String = "unknown"
+  var isCompilation: Bool = false
   var isLive: Bool = false
   var isMedley: Bool = false
 
@@ -79,26 +80,46 @@ enum AudioMetadataExtractor: Sendable {
     var year: Int?
     var composer: String?
     var artwork: Data?
+    var isCompilation: Bool = false
 
     for item in allMetadata {
       let value = try? await item.load(.value)
+      let idRaw = item.identifier?.rawValue ?? ""
+      let idLower = idRaw.lowercased()
+
+      // ── Non-common-key path (format-specific identifiers) ──────────────────
       guard let key = item.commonKey else {
-        if let id = item.identifier?.rawValue {
-          if id.contains("lyrics") || id.contains("Lyrics") { lyrics = (value as? String) ?? lyrics }
-          else if id.contains("comment") || id.contains("Comment") || id.contains("description") { songDescription = (value as? String) ?? songDescription }
-          else if id.contains("year") || id.contains("Year") || id.contains("date") {
-            if let num = value as? NSNumber { year = num.intValue }
-            else if let str = value as? String { year = parseYear(str) }
+        if idRaw.contains("lyrics") || idRaw.contains("Lyrics") { lyrics = (value as? String) ?? lyrics }
+        else if idRaw.contains("comment") || idRaw.contains("Comment") || idRaw.contains("description") { songDescription = (value as? String) ?? songDescription }
+        else if idRaw.contains("year") || idRaw.contains("Year") || idRaw.contains("date") || idRaw.contains("Date") {
+          if let num = value as? NSNumber { year = num.intValue }
+          else if let str = value as? String { year = parseYear(str) }
+        }
+        else if (idRaw.contains("track") || idRaw.contains("Track")) && !idRaw.contains("artist") {
+          if let num = value as? NSNumber { trackNumber = num.intValue }
+          else if let str = value as? String { trackNumber = parseTrackNumber(str) }
+        }
+        else if idRaw.contains("disc") || idRaw.contains("Disc") { discNumber = (value as? NSNumber)?.intValue ?? discNumber }
+        // Compilation flag: ID3 TCMP, iTunes cpil
+        else if idRaw.contains("TCMP") || idRaw.contains("cpil") || idLower.contains("compilation") {
+          if let num = value as? NSNumber { isCompilation = num.boolValue }
+          else if let str = value as? String { isCompilation = (str == "1" || str.lowercased() == "true") }
+        }
+        // Album Artist:
+        // • ID3 MP3  → TPE2  (Band/Orchestra — de-facto Album Artist)
+        // • iTunes/M4A → aART (album artist atom)
+        // • FLAC/Ogg → ALBUMARTIST as a TXXX user-defined frame
+        else if idRaw.contains("TPE2") || idRaw.contains("aART")
+             || idLower.contains("albumartist") || idLower.contains("album artist")
+             || idLower.contains("album_artist") {
+          if let v = value as? String, !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            albumArtist = v
           }
-          else if id.contains("track") || id.contains("Track") {
-            if let num = value as? NSNumber { trackNumber = num.intValue }
-            else if let str = value as? String { trackNumber = parseTrackNumber(str) }
-          }
-          else if id.contains("disc") || id.contains("Disc") { discNumber = (value as? NSNumber)?.intValue ?? discNumber }
         }
         continue
       }
 
+      // ── Common-key path ────────────────────────────────────────────────────
       let raw = key.rawValue.lowercased()
       if raw == "title" || raw.contains("title") { if let v = value as? String, !v.isEmpty { embeddedTitle = v } }
       else if raw == "artist" || raw.contains("artist"), !raw.contains("album") { if let v = value as? String, !v.isEmpty { embeddedArtist = v } }
@@ -107,7 +128,12 @@ enum AudioMetadataExtractor: Sendable {
       else if raw == "type" || raw.contains("genre") { genre = (value as? String) ?? genre }
       else if raw.contains("creator") || raw.contains("composer") { composer = (value as? String) ?? composer }
       else if raw.contains("artwork") || raw.contains("art") { artwork = value as? Data ?? artwork }
-      else if raw.contains("albumartist") || raw.contains("album artist") { albumArtist = (value as? String) ?? albumArtist }
+      // Some encoders surface albumArtist through a common-key variant
+      else if raw.contains("albumartist") || raw.contains("album artist") {
+        if let v = value as? String, !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          albumArtist = v
+        }
+      }
     }
 
     // 2. Filename Parsing
@@ -199,6 +225,7 @@ enum AudioMetadataExtractor: Sendable {
       metadataSourceTitle: titleSource,
       metadataSourceArtist: artistSource,
       metadataSourceAlbum: albumSource,
+      isCompilation: isCompilation,
       isLive: filenameMetadata.isLive || folderMetadata.isLive,
       isMedley: filenameMetadata.isMedley || folderMetadata.isMedley,
       sampleRate: technical.sampleRate,

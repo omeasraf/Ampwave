@@ -28,7 +28,7 @@ struct HomeView: View {
   @State private var genreRecommendations: [Recommendation] = []
   @State private var recentlyPlayedSongs: [LibrarySong] = []
   @State private var mostPlayedSongs: [(song: LibrarySong, count: Int)] = []
-  @State private var radioMixes: [RadioMix] = []
+  @State private var radioMixes: [RadioStation] = []
   @State private var isLoading = true
   @State private var showError = false
   @State private var errorMessage = ""
@@ -288,7 +288,7 @@ struct HomeView: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
-        .background(Color.pink)
+        .background(themeManager.accentColor)
         .clipShape(Capsule())
       }
 
@@ -305,6 +305,7 @@ struct HomeView: View {
       historyTracker.setModelContext(modelContext)
       playlistManager.setModelContext(modelContext)
       recommendationEngine.setModelContext(modelContext)
+      RadioMixGenerator.shared.setModelContext(modelContext)
 
       // If library is already indexing, wait for it
       if !forceRefresh && library.indexingStatus != .complete {
@@ -339,7 +340,7 @@ struct HomeView: View {
   private func refreshHomeSections() {
     recentlyPlayedSongs = historyTracker.getRecentlyPlayed(limit: 10)
     mostPlayedSongs = historyTracker.getMostPlayed(limit: 10)
-    radioMixes = RadioMixGenerator.shared.generateMixes()
+    radioMixes = RadioMixGenerator.shared.fetchOrCreateMixes()
   }
 }
 
@@ -586,7 +587,7 @@ struct RecommendationCard: View {
 // MARK: - Radio Mixes Section
 
 struct RadioMixesSection: View {
-  let mixes: [RadioMix]
+  let mixes: [RadioStation]
   @Environment(ThemeManager.self) private var themeManager
   private var playback: PlaybackController { PlaybackController.shared }
 
@@ -608,11 +609,12 @@ struct RadioMixesSection: View {
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHStack(spacing: 16) {
           ForEach(mixes) { mix in
-            RadioMixCard(mix: mix)
-              .onTapGesture {
-                HapticManager.shared.radioStart()
-                playback.playQueue(mix.songs, startingAt: 0, from: .radio)
-              }
+            NavigationLink {
+              RadioStationView(station: mix)
+            } label: {
+              RadioMixCard(mix: mix)
+            }
+            .buttonStyle(.plain)
           }
         }
         .padding(.horizontal, 20)
@@ -626,20 +628,17 @@ struct RadioMixesSection: View {
 // MARK: - Radio Mix Card
 
 struct RadioMixCard: View {
-  let mix: RadioMix
+  let mix: RadioStation
   @Environment(ThemeManager.self) private var themeManager
 
   private let cardSize: CGFloat = 160
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      // ── 2×2 artwork collage ───────────────────────────────────────────────
-      artworkCollage
-        .frame(width: cardSize, height: cardSize)
+      RadioArtworkCollage(artworkPaths: mix.artworkPaths, colors: mix.colors, size: cardSize)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
 
-      // ── Text ─────────────────────────────────────────────────────────────
       VStack(alignment: .leading, spacing: 2) {
         Text(mix.name)
           .font(.system(size: 15, weight: .semibold))
@@ -656,44 +655,7 @@ struct RadioMixCard: View {
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(mix.name). \(mix.subtitle)")
-    .accessibilityHint("Plays this radio station")
-  }
-
-  // MARK: - Artwork Collage
-
-  @ViewBuilder
-  private var artworkCollage: some View {
-    let half = cardSize / 2
-    let paths = mix.artworkPaths
-
-    GeometryReader { _ in
-      ZStack {
-        // Gradient fallback background
-        LinearGradient(
-          colors: mix.gradientColors,
-          startPoint: .topLeading,
-          endPoint: .bottomTrailing
-        )
-
-        LazyVGrid(
-          columns: [
-            GridItem(.fixed(half), spacing: 0),
-            GridItem(.fixed(half), spacing: 0),
-          ],
-          spacing: 0
-        ) {
-          ForEach(0..<4, id: \.self) { idx in
-            let path = idx < paths.count ? paths[idx] : nil
-            AlbumArtworkView(
-              artworkPath: path,
-              size: half,
-              cornerRadius: 0
-            )
-            .frame(width: half, height: half)
-          }
-        }
-      }
-    }
+    .accessibilityHint("Opens this radio station")
   }
 }
 

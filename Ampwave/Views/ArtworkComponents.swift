@@ -75,6 +75,8 @@ struct ArtworkImageView: View {
 
 struct LargeArtworkImageView: View {
   let artworkPath: String?
+  var shadowColor: Color = .black.opacity(0.15)
+  var shadowRadius: CGFloat = 20
   @State private var image: PlatformImage?
 
   var body: some View {
@@ -102,7 +104,7 @@ struct LargeArtworkImageView: View {
     .frame(maxWidth: .infinity)
     .aspectRatio(1, contentMode: .fit)
     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-    .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 10)
+    .shadow(color: shadowColor, radius: shadowRadius, x: 0, y: shadowRadius / 2)
     .task(id: artworkPath) {
       await loadImage()
     }

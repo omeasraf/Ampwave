@@ -9,6 +9,11 @@ import AppIntents
 import SwiftData
 internal import SwiftUI
 
+extension Notification.Name {
+  /// Posted after the user resets their library so tabs can clear their navigation stacks.
+  static let libraryDidReset = Notification.Name("com.ampwave.libraryDidReset")
+}
+
 /// Applies tint and color scheme from `ThemeManager` in the environment (observation-safe; avoids @State + singleton issues).
 private struct AppThemeChrome: ViewModifier {
   @Environment(ThemeManager.self) private var themeManager
@@ -37,6 +42,8 @@ struct AmpwaveApp: App {
       LibrarySong.self,
       Album.self,
       Playlist.self,
+      PlaylistIcon.self,
+      RadioStation.self,
       Artist.self,
       ListeningHistory.self,
       SongPlayStatistics.self,

@@ -417,14 +417,15 @@ import SwiftData
     }
   }
 
-  /// Gets an album by name and artist
+  /// Gets an album by name and canonical artist (album artist / Various Artists / track artist).
   func getAlbum(named name: String, artist artistName: String) -> Album? {
     let normalizedName = name.lowercased()
     let normalizedArtist = artistName.lowercased()
 
     // Check local memory first
     if let match = albums.first(where: {
-      $0.name.lowercased() == normalizedName && ($0.artist ?? "").lowercased() == normalizedArtist
+      $0.name.lowercased() == normalizedName &&
+      (($0.isCompilation ? "various artists" : ($0.artist ?? "").lowercased()) == normalizedArtist)
     }) {
       return match
     }
@@ -455,8 +456,8 @@ import SwiftData
 
   // MARK: - Loading
 
-  func loadSongs() async {
-    if isLoaded && !songs.isEmpty {
+  func loadSongs(force: Bool = false) async {
+    if !force && isLoaded && !songs.isEmpty {
       print("[DEBUG] SongLibrary.loadSongs: Already loaded, skipping")
       return
     }
@@ -813,7 +814,9 @@ import SwiftData
     if importedCount > 0 {
       print("[DEBUG] SongLibrary.importFiles: Final save and reloading library")
       saveContext()
-      await loadSongs()
+      // force: true bypasses the isLoaded guard so subsequent imports
+      // (e.g. file import after a folder import) always refresh the UI.
+      await loadSongs(force: true)
 
       // Start background metadata fetch for everything imported
       Task {
@@ -1014,7 +1017,9 @@ import SwiftData
 
     if let album = getOrCreateAlbum(
       name: metadata.album,
-      artist: primaryArtistName,
+      albumArtist: metadata.albumArtist,
+      trackArtist: metadata.artist,
+      isCompilation: metadata.isCompilation,
       year: metadata.year,
       artworkPath: artworkPath,
       embeddedArtworkPath: artworkPath,
@@ -1141,7 +1146,9 @@ import SwiftData
 
     if let album = getOrCreateAlbum(
       name: metadata.album,
-      artist: primaryArtistName,
+      albumArtist: metadata.albumArtist,
+      trackArtist: metadata.artist,
+      isCompilation: metadata.isCompilation,
       year: metadata.year,
       artworkPath: artworkPath,
       embeddedArtworkPath: artworkPath,
@@ -1297,8 +1304,12 @@ import SwiftData
         // Apply fetched metadata (on MainActor)
         print("[DEBUG] SongLibrary.fetchMetadataForSong: Metadata fetched, applying to song")
         await applyFetchedMetadata(metadata, to: song, preferences: preferences)
+        song.metadataFetchSucceeded = true
       } else {
+        // API returned nothing — mark succeeded so we don't retry on every launch
+        // for songs that genuinely have no match in any source.
         print("[DEBUG] SongLibrary.fetchMetadataForSong: No metadata found for \(song.title)")
+        song.metadataFetchSucceeded = true
       }
       
       if !isPartOfBatch {
@@ -1412,6 +1423,7 @@ import SwiftData
     // Reset attempt flags so we can try again
     for song in songs {
       song.metadataCheckAttempted = false
+      song.metadataFetchSucceeded = false
       song.lyricsCheckAttempted = false
     }
     saveContext()
@@ -1625,26 +1637,113 @@ import SwiftData
 
   // MARK: - Album Management
 
-  private func getOrCreateAlbum(
-    name: String?, artist: String?, year: Int?, artworkPath: String?,
-    embeddedArtworkPath: String?, in modelContext: ModelContext
-  ) -> Album? {
-    guard let albumName = name, !albumName.isEmpty else { return nil }
+  // MARK: Grouping helpers
 
-    let artistName = artist ?? "Unknown Artist"
+  /// Normalise a string for album/artist key comparison: strip whitespace,
+  /// fold case and diacritics. Used so that "FEAR", "fear", and " Fear " all
+  /// produce the same key and land in the same album bucket.
+  private func normalizeForGrouping(_ s: String) -> String {
+    s.trimmingCharacters(in: .whitespacesAndNewlines)
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .lowercased()
+  }
+
+  /// Extract the *primary* artist from a compound track-artist string so that
+  /// "NF", "NF; mgk", and "NF feat. James Arthur" all resolve to "NF".
+  ///
+  /// This mirrors how Apple Music and Spotify group albums: featured artists on
+  /// individual tracks don't fragment the album. The algorithm strips everything
+  /// after the first recognised multi-artist delimiter.
+  private func extractPrimaryArtist(from artist: String) -> String {
+    let trimmed = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "Unknown Artist" }
+
+    // Ordered from longest/most-specific to shortest to avoid partial matches.
+    let delimiters = [
+      " featuring ", " Featuring ",
+      " feat. ", " Feat. ",
+      " feat ", " Feat ",
+      " ft. ", " Ft. ",
+      " ft ", " Ft ",
+      " with ", " With ",
+      " vs. ", " Vs. ",
+      " vs ", " Vs ",
+      " x ", " X ",
+      " & ",
+      "; ",
+    ]
+    for sep in delimiters {
+      if let range = trimmed.range(of: sep) {
+        let primary = String(trimmed[..<range.lowerBound])
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !primary.isEmpty { return primary }
+      }
+    }
+    // Bare semicolon or comma (tag editors sometimes omit the space)
+    for ch: Character in [";", ","] {
+      if let idx = trimmed.firstIndex(of: ch) {
+        let primary = String(trimmed[..<idx]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !primary.isEmpty { return primary }
+      }
+    }
+    return trimmed
+  }
+
+  /// Determines the canonical album-artist string used as the grouping key.
+  ///
+  /// Priority (mirrors iTunes / Apple Music / Spotify behaviour):
+  ///   1. Compilation flag (TCMP=1) → "Various Artists"
+  ///   2. Album Artist tag (TPE2 / aART) → use directly; it is the authoritative source
+  ///   3. No Album Artist → extract the primary artist from the track artist field
+  ///      so "NF; mgk" and "NF feat. James Arthur" both group with plain "NF" tracks
+  private func resolveAlbumArtist(
+    albumArtist: String?,
+    trackArtist: String,
+    isCompilation: Bool
+  ) -> String {
+    if isCompilation { return "Various Artists" }
+    if let aa = albumArtist, !aa.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return aa.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return extractPrimaryArtist(from: trackArtist)
+  }
+
+  private func getOrCreateAlbum(
+    name: String?,
+    albumArtist: String?,
+    trackArtist: String,
+    isCompilation: Bool,
+    year: Int?,
+    artworkPath: String?,
+    embeddedArtworkPath: String?,
+    in modelContext: ModelContext
+  ) -> Album? {
+    guard let albumName = name?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !albumName.isEmpty else { return nil }
+
+    let groupingArtist = resolveAlbumArtist(
+      albumArtist: albumArtist,
+      trackArtist: trackArtist,
+      isCompilation: isCompilation
+    )
+
+    let normName   = normalizeForGrouping(albumName)
+    let normArtist = normalizeForGrouping(groupingArtist)
 
     do {
-      var descriptor = FetchDescriptor<Album>(
-        predicate: #Predicate<Album> { $0.name == albumName && $0.artist == artistName }
-      )
-      descriptor.fetchLimit = 1
-      if let existingAlbum = try modelContext.fetch(descriptor).first {
-        if existingAlbum.artworkPath == nil, let newArtworkPath = artworkPath {
-          existingAlbum.artworkPath = newArtworkPath
-        }
-        if existingAlbum.embeddedArtworkPath == nil, let newEmbeddedPath = embeddedArtworkPath {
-          existingAlbum.embeddedArtworkPath = newEmbeddedPath
-        }
+      // Fetch all albums and compare with normalised keys.
+      // SwiftData's #Predicate uses exact (case-sensitive) equality which would
+      // split "FEAR" and "fear" into separate albums. In-memory normalisation
+      // handles case / diacritic / whitespace variations correctly.
+      // Albums are far fewer than songs so this is acceptably fast.
+      let allAlbums = try modelContext.fetch(FetchDescriptor<Album>())
+      if let existingAlbum = allAlbums.first(where: {
+        normalizeForGrouping($0.name) == normName &&
+        normalizeForGrouping($0.artist ?? "") == normArtist
+      }) {
+        if existingAlbum.artworkPath == nil, let p = artworkPath { existingAlbum.artworkPath = p }
+        if existingAlbum.embeddedArtworkPath == nil, let p = embeddedArtworkPath { existingAlbum.embeddedArtworkPath = p }
+        if isCompilation { existingAlbum.isCompilation = true }
         return existingAlbum
       }
     } catch {
@@ -1653,28 +1752,33 @@ import SwiftData
 
     let album = Album(
       name: albumName,
-      artist: artistName,
+      artist: groupingArtist,
       year: year,
       artworkPath: artworkPath,
       embeddedArtworkPath: embeddedArtworkPath
     )
+    album.isCompilation = isCompilation
     modelContext.insert(album)
     return album
   }
 
-  /// Merges duplicate albums with the same name and artist
+  /// Merges duplicate albums that refer to the same release.
+  /// Uses the same normalised (name, resolved-artist) key so albums previously
+  /// split by case differences or featured-artist variants are consolidated.
   private func mergeAlbumDuplicates(in modelContext: ModelContext) async {
     do {
-      // Fetch all albums
       let descriptor = FetchDescriptor<Album>(
         sortBy: [SortDescriptor(\.createdDate, order: .forward)]
       )
       let allAlbums = try modelContext.fetch(descriptor)
 
-      // Group albums by (name, artist) key
+      // Group by normalised (name, canonical-artist) key.
       var albumGroups: [String: [Album]] = [:]
       for album in allAlbums {
-        let key = "\(album.name)|\(album.artist ?? "")"
+        let artistKey = album.isCompilation
+          ? "various artists"
+          : normalizeForGrouping(album.artist ?? "")
+        let key = "\(normalizeForGrouping(album.name))|\(artistKey)"
         if albumGroups[key] == nil {
           albumGroups[key] = []
         }
@@ -1829,6 +1933,21 @@ import SwiftData
     try? fileManager.createDirectory(at: songsDirectory, withIntermediateDirectories: true)
   }
 
+  /// Clears all in-memory arrays and resets every guard flag so the next
+  /// `loadSongs()` and `indexOnStartup()` perform a full, clean run.
+  /// Must be called after deleting records from SwiftData and saving.
+  func resetInMemoryState() {
+    songs   = []
+    albums  = []
+    artists = []
+    isLoaded  = false
+    isIndexing = false          // let indexOnStartup run again on next launch
+    pendingMetadataFetches = 0
+    totalMetadataFetches   = 0
+    indexingStatus         = .idle
+    notifyLibraryChange()
+  }
+
   func deleteSong(_ song: LibrarySong) {
     guard let modelContext = modelContext else { return }
 
@@ -1898,40 +2017,56 @@ import SwiftData
     }
   }
 
-  /// Full metadata backfill: fetches all available metadata (genre, year, composer, artwork, ISRC, etc.)
-  /// for songs that previously had a fetch attempt but are still missing key fields.
-  /// Runs once per version key; bump the key to re-run for all users.
-  func runGenreBackfillOncePerInstall() async {
-    let key = "Ampwave.fullMetadataBackfill.v1"
-    guard !UserDefaults.standard.bool(forKey: key) else { return }
+  /// On every launch: find songs where a metadata fetch was attempted but never completed
+  /// (app killed mid-fetch, network failure, etc.) and re-queue them.
+  /// Also picks up any song whose metadata is still incomplete and hasn't been attempted yet.
+  /// Gated by the "Auto-fetch metadata" preference and network availability.
+  func resumeIncompleteMetadataFetches() async {
     guard let modelContext = modelContext else { return }
     let prefs = UserPreferences.getOrCreate(in: modelContext)
     guard prefs.autoFetchMetadata, !prefs.isOfflineMode, NetworkMonitor.shared.isOnline else {
       return
     }
-    defer { UserDefaults.standard.set(true, forKey: key) }
 
     MetadataService.shared.setModelContext(modelContext)
 
-    // Target songs with any incomplete metadata field, regardless of prior attempt
-    let targets = songs.filter { song in
-      song.genre == nil || song.genre?.isEmpty == true
-      || song.year == nil
-      || song.composer == nil
-      || song.trackNumber == nil
-      || song.albumArtist == nil || song.albumArtist?.isEmpty == true
-      || song.artworkPath == nil
+    // Songs to resume: attempted but never confirmed as succeeded, AND still missing data.
+    // `metadataFetchSucceeded` is set true both on success AND on "no API match", so
+    // only songs whose session was interrupted (app killed mid-fetch) stay false.
+    let incompleteAttempted = songs.filter { song in
+      guard song.metadataCheckAttempted && !song.metadataFetchSucceeded else { return false }
+      return hasMissingMetadata(song)
     }
-    guard !targets.isEmpty else { return }
-    print("[DEBUG] Full metadata backfill: \(targets.count) songs need complete metadata")
 
-    // Reset the check flag so fetchMetadataForNewSongs picks them up
+    // Songs never attempted yet (new imports from a previous session).
+    let neverAttempted = songs.filter { !$0.metadataCheckAttempted }
+
+    let targets = incompleteAttempted + neverAttempted
+    guard !targets.isEmpty else {
+      print("[DEBUG] SongLibrary.resumeIncompleteMetadataFetches: All songs up to date")
+      return
+    }
+
+    print("[DEBUG] SongLibrary.resumeIncompleteMetadataFetches: \(targets.count) songs need fetching (\(incompleteAttempted.count) interrupted, \(neverAttempted.count) new)")
+
+    // Reset the attempted flag so fetchMetadataForNewSongs picks them up.
     for song in targets {
       song.metadataCheckAttempted = false
     }
     try? modelContext.save()
 
     await fetchMetadataForNewSongs()
+  }
+
+  /// Returns true if the song is missing any metadata field worth fetching.
+  private func hasMissingMetadata(_ song: LibrarySong) -> Bool {
+    song.artworkPath == nil
+    || song.genre == nil || song.genre?.isEmpty == true
+    || song.year == nil
+    || song.albumArtist == nil || song.albumArtist?.isEmpty == true
+    || song.title.contains("Untitled")
+    || song.artist == "Unknown Artist"
+    || song.artist.isEmpty
   }
 
   /// Distinct genre labels with song counts. Splits compound tags (e.g. `Rock/Pop`) on `/` and `,`.

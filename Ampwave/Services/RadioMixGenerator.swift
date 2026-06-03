@@ -6,34 +6,8 @@
 //
 
 import Foundation
+import SwiftData
 internal import SwiftUI
-
-// MARK: - Model
-
-struct RadioMix: Identifiable {
-  let id: UUID
-  let name: String
-  let subtitle: String
-  let songs: [LibrarySong]
-  /// Up to 4 artwork paths for the 2×2 collage thumbnail.
-  let artworkPaths: [String?]
-  let gradientColors: [Color]
-
-  init(
-    name: String,
-    subtitle: String,
-    songs: [LibrarySong],
-    artworkPaths: [String?],
-    gradientColors: [Color]
-  ) {
-    self.id = UUID()
-    self.name = name
-    self.subtitle = subtitle
-    self.songs = songs
-    self.artworkPaths = artworkPaths
-    self.gradientColors = gradientColors
-  }
-}
 
 // MARK: - Generator
 
@@ -42,16 +16,52 @@ final class RadioMixGenerator {
   static let shared = RadioMixGenerator()
   private init() {}
 
+  var modelContext: ModelContext?
   private var history: ListeningHistoryTracker { ListeningHistoryTracker.shared }
   private var library: SongLibrary { SongLibrary.shared }
   private var engine: RecommendationEngine { RecommendationEngine.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
 
+  private let refreshThreshold: TimeInterval = 3 * 60 * 60 // 3 hours
+
+  func setModelContext(_ context: ModelContext) {
+    self.modelContext = context
+  }
+
   // MARK: - Public API
 
-  func generateMixes(limit: Int = 5) -> [RadioMix] {
-    var mixes: [RadioMix] = []
+  func fetchOrCreateMixes() -> [RadioStation] {
+    guard let context = modelContext else { return [] }
+    
+    let descriptor = FetchDescriptor<RadioStation>()
+    let existing = (try? context.fetch(descriptor)) ?? []
+    
+    // If we have existing stations, check if they need refresh
+    if !existing.isEmpty {
+      let now = Date()
+      let needsRefresh = existing.contains { station in
+        now.timeIntervalSince(station.lastUpdated) > refreshThreshold
+      }
+      
+      if !needsRefresh {
+        return existing.sorted { $0.name < $1.name }
+      }
+    }
+    
+    // Regenerate if empty or needs refresh
+    return generateMixes(existing: existing)
+  }
 
+  private func generateMixes(existing: [RadioStation]) -> [RadioStation] {
+    guard let context = modelContext else { return [] }
+    
+    // Clear existing if we are regenerating everything
+    // Alternatively, we could update them in place, but clearing is simpler for this refactor.
+    for station in existing {
+      context.delete(station)
+    }
+    
+    var stations: [RadioStation] = []
     let recentSongs = history.getRecentlyPlayed(limit: 50)
     let mostPlayed = history.getMostPlayed(limit: 30).map(\.song)
 
@@ -70,13 +80,17 @@ final class RadioMixGenerator {
       guard let seed = seeds.randomElement() else { continue }
       let similar = engine.buildRadioQueue(seed: seed, limit: 24)
       let queue = [seed] + similar
-      mixes.append(RadioMix(
+      let station = RadioStation(
         name: "Daily Mix \(mixNumber)",
         subtitle: genreSubtitle(genre: genre, songs: seeds),
+        seedType: "dailyMix",
+        seedValue: genre,
         songs: queue,
         artworkPaths: fourArtworks(from: queue),
-        gradientColors: GenrePalette.gradient(for: genre)
-      ))
+        colors: GenrePalette.gradient(for: genre)
+      )
+      context.insert(station)
+      stations.append(station)
       mixNumber += 1
     }
 
@@ -88,13 +102,16 @@ final class RadioMixGenerator {
       let queue = Array(Set(likedSongs + extras)
         .sorted { $0.title < $1.title }
         .prefix(25))
-      mixes.append(RadioMix(
+      let station = RadioStation(
         name: "Favorites Mix",
         subtitle: "\(liked.songs.count) liked songs & more",
+        seedType: "favorites",
         songs: queue,
         artworkPaths: fourArtworks(from: likedSongs),
-        gradientColors: [.pink, .red]
-      ))
+        colors: [.pink, .red]
+      )
+      context.insert(station)
+      stations.append(station)
     }
 
     // ── 3. Discovery Mix ────────────────────────────────────────────────────
@@ -102,16 +119,19 @@ final class RadioMixGenerator {
     let unheard = library.songs.filter { !recentIds.contains($0.id) }.shuffled()
     if unheard.count >= 5 {
       let queue = Array(unheard.prefix(25))
-      mixes.append(RadioMix(
+      let station = RadioStation(
         name: "Discovery Mix",
         subtitle: "Fresh picks from your library",
+        seedType: "discovery",
         songs: queue,
         artworkPaths: fourArtworks(from: queue),
-        gradientColors: [.blue, .cyan]
-      ))
+        colors: [.blue, .cyan]
+      )
+      context.insert(station)
+      stations.append(station)
     }
 
-    return Array(mixes.prefix(limit))
+    return stations
   }
 
   // MARK: - Helpers
@@ -140,20 +160,18 @@ final class RadioMixGenerator {
     return artists.isEmpty ? genre : artists.joined(separator: " • ")
   }
 
-  private func fourArtworks(from songs: [LibrarySong]) -> [String?] {
+  private func fourArtworks(from songs: [LibrarySong]) -> [String] {
     // Pick 4 unique artworks for the collage
     var used = Set<String>()
-    var paths: [String?] = []
+    var paths: [String] = []
     for song in songs {
-      let path = song.effectiveArtworkPath
-      let key = path ?? "__nil__\(song.id)"
-      if used.insert(key).inserted {
-        paths.append(path)
+      if let path = song.effectiveArtworkPath {
+        if used.insert(path).inserted {
+          paths.append(path)
+        }
       }
       if paths.count == 4 { break }
     }
-    // Pad to 4 if needed
-    while paths.count < 4 { paths.append(nil) }
     return paths
   }
 }

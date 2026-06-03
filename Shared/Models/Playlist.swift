@@ -10,14 +10,6 @@ import Foundation
 import SwiftData
 internal import SwiftUI
 
-#if os(macOS)
-  import AppKit
-  typealias PlatformColor = NSColor
-#else
-  import UIKit
-  typealias PlatformColor = UIColor
-#endif
-
 @Model
 final class Playlist: Identifiable, Hashable {
   // MARK: - Identity
@@ -246,6 +238,77 @@ extension Sequence where Element: Hashable {
     return filter { seen.insert($0).inserted }
   }
 }
+
+// MARK: - Radio Station
+
+@Model
+final class RadioStation: Identifiable, Hashable {
+  // MARK: - Identity
+  @Attribute(.unique) var id: UUID
+  var name: String
+  var subtitle: String
+
+  // MARK: - Metadata
+  var lastUpdated: Date
+  var seedType: String  // genre, favorites, discovery, dailyMix
+  var seedValue: String?
+
+  // MARK: - Content
+  @Relationship(deleteRule: .nullify) var songs: [LibrarySong] = []
+  var songOrder: [UUID] = []
+
+  var artworkPaths: [String] = []
+  var colorHexes: [String] = []
+
+  init(
+    name: String,
+    subtitle: String,
+    seedType: String,
+    seedValue: String? = nil,
+    songs: [LibrarySong],
+    artworkPaths: [String],
+    colors: [Color]
+  ) {
+    self.id = UUID()
+    self.name = name
+    self.subtitle = subtitle
+    self.lastUpdated = Date()
+    self.seedType = seedType
+    self.seedValue = seedValue
+    self.songs = songs
+    self.songOrder = songs.map { $0.id }
+    self.artworkPaths = artworkPaths
+    self.colorHexes = colors.map { $0.toHexString() }
+  }
+
+  var orderedSongs: [LibrarySong] {
+    let songMap = Dictionary(uniqueKeysWithValues: songs.map { ($0.id, $0) })
+    return songOrder.compactMap { songMap[$0] }
+  }
+
+  var colors: [Color] {
+    colorHexes.map { Color(hex: $0) }
+  }
+
+  static func == (lhs: RadioStation, rhs: RadioStation) -> Bool {
+    lhs.id == rhs.id
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(id)
+  }
+}
+
+// MARK: - Color Extensions
+
+#if os(macOS)
+  import AppKit
+  typealias PlatformColor = NSColor
+#else
+  import UIKit
+  typealias PlatformColor = UIColor
+#endif
+
 extension Color {
   /// Returns the hex string representation for this Color (assuming PlatformColor backend).
   func toHexString() -> String {

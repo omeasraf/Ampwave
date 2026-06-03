@@ -269,9 +269,9 @@ struct AmpwaveShortcuts: AppShortcutsProvider {
     AppShortcut(
       intent: PlaySongIntent(),
       phrases: [
-        "Play \(\.$song) on \(.applicationName)",
-        "Play \(\.$song) in \(.applicationName)",
-        "Play the song \(\.$song) on \(.applicationName)",
+        "Play a song on \(.applicationName)",
+        "Play a song in \(.applicationName)",
+        "Find and play a song on \(.applicationName)",
       ],
       shortTitle: "Play Song",
       systemImageName: "music.note"

@@ -364,6 +364,174 @@ struct PlaylistView: View {
   }
 }
 
+// MARK: - Radio Station View
+
+struct RadioStationView: View {
+  let station: RadioStation
+  @Environment(ThemeManager.self) private var themeManager
+  private var playback: PlaybackController { PlaybackController.shared }
+  private var playlistManager: PlaylistManager { PlaylistManager.shared }
+
+  var body: some View {
+    List {
+      Section {
+        stationHeader
+      }
+      .listRowBackground(Color.clear)
+      .listRowInsets(EdgeInsets())
+
+      Section {
+        ForEach(station.orderedSongs) { song in
+          SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
+            .contentShape(Rectangle())
+            .onTapGesture {
+              let idx = station.orderedSongs.firstIndex(where: { $0.id == song.id }) ?? 0
+              playback.playQueue(station.orderedSongs, startingAt: idx, from: .radio)
+            }
+        }
+      }
+      .listRowBackground(themeManager.cardBackgroundColor)
+    }
+    .listStyle(platformListStyle)
+    .background(themeManager.backgroundColor)
+    .scrollContentBackground(.hidden)
+    .navigationTitle(station.name)
+    #if os(iOS)
+      .navigationBarTitleDisplayMode(.inline)
+    #endif
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        Menu {
+          Button {
+            saveAsPlaylist()
+          } label: {
+            Label("Save as Playlist", systemImage: "plus.square.on.square")
+          }
+        } label: {
+          Image(systemName: "ellipsis.circle")
+        }
+      }
+    }
+  }
+
+  private var stationHeader: some View {
+    VStack(spacing: 20) {
+      RadioArtworkCollage(artworkPaths: station.artworkPaths, colors: station.colors, size: 200)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+
+      VStack(spacing: 8) {
+        Text(station.name)
+          .font(.system(size: 24, weight: .bold))
+          .multilineTextAlignment(.center)
+
+        Text(station.subtitle)
+          .font(.system(size: 15))
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+
+        Text("Last updated \(station.lastUpdated.formatted(date: .abbreviated, time: .shortened))")
+          .font(.system(size: 12))
+          .foregroundStyle(.tertiary)
+      }
+
+      if !station.orderedSongs.isEmpty {
+        HStack(spacing: 16) {
+          Button {
+            playback.playQueue(station.orderedSongs, from: .radio)
+          } label: {
+            HStack {
+              Image(systemName: "play.fill")
+              Text("Play")
+            }
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 120)
+            .padding(.vertical, 12)
+            .background(themeManager.accentColor)
+            .clipShape(Capsule())
+          }
+
+          Button {
+            playback.shuffleMode = .on
+            playback.playQueue(station.orderedSongs.shuffled(), from: .radio)
+          } label: {
+            HStack {
+              Image(systemName: "shuffle")
+              Text("Shuffle")
+            }
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: 120)
+            .padding(.vertical, 12)
+            .background(themeManager.cardBackgroundColor)
+            .clipShape(Capsule())
+            .overlay(
+              Capsule()
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+            )
+          }
+        }
+      }
+    }
+    .buttonStyle(.borderless)
+    .padding(.vertical, 20)
+    .frame(maxWidth: .infinity)
+  }
+
+  private var platformListStyle: some ListStyle {
+    #if os(iOS)
+      .insetGrouped
+    #else
+      .inset
+    #endif
+  }
+
+  private func saveAsPlaylist() {
+    playlistManager.createPlaylist(
+      name: station.name + " (Radio)",
+      description: "Saved from your personal radio station on \(Date().formatted(date: .numeric, time: .omitted))",
+      songs: station.orderedSongs
+    )
+  }
+}
+
+struct RadioArtworkCollage: View {
+  let artworkPaths: [String]
+  let colors: [Color]
+  let size: CGFloat
+
+  var body: some View {
+    let half = size / 2
+    ZStack {
+      LinearGradient(
+        colors: colors,
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+
+      LazyVGrid(
+        columns: [
+          GridItem(.fixed(half), spacing: 0),
+          GridItem(.fixed(half), spacing: 0),
+        ],
+        spacing: 0
+      ) {
+        ForEach(0..<4, id: \.self) { idx in
+          let path = idx < artworkPaths.count ? artworkPaths[idx] : nil
+          AlbumArtworkView(
+            artworkPath: path,
+            size: half,
+            cornerRadius: 0
+          )
+          .frame(width: half, height: half)
+        }
+      }
+    }
+    .frame(width: size, height: size)
+  }
+}
+
 #Preview {
   NavigationStack {
     PlaylistView(playlist: Playlist(name: "My Playlist"))

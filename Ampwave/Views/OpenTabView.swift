@@ -16,6 +16,9 @@ struct OpenTabView: View {
   @State private var selectedTab: AppTab = .home
   @State private var servicesInitialized = false
   @State private var showOnboarding = OnboardingState.shouldShow
+  /// Incremented on library reset — causes all tab content to be recreated,
+  /// clearing every NavigationStack and flushing any stale in-memory data.
+  @State private var libraryResetID: Int = 0
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -56,6 +59,7 @@ struct OpenTabView: View {
           HomeView()
         }
         .background(themeManager.backgroundColor)
+        .id(libraryResetID)
       }
 
       // Library
@@ -68,6 +72,7 @@ struct OpenTabView: View {
           LibraryView()
         }
         .background(themeManager.backgroundColor)
+        .id(libraryResetID)
       }
 
       // Playlists
@@ -80,6 +85,7 @@ struct OpenTabView: View {
           PlaylistsListView()
         }
         .background(themeManager.backgroundColor)
+        .id(libraryResetID)
       }
 
       // Settings
@@ -92,6 +98,7 @@ struct OpenTabView: View {
           SettingsView()
         }
         .background(themeManager.backgroundColor)
+        .id(libraryResetID)
       }
 
       //       Search tab (special role)
@@ -100,6 +107,7 @@ struct OpenTabView: View {
           SearchView()
         }
         .background(themeManager.backgroundColor)
+        .id(libraryResetID)
       }
     }
 
@@ -157,13 +165,31 @@ struct OpenTabView: View {
         Task.detached(priority: .background) {
           print("[DEBUG] Starting background index...")
           await SongLibrary.shared.indexOnStartup()
-          await SongLibrary.shared.runGenreBackfillOncePerInstall()
+          // Resume any metadata fetches that were interrupted (app killed mid-fetch,
+          // network failure, etc.) and pick up any new songs from the previous session.
+          await SongLibrary.shared.resumeIncompleteMetadataFetches()
           print("[DEBUG] Background indexing complete")
         }
 
         LibraryMonitorService.shared.start()
 
         print("[DEBUG] Service initialization complete")
+      }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .libraryDidReset)) { _ in
+      // 1. Tear down every tab's NavigationStack and jump to Home.
+      //    Incrementing the ID forces SwiftUI to recreate all tab content views,
+      //    clearing navigation stacks and flushing any stale @State referencing old data.
+      libraryResetID += 1
+      selectedTab = .home
+
+      // 2. Show onboarding after a short delay so the tab recreation animation
+      //    completes first. Presenting it here (on the stable OpenTabView) is
+      //    reliable; setting it on SettingsView fails because SettingsView itself
+      //    is recreated by the libraryResetID bump above.
+      Task { @MainActor in
+        try? await Task.sleep(nanoseconds: 400_000_000)  // 0.4 s
+        showOnboarding = true
       }
     }
     #if os(iOS)

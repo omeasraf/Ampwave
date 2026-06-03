@@ -7,17 +7,20 @@ import SwiftData
 internal import SwiftUI
 import UniformTypeIdentifiers
 
+// Unified import mode — covers every file-picker use case in one enum so only
+// a single .fileImporter modifier is needed. SwiftUI silently drops all but the
+// last .fileImporter when multiple are stacked on the same view.
 enum ImportType {
   case file
   case folder
   case playlist
+  case backup
 }
 
 struct SettingsView: View {
   @Environment(\.modelContext) private var modelContext
-  @State private var importType: ImportType?
-  @State private var isShowingImporter = false
-  @State private var isShowingBackupImporter = false
+  @State private var activeImport: ImportType?        // which mode is pending
+  @State private var isShowingImporter = false        // drives the single .fileImporter
   @State private var importError: String?
   @State private var isImporting = false
   @State private var importProgress: Double = 0
@@ -28,6 +31,7 @@ struct SettingsView: View {
   @State private var showingResetStatsConfirmation = false
   @State private var isResetting = false
   @State private var backupExportURL: URL?
+  @State private var showingOnboarding = false
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -49,16 +53,21 @@ struct SettingsView: View {
 
   @Environment(ThemeManager.self) private var themeManager
 
-  private var allowedContentTypesForImport: [UTType] {
-    switch importType {
-    case .file:
-      return [.audio]
-    case .folder:
-      return [.folder]
-    case .playlist:
-      return PlaylistImportExport.importableContentTypes
-    case .none:
-      return [.audio]
+  // Derived from the active import mode for the single .fileImporter below.
+  private var importerContentTypes: [UTType] {
+    switch activeImport {
+    case .file:    return [.audio]
+    case .folder:  return [.folder]
+    case .playlist: return PlaylistImportExport.importableContentTypes
+    case .backup:  return [.json]
+    case .none:    return [.audio]
+    }
+  }
+
+  private var importerAllowsMultiple: Bool {
+    switch activeImport {
+    case .file: return true
+    default:    return false
     }
   }
 
@@ -85,35 +94,27 @@ struct SettingsView: View {
     .scrollContentBackground(.hidden)
     .tint(themeManager.accentColor)
     .navigationTitle("Settings")
-    .fileImporter(
-      isPresented: $isShowingImporter,
-      allowedContentTypes: allowedContentTypesForImport,
-      allowsMultipleSelection: importType != .folder && importType != .playlist
-    ) { result in
-      let currentType = importType
-
-      Task { @MainActor in
-        switch currentType {
-        case .file:
-          await handleFileImport(result)
-        case .folder:
-          await handleFolderImport(result)
-        case .playlist:
-          await handlePlaylistImport(result)
-        case .none:
-          break
-        }
-        importType = nil
-        isShowingImporter = false
-      }
+    .sheet(isPresented: $showingOnboarding) {
+      OnboardingView()
+        .environment(ThemeManager.shared)
     }
     .fileImporter(
-      isPresented: $isShowingBackupImporter,
-      allowedContentTypes: [.json],
-      allowsMultipleSelection: false
+      isPresented: $isShowingImporter,
+      allowedContentTypes: importerContentTypes,
+      allowsMultipleSelection: importerAllowsMultiple
     ) { result in
+      // Capture mode NOW — activeImport is still set at this point because
+      // $isShowingImporter (not activeImport) is what the picker's dismiss binds to.
+      let mode = activeImport
+      activeImport = nil
       Task { @MainActor in
-        await handleBackupImport(result)
+        switch mode {
+        case .file:     await handleFileImport(result)
+        case .folder:   await handleFolderImport(result)
+        case .playlist: await handlePlaylistImport(result)
+        case .backup:   await handleBackupImport(result)
+        case .none:     break
+        }
       }
     }
     .alert("Clear Cache?", isPresented: $showingClearCacheConfirmation) {
@@ -199,23 +200,14 @@ struct SettingsView: View {
 
   private var themingSection: some View {
     Section {
-      if let preferences = userPreferences {
-        Picker(
-          "App Theme",
-          selection: Binding(
-            get: { preferences.selectedTheme },
-            set: { preferences.selectedTheme = $0 }
-          )
-        ) {
-          ForEach(AppTheme.allCases) { theme in
-            Text(theme.displayName).tag(theme)
-          }
-        }
-
-        if preferences.selectedTheme == .custom {
-          NavigationLink("Custom Colors") {
-            AddThemeView()
-          }
+      NavigationLink {
+        ThemeSelectorView()
+      } label: {
+        HStack {
+          Label("Appearance", systemImage: "paintpalette")
+          Spacer()
+          Text(userPreferences?.selectedTheme.displayName ?? "Ampwave")
+            .foregroundStyle(.secondary)
         }
       }
     } header: {
@@ -234,11 +226,23 @@ struct SettingsView: View {
           ))
 
         Toggle(
-          "Player Glass Background",
+          "Player Card",
           isOn: Binding(
             get: { preferences.openPlayerGlassBackground ?? true },
             set: { preferences.openPlayerGlassBackground = $0 }
           ))
+
+        Toggle(isOn: Binding(
+          get: { preferences.coverArtAccentPlayer ?? false },
+          set: { preferences.coverArtAccentPlayer = $0 }
+        )) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Cover Art Accent")
+            Text("Tints the player background and card with the dominant color extracted from the current song's artwork. With Player Card on, the card gets a colored tint and glow. With Player Card off, the entire player background shifts to the artwork color.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
 
         Toggle(isOn: Binding(
           get: { preferences.coloredSurfaces ?? true },
@@ -246,7 +250,7 @@ struct SettingsView: View {
         )) {
           VStack(alignment: .leading, spacing: 2) {
             Text("Show Surfaces")
-            Text("When off, cards and buttons show only images and text — no glass or color backgrounds")
+            Text("When off, cards and buttons show only images and text, no glass or color backgrounds")
               .font(.caption)
               .foregroundStyle(.secondary)
           }
@@ -275,7 +279,7 @@ struct SettingsView: View {
   private var importSection: some View {
     Section {
       Button {
-        importType = .file
+        activeImport = .file
         isShowingImporter = true
       } label: {
         Label("Import Songs", systemImage: "square.and.arrow.down")
@@ -283,7 +287,7 @@ struct SettingsView: View {
       .disabled(isImporting)
 
       Button {
-        importType = .folder
+        activeImport = .folder
         isShowingImporter = true
       } label: {
         Label("Import Folder", systemImage: "folder.badge.plus")
@@ -291,7 +295,7 @@ struct SettingsView: View {
       .disabled(isImporting)
 
       Button {
-        importType = .playlist
+        activeImport = .playlist
         isShowingImporter = true
       } label: {
         Label("Import Playlist", systemImage: "music.note.list")
@@ -697,7 +701,8 @@ struct SettingsView: View {
       }
 
       Button {
-        isShowingBackupImporter = true
+        activeImport = .backup
+        isShowingImporter = true
       } label: {
         Label("Restore Backup", systemImage: "arrow.clockwise.icloud")
       }
@@ -774,6 +779,12 @@ struct SettingsView: View {
       ) {
         Label("Privacy Policy", systemImage: "hand.raised")
       }
+
+      Button {
+        showingOnboarding = true
+      } label: {
+        Label("View Setup Guide", systemImage: "sparkles")
+      }
     } header: {
       Text("About")
     }
@@ -790,6 +801,11 @@ struct SettingsView: View {
         isImporting = false
         return
       }
+
+      // Start security-scoped access for every picked URL so the app can
+      // read files outside its sandbox. Mirror the pattern used in folder import.
+      let accessed = urls.filter { $0.startAccessingSecurityScopedResource() }
+      defer { accessed.forEach { $0.stopAccessingSecurityScopedResource() } }
 
       if library.modelContext == nil {
         library.setModelContext(modelContext)
@@ -951,53 +967,82 @@ struct SettingsView: View {
     print("[DEBUG] SettingsView.resetLibrary: Starting full reset")
 
     Task {
-      // Delete all Library Songs
-      print("[DEBUG] SettingsView.resetLibrary: Deleting songs")
-      for song in library.songs {
-        modelContext.delete(song)
+      // ── 1. Delete SwiftData records ───────────────────────────────────────
+      // We fetch-and-delete each type individually rather than using the batch
+      // `delete(model:)` API, which can throw silently due to relationship
+      // constraint conflicts and leaves data intact.
+      //
+      // Deletion order matters: delete child/dependent records first so that
+      // parent relationships are already nullified when parents are removed.
+      //
+      // Stats (ListeningHistory, SongPlayStatistics) are intentionally KEPT.
+
+      // SyncedLyric — depends on LibrarySong.id, must go first
+      deleteAll(SyncedLyric.self)
+
+      // PlaybackState — references song UUIDs; clear so no dangling references
+      deleteAll(PlaybackState.self)
+
+      // LibrarySong — nullifies Album.songs and Playlist.songs via inverse relationships
+      deleteAll(LibrarySong.self)
+
+      // Album, Artist, Playlist — safe to delete once songs are gone
+      deleteAll(Album.self)
+      deleteAll(Artist.self)
+      deleteAll(Playlist.self)
+
+      // ── 2. Save ───────────────────────────────────────────────────────────
+      do {
+        try modelContext.save()
+        print("[DEBUG] SettingsView.resetLibrary: SwiftData save successful")
+      } catch {
+        print("[DEBUG] SettingsView.resetLibrary: SwiftData save error — \(error)")
       }
 
-      // Delete all Albums
-      print("[DEBUG] SettingsView.resetLibrary: Deleting albums")
-      for album in library.albums {
-        modelContext.delete(album)
-      }
+      // ── 3. Clear in-memory library state ──────────────────────────────────
+      // Must happen before loadSongs() so the isLoaded guard doesn't skip the fetch.
+      library.resetInMemoryState()
 
-      // Delete custom and smart playlists
-      print("[DEBUG] SettingsView.resetLibrary: Deleting playlists")
-      for playlist in playlistManager.playlists {
-        if playlist.playlistType == .custom
-          || playlist.playlistType == .smart
-          || playlist.playlistType == .likedSongs
-        {
-          modelContext.delete(playlist)
-        }
-      }
-
-      // Clear artwork cache and song files
-      print(
-        "[DEBUG] SettingsView.resetLibrary: Clearing artwork cache and song files"
-      )
+      // ── 4. Delete physical files & artwork cache ───────────────────────────
       clearCache()
       library.deleteAllFiles()
 
-      // Save and reload
-      print("[DEBUG] SettingsView.resetLibrary: Saving changes")
-      do {
-        try modelContext.save()
-        print("[DEBUG] SettingsView.resetLibrary: Save successful")
-      } catch {
-        print("[DEBUG] SettingsView.resetLibrary: Save error: \(error)")
-      }
+      // ── 5. Clear UserDefaults keys that would skip the next startup scan ──
+      // lastDiskScanTime makes indexOnStartup skip if the directory looks unchanged.
+      // Clearing it forces a full scan on next launch so no ghost data re-appears.
+      let ud = UserDefaults.standard
+      ud.removeObject(forKey: "com.ampwave.lastDiskScanTime")
+      // One-time metadata backfill flag — let it re-run after a fresh import
+      ud.removeObject(forKey: "Ampwave.fullMetadataBackfill.v1")
+      // Also reset the indexing guard in SongLibrary so indexOnStartup runs cleanly
+      ud.synchronize()
 
-      print(
-        "[DEBUG] SettingsView.resetLibrary: Reloading library and playlists"
-      )
-      await library.loadSongs()
+      // ── 6. Reload from (now empty) SwiftData ──────────────────────────────
+      await library.loadSongs(force: true)
       await playlistManager.loadPlaylists()
+
+      // ── 7. Reset onboarding + notify tab view ─────────────────────────────
+      // OpenTabView's .libraryDidReset handler increments libraryResetID (tears
+      // down all NavigationStacks), switches to Home, and after a short delay
+      // presents OnboardingView — all from the stable, long-lived OpenTabView.
+      OnboardingState.reset()
+      NotificationCenter.default.post(name: .libraryDidReset, object: nil)
 
       isResetting = false
       print("[DEBUG] SettingsView.resetLibrary: Full reset completed")
+    }
+  }
+
+  /// Fetch-and-delete every record of a given SwiftData model type.
+  /// Using individual deletes (rather than the batch `delete(model:)` API) avoids
+  /// silent failures from relationship constraint errors in SwiftData.
+  private func deleteAll<T: PersistentModel>(_ type: T.Type) {
+    do {
+      let records = try modelContext.fetch(FetchDescriptor<T>())
+      print("[DEBUG] SettingsView.resetLibrary: Deleting \(records.count) \(T.self) records")
+      for record in records { modelContext.delete(record) }
+    } catch {
+      print("[DEBUG] SettingsView.resetLibrary: Error fetching \(T.self) — \(error)")
     }
   }
 
@@ -1225,6 +1270,139 @@ extension RepeatMode {
     case .one: return "One"
     case .all: return "All"
     }
+  }
+}
+
+// MARK: - Theme Selector View
+
+struct ThemeSelectorView: View {
+  @Environment(\.modelContext) private var modelContext
+  @Environment(ThemeManager.self) private var themeManager
+  @Query private var preferencesList: [UserPreferences]
+  private var userPreferences: UserPreferences? { preferencesList.first }
+
+  private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+
+  var body: some View {
+    ScrollView {
+      VStack(spacing: 24) {
+        // ── Theme grid ──────────────────────────────────────────────────────
+        LazyVGrid(columns: columns, spacing: 12) {
+          ForEach(AppTheme.allCases.filter { $0 != .custom }, id: \.self) { theme in
+            themeCell(theme)
+          }
+        }
+        .padding(.horizontal)
+
+        // ── Custom theme ────────────────────────────────────────────────────
+        NavigationLink {
+          AddThemeView()
+        } label: {
+          HStack(spacing: 14) {
+            ZStack {
+              RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(themeManager.cardBackgroundColor)
+                .frame(width: 52, height: 44)
+              Image(systemName: "paintbrush.pointed.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(themeManager.accentColor)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Custom")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+              Text("Create your own colors")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if userPreferences?.selectedTheme == .custom {
+              Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(themeManager.accentColor)
+                .font(.system(size: 20))
+            }
+
+            Image(systemName: "chevron.right")
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(.tertiary)
+          }
+          .padding(14)
+          .background(themeManager.cardBackgroundColor)
+          .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+              .stroke(
+                userPreferences?.selectedTheme == .custom
+                  ? themeManager.accentColor : Color.clear,
+                lineWidth: 1.5
+              )
+          }
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture().onEnded {
+          userPreferences?.selectedTheme = .custom
+        })
+        .padding(.horizontal)
+      }
+      .padding(.vertical)
+    }
+    .background(themeManager.backgroundColor)
+    .scrollContentBackground(.hidden)
+    .navigationTitle("Appearance")
+    #if os(iOS)
+      .navigationBarTitleDisplayMode(.large)
+    #endif
+  }
+
+  private func themeCell(_ theme: AppTheme) -> some View {
+    let config = theme.colors(isDark: true)
+    let isSelected = userPreferences?.selectedTheme == theme
+
+    return Button {
+      userPreferences?.selectedTheme = theme
+    } label: {
+      VStack(spacing: 6) {
+        // Colour preview
+        ZStack {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(config.background)
+            .frame(height: 50)
+          HStack(spacing: 5) {
+            Circle().fill(config.accent).frame(width: 16, height: 16)
+            Circle().fill(config.cardBackground).frame(width: 10, height: 10)
+          }
+        }
+        .overlay(alignment: .topTrailing) {
+          if isSelected {
+            Image(systemName: "checkmark.circle.fill")
+              .foregroundStyle(themeManager.accentColor)
+              .font(.system(size: 15, weight: .bold))
+              .offset(x: 4, y: -4)
+              .shadow(color: .black.opacity(0.2), radius: 2)
+          }
+        }
+
+        Text(theme.displayName)
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.primary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.8)
+      }
+      .padding(8)
+      .background(
+        isSelected ? themeManager.accentColor.opacity(0.12) : themeManager.cardBackgroundColor
+      )
+      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .stroke(isSelected ? themeManager.accentColor : Color.clear, lineWidth: 1.5)
+      }
+    }
+    .buttonStyle(.plain)
+    .animation(.spring(duration: 0.2), value: isSelected)
   }
 }
 

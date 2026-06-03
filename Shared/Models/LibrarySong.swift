@@ -107,6 +107,10 @@ final class LibrarySong: Identifiable, Hashable {
 
   // MARK: - Fetching status
   var metadataCheckAttempted: Bool = false
+  /// True when at least one successful metadata response was applied to this song.
+  /// Used on startup to re-queue songs that were attempted but never completed
+  /// (e.g. app was killed mid-fetch or the network call failed).
+  var metadataFetchSucceeded: Bool = false
   var lyricsCheckAttempted: Bool = false
 
   // MARK: - Watch Sync status

@@ -274,9 +274,12 @@ final class ThemeManager {
     switch currentTheme {
     case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight:
       return .light
-    case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula:
+    case .dark, .oled,
+         .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha,
+         .dracula,
+         .nordDark, .everforestDark, .kanagawaWave:
       return .dark
-    default: return nil
+    default: return nil  // .ampwave and .custom follow the system
     }
   }
 
@@ -452,6 +455,19 @@ final class UserPreferences: Identifiable {
   }
   @Attribute(originalName: "miniPlayerFloating") var _miniPlayerFloating: Bool?
 
+  var coverArtAccentPlayer: Bool? {
+    get {
+      _coverArtAccentPlayer
+        ?? UserDefaults.standard.object(forKey: "com.ampwave.coverArtAccentPlayer") as? Bool
+    }
+    set {
+      _coverArtAccentPlayer = newValue
+      UserDefaults.standard.set(newValue ?? false, forKey: "com.ampwave.coverArtAccentPlayer")
+      save()
+    }
+  }
+  @Attribute(originalName: "coverArtAccentPlayer") var _coverArtAccentPlayer: Bool?
+
   var fullScreenArtworkExpanded: Bool? {
     get {
       _fullScreenArtworkExpanded
@@ -528,6 +544,8 @@ final class UserPreferences: Identifiable {
     UserDefaults.standard.set(miniPlayerFloating ?? false, forKey: "com.ampwave.miniPlayerFloating")
     UserDefaults.standard.set(
       fullScreenArtworkExpanded ?? false, forKey: "com.ampwave.fullScreenArtworkExpanded")
+    UserDefaults.standard.set(
+      coverArtAccentPlayer ?? false, forKey: "com.ampwave.coverArtAccentPlayer")
   }
 
   var customColorScheme: ColorScheme? {
@@ -582,8 +600,13 @@ final class UserPreferences: Identifiable {
     self.showFullArtworkGradient = true
     self.miniPlayerFloating = false
     self.fullScreenArtworkExpanded = false
+    self.coverArtAccentPlayer = false
     self.isPremiumUser = true
     self.customColorSchemeRaw = "dark"
+    // Don't overwrite a theme the user chose during onboarding — the computed
+    // property getter falls back to UserDefaults, so leaving _selectedThemeRaw
+    // nil here means it will correctly read the onboarding-written value.
+    self._selectedThemeRaw = nil
   }
 
   static func getOrCreate(in modelContext: ModelContext) -> UserPreferences {
@@ -609,6 +632,7 @@ final class UserPreferences: Identifiable {
         if existing.showFullArtworkGradient == nil { existing.showFullArtworkGradient = true }
         if existing.miniPlayerFloating == nil { existing.miniPlayerFloating = false }
         if existing.fullScreenArtworkExpanded == nil { existing.fullScreenArtworkExpanded = false }
+        if existing.coverArtAccentPlayer == nil { existing.coverArtAccentPlayer = false }
         if existing.wordSyncedLyricsEnabled == nil { existing.wordSyncedLyricsEnabled = true }
         if existing.copyMusicToStorage == nil { existing.copyMusicToStorage = true }
         if existing.isPremiumUser == nil { existing.isPremiumUser = true }
@@ -657,6 +681,11 @@ extension ThemeManager {
   var fullScreenArtworkExpanded: Bool {
     userPreferences?.fullScreenArtworkExpanded
       ?? UserDefaults.standard.object(forKey: "com.ampwave.fullScreenArtworkExpanded") as? Bool
+      ?? false
+  }
+  var coverArtAccentPlayer: Bool {
+    userPreferences?.coverArtAccentPlayer
+      ?? UserDefaults.standard.object(forKey: "com.ampwave.coverArtAccentPlayer") as? Bool
       ?? false
   }
 }
