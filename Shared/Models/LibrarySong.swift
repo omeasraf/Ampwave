@@ -25,6 +25,9 @@ final class LibrarySong: Identifiable, Hashable {
   // MARK: - Required (identity & storage)
   @Attribute(.unique) var id: UUID
   var fileName: String
+  /// Relative path to the actual audio file inside the app group/container.
+  /// Kept separate from metadata so artist/album edits do not break playback.
+  var filePath: String?
   var fileHash: String
   var importedDate: Date
   var size: Int
@@ -120,6 +123,7 @@ final class LibrarySong: Identifiable, Hashable {
     title: String,
     artist: String,
     fileName: String,
+    filePath: String? = nil,
     fileHash: String,
     size: Int,
     duration: TimeInterval = 0,
@@ -168,6 +172,7 @@ final class LibrarySong: Identifiable, Hashable {
     self.artist = artist
     self.artists = ArtistParser.parseArtists(from: artist)
     self.fileName = fileName
+    self.filePath = filePath
     self.fileHash = fileHash
     self.size = size
     self.importedDate = Date()
