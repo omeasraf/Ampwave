@@ -1318,8 +1318,11 @@ import SwiftData
 
     // 2. Synced Lyrics
     // Fetch if no synced lyrics AND we haven't already tried.
-    let hasSyncedLyrics = !LRCParser.parse(song.lyrics ?? "").isEmpty
-    if preferences.autoFetchLyrics && !hasSyncedLyrics && !song.lyricsCheckAttempted && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode {
+    let syncedLyricLines = LRCParser.parse(song.lyrics ?? "")
+    let hasSyncedLyrics = !syncedLyricLines.isEmpty
+    let hasWordSyncedLyrics = syncedLyricLines.contains { ($0.wordOffsets?.count ?? 0) > 1 }
+    let needsLyricsFetch = !hasSyncedLyrics || (preferences.wordSyncedLyricsEnabled && !hasWordSyncedLyrics)
+    if preferences.autoFetchLyrics && needsLyricsFetch && !song.lyricsCheckAttempted && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode {
       print(
         "[DEBUG] SongLibrary.fetchMetadataForSong: Missing synced lyrics, calling LyricsService")
 

@@ -519,7 +519,12 @@ struct SettingsView: View {
           "Word-synced Lyrics",
           isOn: Binding(
             get: { preferences.wordSyncedLyricsEnabled },
-            set: { preferences.wordSyncedLyricsEnabled = $0 }
+            set: {
+              preferences.wordSyncedLyricsEnabled = $0
+              if $0 {
+                PlaybackController.shared.ensureWordSyncedLyricsForCurrentSong()
+              }
+            }
           )
         )
 
@@ -657,11 +662,41 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
         }
       }
+
+      Link(destination: URL(string: "https://github.com/binimum/lyrics-api")!) {
+        HStack {
+          Label("Binimum Lyrics API", systemImage: "waveform.and.magnifyingglass")
+          Spacer()
+          Text("Word-Synced Lyrics")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      Link(destination: URL(string: "https://github.com/akashrchandran/spotify-lyrics-api")!) {
+        HStack {
+          Label("LyricsPlus", systemImage: "music.note.list")
+          Spacer()
+          Text("Word-Synced Lyrics")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      Link(destination: URL(string: "https://developer.apple.com/musickit/")!) {
+        HStack {
+          Label("Apple MusicKit", systemImage: "applelogo")
+          Spacer()
+          Text("Song Metadata")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
     } header: {
       Text("Data Sources")
     } footer: {
       Text(
-        "Ampwave uses these open-source community databases for high-quality metadata, artwork, and lyrics."
+        "Ampwave uses open-source community databases and Apple MusicKit for metadata, artwork, and lyrics. Word-synced lyrics are provided by Binimum and LyricsPlus."
       )
     }
   }

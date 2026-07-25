@@ -42,50 +42,39 @@ struct AlbumCard: View {
 
   private var cardContent: some View {
     VStack(alignment: .leading, spacing: 0) {
+      // Square artwork. Fixed to artworkSize so the card has a stable, predictable
+      // width in both LazyVGrid columns AND LazyHStack horizontal scrollers.
+      // (maxWidth:.infinity caused cards to expand to fill the entire HScrollView.)
+      AlbumArtworkView(
+        artworkPath: album.artworkPath,
+        size: artworkSize,
+        cornerRadius: isFullBleed ? 0 : max(8, artworkSize * 0.08)
+      )
+      .accessibilityHidden(true)
 
-      // Square artwork.
-      // `minWidth: artworkSize` guarantees a non-zero size in LazyHStack where the
-      // parent proposes no width. `maxWidth: .infinity` lets it expand inside a grid
-      // column. `aspectRatio(1, .fit)` constrains height to match the resolved width.
-      // The overlay GeometryReader then measures the actual rendered width and passes
-      // it to AlbumArtworkView so the image is always pixel-perfect square.
-      Color.clear
-        .frame(minWidth: artworkSize, maxWidth: .infinity)
-        .aspectRatio(1, contentMode: .fit)
-        .overlay {
-          GeometryReader { geo in
-            let w = geo.size.width
-            AlbumArtworkView(
-              artworkPath: album.artworkPath,
-              size: w,
-              cornerRadius: isFullBleed ? 0 : max(8, w * 0.08)
-            )
-          }
-        }
-        .accessibilityHidden(true)
-
-      // Text below artwork — always one line so every card in a row stays the
-      // same height and artwork aligns horizontally across the grid.
+      // Text — single line with ellipsis so every card stays the same height.
       VStack(alignment: .leading, spacing: 3) {
         Text(album.name)
-          .font(.system(size: 14, weight: .semibold, design: .rounded))
+          .font(.system(size: 13, weight: .semibold, design: .rounded))
           .lineLimit(1)
           .truncationMode(.tail)
           .foregroundStyle(.primary)
 
         if let artist = album.artist {
           Text(artist)
-            .font(.system(size: 12, weight: .medium))
+            .font(.system(size: 11, weight: .medium))
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.tail)
         }
       }
       .padding(.horizontal, isFullBleed ? 10 : 4)
-      .padding(.top, 7)
+      .padding(.top, 6)
       .padding(.bottom, isFullBleed ? 10 : 4)
+      .frame(width: artworkSize, alignment: .leading)
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
+    // Fixed width ensures the card is the right size in grids AND horizontal scrollers.
+    .frame(width: artworkSize, alignment: .leading)
   }
 
   // MARK: - Accessibility

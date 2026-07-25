@@ -1110,11 +1110,37 @@ final class PlaybackController {
 
   private func loadLyrics(for song: LibrarySong) async {
     let lyricsService = LyricsService.shared
-    currentLyrics = lyricsService.getCachedLyrics(for: song)
-    if currentLyrics == nil {
-      currentLyrics = await lyricsService.fetchLyrics(for: song)
+
+    // 1. Try full fetch (respects caching + word-sync upgrade inside fetchLyrics)
+    let fetched = await lyricsService.fetchLyrics(for: song)
+    currentLyrics = fetched ?? lyricsService.getCachedLyrics(for: song)
+
+    // 2. If word-sync is enabled but what we have is only line-synced, upgrade now.
+    if let mc = modelContext {
+      let prefs = UserPreferences.getOrCreate(in: mc)
+      let hasWordSync = currentLyrics?.lines.contains { ($0.wordOffsets?.count ?? 0) > 1 } ?? false
+      if prefs.wordSyncedLyricsEnabled && !hasWordSync
+          && NetworkMonitor.shared.isOnline && !prefs.isOfflineMode {
+        if let upgraded = await lyricsService.fetchWordSyncedLyrics(for: song) {
+          currentLyrics = upgraded
+        }
+      }
     }
+
     updateWidget(force: true)
+  }
+
+  func ensureWordSyncedLyricsForCurrentSong() {
+    guard let song = currentItem else { return }
+
+    Task {
+      let lyricsService = LyricsService.shared
+      if let wordSyncedLyrics = await lyricsService.fetchWordSyncedLyrics(for: song) {
+        currentLyrics = wordSyncedLyrics
+        updateCurrentLyric()
+        updateWidget(force: true)
+      }
+    }
   }
 
   private func updateCurrentLyric() {

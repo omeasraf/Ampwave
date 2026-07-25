@@ -45,8 +45,11 @@ struct OpenPlayerView: View {
   var body: some View {
     NavigationStack {
       ZStack {
-        let coverArtAccent = userPreferences?.coverArtAccentPlayer ?? false
-        if (userPreferences?.fullArtworkBackground ?? true) || coverArtAccent {
+        let fullBackground = userPreferences?.fullArtworkBackground ?? true
+        // playerBackground (the accent gradient) is only shown when Full Artwork
+        // Background is enabled. When it's off, the accent tint is applied only
+        // to the ScrollView background below, keeping the nav-bar area clean.
+        if fullBackground {
           playerBackground
         } else {
           themeManager.backgroundColor

@@ -31,6 +31,10 @@ struct ExpandedLyricsView: View {
           themeManager.backgroundColor.ignoresSafeArea()
         }
 
+        // Ambient orbs — slow colour blobs between the background and text
+        LyricsAmbientOrbs(color: themeManager.accentColor)
+          .ignoresSafeArea()
+
         // Lyrics content
         Group {
           if let lyrics = playback.currentLyrics, lyrics.hasLyrics {
@@ -258,27 +262,21 @@ struct CompactLyricsView: View {
                 Array(lyrics.lines.enumerated()),
                 id: \.element.timestamp
               ) { index, line in
+                // currentTime is NOT read here — it's read only inside LiveWordSyncView
+                // (via CompactLyricLineView) for the current line. This means the
+                // ForEach only re-renders when currentLyricIndex changes (infrequently),
+                // not on every timer tick.
                 CompactLyricLineView(
                   line: line,
                   isCurrent: isCurrentLine(index),
-                  currentTime: playback.currentTime,
-                  wordSyncEnabled: PlaybackController.shared.currentLyrics?.lines[index].wordOffsets != nil
+                  wordSyncEnabled: line.wordOffsets != nil
                     && (ThemeManager.shared.userPreferences?.wordSyncedLyricsEnabled ?? false)
                 )
-                  .id(index)
-                  .onTapGesture {
-                    playback.seek(to: line.timestamp)
-                    if !playback.isPlaying {
-                      playback.play()
-                    }
-                  }
-                  .animation(
-                    isVisible ? .spring(
-                      response: 0.3,
-                      dampingFraction: 0.7
-                    ) : nil,
-                    value: playback.currentLyricIndex
-                  )
+                .id(index)
+                .onTapGesture {
+                  playback.seek(to: line.timestamp)
+                  if !playback.isPlaying { playback.play() }
+                }
               }
 
               // Bottom spacer for centering
@@ -450,25 +448,42 @@ struct LyricLineView: View {
   @Bindable var playback: PlaybackController
   @Environment(ThemeManager.self) private var themeManager
 
+  private var wordSyncEnabled: Bool {
+    themeManager.userPreferences?.wordSyncedLyricsEnabled ?? false
+  }
+
+  // True only when this line is active AND karaoke data is available.
+  // Drives the content crossfade independently from the line's own scale/opacity.
+  private var showKaraoke: Bool {
+    isCurrent && wordSyncEnabled && !(line.wordOffsets?.isEmpty ?? true)
+  }
+
+  private var mergedWords: [WordOffset] {
+    guard let offsets = line.wordOffsets else { return [] }
+    return LRCParser.mergeSyllables(offsets)
+  }
+
   var body: some View {
-    Group {
-      if isCurrent,
-        themeManager.userPreferences?.wordSyncedLyricsEnabled ?? false,
-        let words = line.wordOffsets,
-        !words.isEmpty
-      {
-          WordByWordLyricView(
-            words: words,
-            currentTime: playback.currentTime,
-            fontSize: 24,
-            activeColor: .white,
-            inactiveColor: .white.opacity(0.35),
-            isScrubbing: playback.isScrubbing
-          )
+    // ZStack (not Group) gives SwiftUI a stable container identity so that
+    // the .transition(.opacity) on each branch actually fires.
+    ZStack {
+      if showKaraoke {
+        // LiveWordSyncView isolates currentTime observation so only this small
+        // view re-renders at the high-frequency timer rate, not the full line list.
+        LiveWordSyncView(
+          words: mergedWords,
+          fontSize: 24,
+          activeColor: .white
+        )
+        .transition(.opacity)
       } else {
         plainLineText
+          .transition(.opacity)
       }
     }
+    // Inner animation: crossfades the content (plain ↔ karaoke) with a smooth
+    // ease so the text never pops in or out abruptly.
+    .animation(.easeInOut(duration: 0.35), value: showKaraoke)
     .multilineTextAlignment(.center)
     .lineLimit(nil)
     .fixedSize(horizontal: false, vertical: true)
@@ -479,34 +494,59 @@ struct LyricLineView: View {
     #else
       .frame(maxWidth: .infinity)
     #endif
-    .scaleEffect(
-      isCurrent ? 1.05 : 1.0,
-      anchor: .center
-    )
+    .opacity(isCurrent ? 1.0 : 0.28)
+    .scaleEffect(isCurrent ? 1.08 : 1.0, anchor: .center)
     .id(index)
     .onTapGesture {
       playback.seek(to: line.timestamp)
-      if !playback.isPlaying {
-        playback.play()
-      }
+      if !playback.isPlaying { playback.play() }
     }
-    .animation(
-      .spring(response: 0.3, dampingFraction: 0.7),
-      value: playback.currentLyricIndex
-    )
+    // Outer animation: the scale + opacity breathe when the line becomes current.
+    .animation(.spring(response: 0.45, dampingFraction: 0.75), value: isCurrent)
   }
 
   private var plainLineText: some View {
-    Text(line.text)
-      .font(
-        .system(
-          size: 24,
-          weight: isCurrent ? .bold : .semibold
-        )
-      )
-      .foregroundStyle(
-        isCurrent ? .white : .white.opacity(0.35)
-      )
+    Text(displayText)
+      .font(.system(size: 24, weight: isCurrent ? .bold : .semibold))
+      .foregroundStyle(.white)
+  }
+
+  /// Display text derived from (merged) wordOffsets so stale cached
+  /// line.text values and unmerged syllable fragments are never shown.
+  private var displayText: String {
+    guard let offsets = line.wordOffsets, !offsets.isEmpty else { return line.text }
+    return LRCParser.mergeSyllables(offsets).map(\.text).joined(separator: " ")
+  }
+}
+
+/// Single word token — Apple Music style.
+///
+/// Three layered transitions fire together on a spring when `isActive` flips:
+///   • Blur  2.5 → 0     words come *into focus* (the "breathe in" sensation)
+///   • Scale 0.92 → 1.0  each word gently expands as it activates
+///   • Opacity 0.22 → 1.0 dim → full brightness
+///
+/// `scaleEffect` is a visual-only transform in SwiftUI — it never affects
+/// layout, so neighbouring words in the wrapping grid cannot shift.
+private struct WordToken: View {
+  let text: String
+  let isActive: Bool
+  let activeColor: Color
+  let fontSize: CGFloat
+  let isScrubbing: Bool
+
+  // Slight overshoot (dampingFraction 0.62) gives the activation a tiny
+  // elastic "pop" that reads as a breath rather than a mechanical toggle.
+  private let spring = Animation.spring(response: 0.45, dampingFraction: 0.62)
+
+  var body: some View {
+    Text(text)
+      .font(.system(size: fontSize, weight: .bold))
+      .foregroundStyle(activeColor)
+      .opacity(isScrubbing ? 0.38 : isActive ? 1.0 : 0.22)
+      .scaleEffect(isActive && !isScrubbing ? 1.0 : 0.92, anchor: .center)
+      .animation(spring, value: isActive)
+      .animation(.easeOut(duration: 0.2), value: isScrubbing)
   }
 }
 
@@ -515,70 +555,77 @@ struct WordByWordLyricView: View {
   let currentTime: TimeInterval
   let fontSize: CGFloat
   let activeColor: Color
-  let inactiveColor: Color
   var isScrubbing: Bool = false
 
+  /// Index of the word whose timestamp has most recently been crossed.
+  private var activeUpToIndex: Int {
+    var idx = -1
+    for (i, word) in words.enumerated() {
+      if currentTime >= word.timestamp { idx = i } else { break }
+    }
+    return idx
+  }
+
   var body: some View {
-    Text(attributedText)
-      .font(.system(size: fontSize, weight: .bold))
+    WrappingWordsLayout(
+      horizontalSpacing: max(5, fontSize * 0.3),
+      verticalSpacing:   max(4, fontSize * 0.22)
+    ) {
+      ForEach(Array(words.enumerated()), id: \.offset) { index, word in
+        WordToken(
+          text: word.text.trimmingCharacters(in: .whitespacesAndNewlines),
+          isActive: index <= activeUpToIndex,
+          activeColor: activeColor,
+          fontSize: fontSize,
+          isScrubbing: isScrubbing
+        )
+      }
+    }
+    // NOTE: drawingGroup() is intentionally omitted. It composites everything
+    // into a single Metal texture which prevents the per-word spring animations
+    // from working — the whole point of the karaoke highlight effect.
   }
+}
 
-  private var attributedText: AttributedString {
-    if isScrubbing {
-      var segment = AttributedString(words.map { $0.text }.joined())
-      segment.foregroundColor = inactiveColor
-      return segment
-    }
+/// Isolated view that reads PlaybackController.currentTime independently.
+/// By confining the high-frequency observation here, the parent lyric-list views
+/// only re-render when currentLyricIndex changes (once per line, every few seconds).
+private struct LiveWordSyncView: View {
+  @Bindable private var playback = PlaybackController.shared
+  let words: [WordOffset]
+  let fontSize: CGFloat
+  let activeColor: Color
 
-    var result = AttributedString()
-
-    for (index, word) in words.enumerated() {
-      var segment = AttributedString(word.text)
-      segment.foregroundColor = isWordActive(at: index) ? activeColor : inactiveColor
-      result.append(segment)
-    }
-
-    return result
-  }
-
-  private func isWordActive(at index: Int) -> Bool {
-    guard index < words.count else { return false }
-
-    let word = words[index]
-    let nextTimestamp: TimeInterval
-    if index < words.count - 1 {
-      nextTimestamp = words[index + 1].timestamp
-    } else {
-      nextTimestamp = word.timestamp + 0.5
-    }
-
-    if currentTime < word.timestamp { return false }
-    if index == words.count - 1 { return true }
-    return currentTime >= word.timestamp && currentTime < nextTimestamp || currentTime >= nextTimestamp
+  var body: some View {
+    WordByWordLyricView(
+      words: words,
+      currentTime: playback.currentTime,       // high-frequency — only THIS view re-renders
+      fontSize: fontSize,
+      activeColor: activeColor,
+      isScrubbing: playback.isScrubbing
+    )
   }
 }
 
 private struct CompactLyricLineView: View {
   let line: LyricLine
   let isCurrent: Bool
-  let currentTime: TimeInterval
   let wordSyncEnabled: Bool
 
   var body: some View {
     Group {
       if isCurrent, wordSyncEnabled, let words = line.wordOffsets, !words.isEmpty {
-        WordByWordLyricView(
-          words: words,
-          currentTime: currentTime,
+        // LiveWordSyncView isolates high-frequency currentTime reads so only
+        // this word view re-renders on every timer tick, not the full scroll list.
+        LiveWordSyncView(
+          words: LRCParser.mergeSyllables(words),
           fontSize: 15,
-          activeColor: .primary,
-          inactiveColor: .secondary,
-          isScrubbing: PlaybackController.shared.isScrubbing
+          activeColor: .primary
         )
       } else {
-        Text(line.text)
-          .font(.system(size: 15, weight: isCurrent ? .bold : .regular))
-          .foregroundStyle(isCurrent ? .primary : .secondary)
+        Text(displayText)
+          .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
+          .foregroundStyle(isCurrent ? Color.primary : Color.secondary)
       }
     }
     .multilineTextAlignment(.center)
@@ -586,6 +633,153 @@ private struct CompactLyricLineView: View {
     .fixedSize(horizontal: false, vertical: true)
     .padding(.horizontal, 16)
     .frame(minWidth: 0, maxWidth: .infinity, alignment: .center)
-    .scaleEffect(isCurrent ? 1.08 : 1.0, anchor: .center)
+    .opacity(isCurrent ? 1.0 : 0.55)
+    .scaleEffect(isCurrent ? 1.05 : 1.0, anchor: .center)
+    .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isCurrent)
+  }
+
+  private var displayText: String {
+    guard let offsets = line.wordOffsets, !offsets.isEmpty else { return line.text }
+    return LRCParser.mergeSyllables(offsets).map(\.text).joined(separator: " ")
+  }
+}
+
+// MARK: - Ambient background orbs
+
+/// Slow-moving colour blobs that sit between the blurred artwork and the
+/// lyrics text, mimicking the ambient gradient effect in Apple Music's
+/// full-screen lyrics view. They breathe independently at different rates
+/// so the result never looks mechanical.
+private struct LyricsAmbientOrbs: View {
+  let color: Color
+  @State private var phase = false
+
+  var body: some View {
+    ZStack {
+      // Primary orb — top-left, largest
+      Circle()
+        .fill(color.opacity(0.5))
+        .frame(width: 360)
+        .blur(radius: 100)
+        .offset(x: phase ? -60 : -100, y: phase ? -200 : -260)
+        .scaleEffect(phase ? 1.2 : 0.8)
+        .animation(
+          .easeInOut(duration: 8).repeatForever(autoreverses: true),
+          value: phase
+        )
+
+      // Secondary orb — top-right, medium
+      Circle()
+        .fill(color.opacity(0.35))
+        .frame(width: 280)
+        .blur(radius: 85)
+        .offset(x: phase ? 110 : 70, y: phase ? -140 : -190)
+        .scaleEffect(phase ? 0.85 : 1.15)
+        .animation(
+          .easeInOut(duration: 6.5).repeatForever(autoreverses: true),
+          value: phase
+        )
+
+      // Accent orb — lower-centre, small
+      Circle()
+        .fill(color.opacity(0.25))
+        .frame(width: 200)
+        .blur(radius: 70)
+        .offset(x: phase ? 20 : -30, y: phase ? 60 : 20)
+        .scaleEffect(phase ? 1.1 : 0.88)
+        .animation(
+          .easeInOut(duration: 9).repeatForever(autoreverses: true),
+          value: phase
+        )
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .allowsHitTesting(false)
+    .onAppear { phase = true }
+  }
+}
+
+private struct WrappingWordsLayout: Layout {
+  var horizontalSpacing: CGFloat
+  var verticalSpacing: CGFloat
+
+  func sizeThatFits(
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout Void
+  ) -> CGSize {
+    let rows = arrangedRows(proposal: proposal, subviews: subviews)
+    let width = rows.map(\.width).max() ?? 0
+    let height = rows.last.map { $0.y + $0.height } ?? 0
+    return CGSize(width: width, height: height)
+  }
+
+  func placeSubviews(
+    in bounds: CGRect,
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout Void
+  ) {
+    let rows = arrangedRows(proposal: ProposedViewSize(width: bounds.width, height: proposal.height), subviews: subviews)
+
+    for row in rows {
+      let rowX = bounds.minX + max(0, (bounds.width - row.width) / 2)
+
+      for item in row.items {
+        subviews[item.index].place(
+          at: CGPoint(x: rowX + item.x, y: bounds.minY + row.y),
+          anchor: .topLeading,
+          proposal: ProposedViewSize(item.size)
+        )
+      }
+    }
+  }
+
+  private func arrangedRows(proposal: ProposedViewSize, subviews: Subviews) -> [Row] {
+    let maxWidth = proposal.width ?? subviews.reduce(CGFloat.zero) { partial, subview in
+      partial + subview.sizeThatFits(.unspecified).width + horizontalSpacing
+    }
+
+    var rows: [Row] = []
+    var currentItems: [RowItem] = []
+    var currentX: CGFloat = 0
+    var currentY: CGFloat = 0
+    var currentHeight: CGFloat = 0
+
+    for index in subviews.indices {
+      let size = subviews[index].sizeThatFits(.unspecified)
+      let nextX = currentItems.isEmpty ? size.width : currentX + horizontalSpacing + size.width
+
+      if nextX > maxWidth, !currentItems.isEmpty {
+        rows.append(Row(items: currentItems, y: currentY, width: currentX, height: currentHeight))
+        currentY += currentHeight + verticalSpacing
+        currentItems = []
+        currentX = 0
+        currentHeight = 0
+      }
+
+      let x = currentItems.isEmpty ? 0 : currentX + horizontalSpacing
+      currentItems.append(RowItem(index: index, x: x, size: size))
+      currentX = x + size.width
+      currentHeight = max(currentHeight, size.height)
+    }
+
+    if !currentItems.isEmpty {
+      rows.append(Row(items: currentItems, y: currentY, width: currentX, height: currentHeight))
+    }
+
+    return rows
+  }
+
+  private struct Row {
+    let items: [RowItem]
+    let y: CGFloat
+    let width: CGFloat
+    let height: CGFloat
+  }
+
+  private struct RowItem {
+    let index: Int
+    let x: CGFloat
+    let size: CGSize
   }
 }
