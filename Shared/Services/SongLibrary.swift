@@ -691,18 +691,8 @@ import SwiftData
     let copiedSongsNeedingRepair = existingSongs.filter { song in
       guard song.storageMode == .copied else { return false }
 
-      if let storedURL = resolvedStoredFileURL(for: song),
-        fileManager.fileExists(atPath: storedURL.path)
-      {
-        return false
-      }
-
-      let legacyURL = legacyMetadataFileURL(for: song)
-      if fileManager.fileExists(atPath: legacyURL.path) {
-        return true
-      }
-
-      return true
+      guard let storedURL = resolvedStoredFileURL(for: song) else { return true }
+      return !fileManager.fileExists(atPath: storedURL.path)
     }
 
     guard !copiedSongsNeedingRepair.isEmpty else { return }
@@ -807,7 +797,7 @@ import SwiftData
     return audioFiles
   }
 
-  nonisolated private func calculateFileHash(at url: URL) -> String? {
+  nonisolated private func fileHash(at url: URL) async -> String? {
     do {
       let handle = try FileHandle(forReadingFrom: url)
       defer { try? handle.close() }
@@ -827,10 +817,6 @@ import SwiftData
       print("Failed to calculate hash: \(error)")
       return nil
     }
-  }
-
-  nonisolated private func fileHash(at url: URL) async -> String? {
-    calculateFileHash(at: url)
   }
 
   // MARK: - Import
@@ -917,6 +903,7 @@ import SwiftData
 
     // Perform SwiftData operations on Main Actor
     print("[DEBUG] SongLibrary.importFile: Checking for existing song with hash: \(fileHash)")
+    var songToRepair: LibrarySong?
     do {
       var descriptor = FetchDescriptor<LibrarySong>(
         predicate: #Predicate<LibrarySong> { $0.fileHash == fileHash }
@@ -924,17 +911,16 @@ import SwiftData
       descriptor.fetchLimit = 1
       if let existingSong = try modelContext.fetch(descriptor).first {
         let existingURL = getFileURL(for: existingSong)
-        if !FileManager.default.fileExists(atPath: existingURL.path) {
-          print(
-            "[DEBUG] SongLibrary.importFile: Removing stale duplicate record for missing file: \(existingURL.path)"
-          )
-          modelContext.delete(existingSong)
-          try? modelContext.save()
-        } else {
+        if fileManager.fileExists(atPath: existingURL.path) {
           print(
             "[DEBUG] SongLibrary.importFile: Song already exists in library (hash: \(fileHash))"
           )
           return nil
+        } else {
+          print(
+            "[DEBUG] SongLibrary.importFile: Reusing stale record for missing file: \(existingURL.path)"
+          )
+          songToRepair = existingSong
         }
       }
     } catch {
@@ -1003,15 +989,6 @@ import SwiftData
 
     let uniqueFileName = destinationURL.lastPathComponent
 
-    // Cache artwork
-    print("[DEBUG] SongLibrary.importFile: Caching artwork")
-    let artworkPath: String?
-    if let data = metadata.artwork {
-      artworkPath = await cacheArtwork(data)
-    } else {
-      artworkPath = nil
-    }
-
     // Check for companion .lrc file in the source location
     var songLyrics = metadata.lyrics
     let lrcURL = url.deletingPathExtension().appendingPathExtension("lrc")
@@ -1025,6 +1002,28 @@ import SwiftData
           try? FileManager.default.copyItem(at: lrcURL, to: destLrcURL)
         }
       }
+    }
+
+    if let songToRepair {
+      print("[DEBUG] SongLibrary.importFile: Repairing existing LibrarySong storage")
+      // Preserve identity and user state; only replace fields that locate the audio file.
+      songToRepair.fileName = uniqueFileName
+      updateStoredFilePath(for: songToRepair, to: destinationURL)
+      songToRepair.fileHash = fileHash
+      songToRepair.size = fileSize
+      songToRepair.storageMode = storageMode
+      songToRepair.bookmarkData = bookmarkData
+      print("[DEBUG] SongLibrary.importFile: Repaired existing LibrarySong \(songToRepair.id)")
+      return songToRepair
+    }
+
+    // Cache artwork only when creating a new model.
+    print("[DEBUG] SongLibrary.importFile: Caching artwork")
+    let artworkPath: String?
+    if let data = metadata.artwork {
+      artworkPath = await cacheArtwork(data)
+    } else {
+      artworkPath = nil
     }
 
     print("[DEBUG] SongLibrary.importFile: Creating LibrarySong object")
@@ -1950,14 +1949,6 @@ import SwiftData
       return legacyURL
     }
 
-    if song.storageMode == .copied,
-      let repairedURL = findManagedFileURL(named: song.fileName, matchingHash: song.fileHash)
-    {
-      updateStoredFilePath(for: song, to: repairedURL)
-      try? modelContext?.save()
-      return repairedURL
-    }
-
     return resolvedStoredFileURL(for: song) ?? legacyURL
   }
 
@@ -1984,16 +1975,6 @@ import SwiftData
     guard song.filePath != relativePath else { return false }
     song.filePath = relativePath
     return true
-  }
-
-  private func findManagedFileURL(named fileName: String, matchingHash expectedHash: String) -> URL? {
-    let candidates = findAudioFiles(in: songsDirectory).filter { $0.lastPathComponent == fileName }
-    for candidate in candidates {
-      if calculateFileHash(at: candidate) == expectedHash {
-        return candidate.standardizedFileURL
-      }
-    }
-    return nil
   }
 
   nonisolated private func getAlbumDirectory(album: String?, artist: String?, groupByAlbum: Bool)
