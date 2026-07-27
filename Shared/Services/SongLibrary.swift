@@ -764,7 +764,7 @@ import SwiftData
 
   // MARK: - Import
 
-  func importFiles(_ urls: [URL]) async {
+  func importFiles(_ urls: [URL], forceCopy: Bool? = nil) async {
     print("[DEBUG] SongLibrary.importFiles: Starting import of \(urls.count) files")
     guard let modelContext = modelContext else {
       print("[DEBUG] SongLibrary.importFiles: Error - No modelContext")
@@ -791,7 +791,11 @@ import SwiftData
       indexingStatus = .indexing("Importing \(index + 1)/\(totalCount)…")
 
       if await importFile(
-        from: url, modelContext: modelContext, groupByAlbum: groupByAlbum) != nil
+        from: url,
+        modelContext: modelContext,
+        groupByAlbum: groupByAlbum,
+        forceCopy: forceCopy
+      ) != nil
       {
         importedCount += 1
         print("[DEBUG] SongLibrary.importFiles: Successfully imported \(url.lastPathComponent)")
@@ -825,7 +829,12 @@ import SwiftData
       "[DEBUG] SongLibrary.importFiles: Completed. Imported \(importedCount)/\(totalCount) files")
   }
 
-  private func importFile(from url: URL, modelContext: ModelContext, groupByAlbum: Bool) async
+  private func importFile(
+    from url: URL,
+    modelContext: ModelContext,
+    groupByAlbum: Bool,
+    forceCopy: Bool? = nil
+  ) async
     -> LibrarySong?
   {
     print("[DEBUG] SongLibrary.importFile: Starting for \(url.lastPathComponent)")
@@ -863,7 +872,7 @@ import SwiftData
     // Offload remaining heavy I/O to a background task
     print("[DEBUG] SongLibrary.importFile: Offloading remaining I/O to background task")
     let preferences = UserPreferences.getOrCreate(in: modelContext)
-    let shouldCopy = preferences.copyMusicToStorage
+    let shouldCopy = forceCopy ?? preferences.copyMusicToStorage
 
     let ioResult = await Task.detached(priority: .userInitiated) {
       // Extract metadata (this also does I/O)

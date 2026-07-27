@@ -250,7 +250,7 @@ struct OpenPlayerView: View {
         }
       }
       #if os(iOS)
-        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
       #endif
       .confirmationDialog(
         "Add Song to Playlist",

@@ -294,12 +294,20 @@ private struct RuleRowView: View {
       TextField("Value", text: $rule.value)
 
     case .year:
-      TextField("e.g. 2020", text: $rule.value)
-        .keyboardType(.numberPad)
+      #if os(iOS)
+        TextField("e.g. 2020", text: $rule.value)
+          .keyboardType(.numberPad)
+      #else
+        TextField("e.g. 2020", text: $rule.value)
+      #endif
 
     case .playCount:
-      TextField("Play count", text: $rule.value)
-        .keyboardType(.numberPad)
+      #if os(iOS)
+        TextField("Play count", text: $rule.value)
+          .keyboardType(.numberPad)
+      #else
+        TextField("Play count", text: $rule.value)
+      #endif
 
     case .rating:
       Picker("Rating", selection: Binding(
@@ -315,13 +323,21 @@ private struct RuleRowView: View {
 
     case .duration:
       HStack {
-        TextField("Seconds", text: $rule.value).keyboardType(.numberPad)
+        #if os(iOS)
+          TextField("Seconds", text: $rule.value).keyboardType(.numberPad)
+        #else
+          TextField("Seconds", text: $rule.value)
+        #endif
         Text("sec").foregroundStyle(.secondary).font(.caption)
       }
 
     case .lastPlayed:
       HStack {
-        TextField("Days", text: $rule.value).keyboardType(.numberPad)
+        #if os(iOS)
+          TextField("Days", text: $rule.value).keyboardType(.numberPad)
+        #else
+          TextField("Days", text: $rule.value)
+        #endif
         Text(rule.operation == .is_ || rule.operation == .isNot ? "" : "days ago")
           .foregroundStyle(.secondary).font(.caption)
       }

@@ -10,7 +10,6 @@ internal import SwiftUI
 
 struct MacOSLyricsWindowView: View {
   @Environment(\.dismiss) private var dismiss
-  @Environment(ThemeManager.self) private var themeManager
   private var playback: PlaybackController { PlaybackController.shared }
   @State private var isHovering = false
 
@@ -54,7 +53,6 @@ struct MacOSLyricsWindowView: View {
             Color.clear.frame(width: max(20, w * 0.06))
           }
           .frame(height: 12)
-          .background(themeManager.cardBackgroundColor.opacity(0.6))
         }
       }
     }

@@ -482,9 +482,9 @@ struct EqualizerSettingsView: View {
             .navigationTitle("Equalizer")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbarBackground(themeManager.backgroundColor, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+            #endif
     }
 }
 

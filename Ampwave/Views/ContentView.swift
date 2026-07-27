@@ -18,10 +18,17 @@ struct ContentView: View {
     ZStack {
       themeManager.backgroundColor.ignoresSafeArea()
 
-      OpenTabView(isPlayerExpanded: $isPlayerExpanded)
+      #if os(iOS)
+        OpenTabView(isPlayerExpanded: $isPlayerExpanded)
         .fullScreenCover(isPresented: $isPlayerExpanded) {
           OpenPlayerView()
         }
+      #else
+        OpenTabView(isPlayerExpanded: $isPlayerExpanded)
+          .sheet(isPresented: $isPlayerExpanded) {
+            OpenPlayerView()
+          }
+      #endif
     }
     .onAppear {
       ThemeManager.shared.ampwaveColorScheme = colorScheme

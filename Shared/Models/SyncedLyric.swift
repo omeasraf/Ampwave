@@ -31,15 +31,30 @@ final class SyncedLyric: Identifiable {
   }
 
   func line(at time: TimeInterval) -> LyricLine? {
-    lines.last { $0.timestamp <= time }
+    guard let index = lineIndex(at: time) else { return nil }
+    return lines[index]
   }
 
   func lineIndex(at time: TimeInterval) -> Int? {
-    lines.lastIndex { $0.timestamp <= time }
+    guard !lines.isEmpty, time >= lines[0].timestamp else { return nil }
+
+    var lowerBound = 0
+    var upperBound = lines.count
+    while lowerBound < upperBound {
+      let midpoint = lowerBound + (upperBound - lowerBound) / 2
+      if lines[midpoint].timestamp <= time {
+        lowerBound = midpoint + 1
+      } else {
+        upperBound = midpoint
+      }
+    }
+    return lowerBound - 1
   }
 
   func nextLine(after time: TimeInterval) -> LyricLine? {
-    lines.first { $0.timestamp > time }
+    let nextIndex = (lineIndex(at: time) ?? -1) + 1
+    guard lines.indices.contains(nextIndex) else { return nil }
+    return lines[nextIndex]
   }
 
   var hasLyrics: Bool {

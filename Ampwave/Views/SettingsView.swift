@@ -85,6 +85,7 @@ struct SettingsView: View {
       themingSection.listRowBackground(themeManager.cardBackgroundColor)
       layoutSection.listRowBackground(themeManager.cardBackgroundColor)
       onlineFeaturesSection.listRowBackground(themeManager.cardBackgroundColor)
+      webDAVSection.listRowBackground(themeManager.cardBackgroundColor)
       dataManagementSection.listRowBackground(themeManager.cardBackgroundColor)
       dataSourcesSection.listRowBackground(themeManager.cardBackgroundColor)
       aboutSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -299,6 +300,13 @@ struct SettingsView: View {
         isShowingImporter = true
       } label: {
         Label("Import Playlist", systemImage: "music.note.list")
+      }
+      .disabled(isImporting)
+
+      NavigationLink {
+        WebDAVBrowserView()
+      } label: {
+        Label("Import from WebDAV", systemImage: "externaldrive.badge.icloud")
       }
       .disabled(isImporting)
 
@@ -607,6 +615,34 @@ struct SettingsView: View {
     } footer: {
       Text(
         "When online, the app can fetch metadata, lyrics, and artwork from online sources. All data is cached for offline use."
+      )
+    }
+  }
+
+  private var webDAVSection: some View {
+    Section {
+      NavigationLink {
+        WebDAVSettingsView()
+      } label: {
+        HStack {
+          Label("WebDAV Connection", systemImage: "server.rack")
+          Spacer()
+          Text(WebDAVSettingsStore.isConfigured ? "Configured" : "Not Configured")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      NavigationLink {
+        WebDAVBrowserView()
+      } label: {
+        Label("Browse WebDAV Music", systemImage: "folder.badge.gearshape")
+      }
+    } header: {
+      Text("WebDAV")
+    } footer: {
+      Text(
+        "Connect to a WebDAV server, browse remote folders, and securely download music into your Ampwave library."
       )
     }
   }

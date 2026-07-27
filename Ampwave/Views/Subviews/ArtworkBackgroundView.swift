@@ -6,6 +6,7 @@
 //
 
 internal import SwiftUI
+import ImageIO
 
 struct ArtworkBackgroundView: View {
   let artworkPath: String
@@ -16,31 +17,39 @@ struct ArtworkBackgroundView: View {
   #endif
 
   var body: some View {
-    Group {
-      if let image = image {
-        imageView(image)
-          .ignoresSafeArea()
-          .overlay(
-            LinearGradient(
-              colors: [
-                .black.opacity(0.3),
-                .black.opacity(0.7),
-                .black.opacity(0.9),
-              ],
-              startPoint: .top,
-              endPoint: .bottom
+    // GeometryReader pins the backdrop to exactly the space it was given.
+    // Without it the `.fill` image reports its *own* (much larger) size — a
+    // square cover asked to fill a tall screen comes back roughly as wide as
+    // the screen is tall — which inflates the enclosing ZStack and pushes the
+    // lyrics off to the side.
+    GeometryReader { proxy in
+      Group {
+        if let image = image {
+          imageView(image)
+            .scaleEffect(1.12)
+            .blur(radius: 48, opaque: true)
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipped()
+            .overlay(
+              LinearGradient(
+                colors: [
+                  .black.opacity(0.28),
+                  .black.opacity(0.62),
+                  .black.opacity(0.86),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+              )
             )
-            .ignoresSafeArea()
-          )
-          .blur(radius: 60)
-      } else {
-        Color.black.ignoresSafeArea()
+        } else {
+          Color.black
+        }
       }
+      .frame(width: proxy.size.width, height: proxy.size.height)
     }
+    .ignoresSafeArea()
     .task(id: artworkPath) {
-      withAnimation(.easeInOut) {
-        image = nil
-      }
+      image = nil
       await loadImage()
     }
   }
@@ -63,22 +72,45 @@ struct ArtworkBackgroundView: View {
   }
 
   private func loadImage() async {
-    guard let url = PathManager.resolve(artworkPath) else { return }
-    do {
-      let data = try Data(contentsOf: url)
+    let cacheKey = "lyrics-background:\(artworkPath)"
+    if let cached = ImageCache.shared.image(for: cacheKey) {
+      image = cached
+      return
+    }
+    guard let artworkURL = PathManager.resolve(artworkPath) else { return }
+
+    let loadedImage = await Task.detached(priority: .userInitiated) {
+      () -> PlatformImage? in
+      guard let source = CGImageSourceCreateWithURL(artworkURL as CFURL, nil)
+      else {
+        return nil
+      }
+
+      let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceThumbnailMaxPixelSize: 1400,
+      ]
+      guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(
+        source,
+        0,
+        options as CFDictionary
+      ) else {
+        return nil
+      }
+
       #if os(iOS)
-        if let loadedImage = UIImage(data: data) {
-          await MainActor.run {
-            self.image = loadedImage
-          }
-        }
+        return UIImage(cgImage: thumbnail)
       #else
-        if let loadedImage = NSImage(data: data) {
-          await MainActor.run {
-            self.image = loadedImage
-          }
-        }
+        return NSImage(cgImage: thumbnail, size: .zero)
       #endif
-    } catch {}
+    }.value
+
+    guard !Task.isCancelled, let loadedImage else { return }
+    ImageCache.shared.insert(loadedImage, for: cacheKey)
+    withAnimation(.easeInOut(duration: 0.3)) {
+      image = loadedImage
+    }
   }
 }

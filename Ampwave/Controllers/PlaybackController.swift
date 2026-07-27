@@ -16,6 +16,39 @@ import MusicKit
 import SwiftData
 internal import SwiftUI
 
+/// A deliberately tiny observable clock for karaoke rendering.
+///
+/// General playback UI only needs a few updates per second, while word-synced
+/// lyrics need much finer timing. Keeping those updates on a separate object
+/// prevents the rest of the app from being invalidated for every lyric tick.
+@Observable
+@MainActor
+final class LyricsPlaybackClock {
+  fileprivate(set) var currentTime: TimeInterval = 0 {
+    didSet { anchorUptime = ProcessInfo.processInfo.systemUptime }
+  }
+
+  /// Host time captured alongside `currentTime`. Deliberately untracked: it is
+  /// written on every sample and nothing should re-render just because of it.
+  @ObservationIgnored
+  private(set) var anchorUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+
+  /// `currentTime` extrapolated to *now*.
+  ///
+  /// The player samples us ~30x a second, which is enough to know *which* word
+  /// is being sung but not enough to draw a highlight sweeping *through* one —
+  /// at 30 Hz the fill visibly steps. Karaoke rendering runs off a display-linked
+  /// timeline instead and asks for the time at each frame, so the sweep is
+  /// continuous no matter how coarsely the player reports progress.
+  func interpolatedTime(isPlaying: Bool) -> TimeInterval {
+    guard isPlaying else { return currentTime }
+    let elapsed = ProcessInfo.processInfo.systemUptime - anchorUptime
+    // Clamp: if sampling stalls, the highlight should pause rather than run
+    // away from the audio.
+    return currentTime + min(max(elapsed, 0), 0.5)
+  }
+}
+
 @Observable
 @MainActor
 final class PlaybackController {
@@ -23,6 +56,7 @@ final class PlaybackController {
 
   private var player: AVQueuePlayer?
   private var timeObserver: (observer: Any, player: AVPlayer)?
+  private var lyricTimeObserver: (observer: Any, player: AVPlayer)?
   private var itemObservers: [NSKeyValueObservation] = []
   private let library = SongLibrary.shared
   private let historyTracker = ListeningHistoryTracker.shared
@@ -156,8 +190,14 @@ final class PlaybackController {
 
   // MARK: - Lyrics
 
-  private(set) var currentLyrics: SyncedLyric?
+  private(set) var currentLyrics: SyncedLyric? {
+    didSet {
+      lyricLineTimestamps = currentLyrics?.lines.map(\.timestamp) ?? []
+    }
+  }
   private(set) var currentLyricIndex: Int?
+  let lyricsClock = LyricsPlaybackClock()
+  private var lyricLineTimestamps: [TimeInterval] = []
 
   var hasLyrics: Bool {
     currentLyrics?.hasLyrics ?? false
@@ -177,6 +217,10 @@ final class PlaybackController {
     if let (observer, obsPlayer) = timeObserver {
       obsPlayer.removeTimeObserver(observer)
       timeObserver = nil
+    }
+    if let (observer, obsPlayer) = lyricTimeObserver {
+      obsPlayer.removeTimeObserver(observer)
+      lyricTimeObserver = nil
     }
     player?.pause()
     player = nil
@@ -228,6 +272,7 @@ final class PlaybackController {
     self.currentItem = song
     self.currentLyrics = lyrics
     self.currentTime = time
+    self.lyricsClock.currentTime = time
     self.duration = song.duration
     self.isPlaying = false
     self.updateCurrentLyric()
@@ -544,9 +589,7 @@ final class PlaybackController {
         self.currentItem = song
         self.duration = song.duration > 0 ? song.duration : 0
         self.currentTime = 0
-
-        // Prepare next item for gapless
-        self.prepareNextItem()
+        self.lyricsClock.currentTime = 0
 
         self.player?.play()
         self.isPlaying = true
@@ -554,10 +597,6 @@ final class PlaybackController {
 
         self.updateUIForNewItem()
         self.historyTracker.songStarted(song, source: source, playlistId: playlistId)
-
-        Task {
-          await self.loadLyrics(for: song)
-        }
 
         self.saveState()
       }
@@ -763,6 +802,7 @@ final class PlaybackController {
     } else {
       if let currentItem {
         currentTime = max(currentTime, currentItem.duration)
+        lyricsClock.currentTime = currentTime
       }
       updateCurrentLyric()
       updateNowPlaying()
@@ -782,6 +822,7 @@ final class PlaybackController {
   func seek(to time: TimeInterval) {
     guard time.isFinite, time >= 0 else { return }
     self.currentTime = time
+    self.lyricsClock.currentTime = time
 
     if isScrubbing {
       debouncedUpdateLyric()
@@ -796,7 +837,8 @@ final class PlaybackController {
         self?.isSeeking = false
         if finished {
           self?.currentTime = time
-          self?.updateCurrentLyric()
+          self?.lyricsClock.currentTime = time
+          self?.updateCurrentLyric(at: time)
           self?.updateNowPlaying()
           self?.saveState()
         }
@@ -911,7 +953,10 @@ final class PlaybackController {
     
     // Reset time immediately to prevent scrubber lag from previous track
     self.currentTime = 0
+    self.lyricsClock.currentTime = 0
     self.duration = song.duration > 0 ? song.duration : 0
+    self.currentLyrics = nil
+    self.currentLyricIndex = nil
     
     // Force immediate remote command and lock screen update
     updateNowPlaying()
@@ -1113,6 +1158,7 @@ final class PlaybackController {
 
     // 1. Try full fetch (respects caching + word-sync upgrade inside fetchLyrics)
     let fetched = await lyricsService.fetchLyrics(for: song)
+    guard currentItem?.id == song.id else { return }
     currentLyrics = fetched ?? lyricsService.getCachedLyrics(for: song)
 
     // 2. If word-sync is enabled but what we have is only line-synced, upgrade now.
@@ -1122,11 +1168,14 @@ final class PlaybackController {
       if prefs.wordSyncedLyricsEnabled && !hasWordSync
           && NetworkMonitor.shared.isOnline && !prefs.isOfflineMode {
         if let upgraded = await lyricsService.fetchWordSyncedLyrics(for: song) {
+          guard currentItem?.id == song.id else { return }
           currentLyrics = upgraded
         }
       }
     }
 
+    lyricsClock.currentTime = currentTime
+    updateCurrentLyric()
     updateWidget(force: true)
   }
 
@@ -1143,13 +1192,29 @@ final class PlaybackController {
     }
   }
 
-  private func updateCurrentLyric() {
-    guard let lyrics = currentLyrics else {
+  private func updateCurrentLyric(at playbackTime: TimeInterval? = nil) {
+    guard !lyricLineTimestamps.isEmpty else {
       currentLyricIndex = nil
       return
     }
 
-    let newIndex = lyrics.lineIndex(at: currentTime)
+    let time = playbackTime ?? lyricsClock.currentTime
+    let newIndex: Int?
+    if time < lyricLineTimestamps[0] {
+      newIndex = nil
+    } else {
+      var lowerBound = 0
+      var upperBound = lyricLineTimestamps.count
+      while lowerBound < upperBound {
+        let midpoint = lowerBound + (upperBound - lowerBound) / 2
+        if lyricLineTimestamps[midpoint] <= time {
+          lowerBound = midpoint + 1
+        } else {
+          upperBound = midpoint
+        }
+      }
+      newIndex = lowerBound - 1
+    }
 
     if newIndex != currentLyricIndex {
       currentLyricIndex = newIndex
@@ -1160,7 +1225,7 @@ final class PlaybackController {
   var currentLyricLine: LyricLine? {
     guard let index = currentLyricIndex,
       let lyrics = currentLyrics,
-      index >= 0, index < (try? lyrics.lines.count) ?? 0
+      index >= 0, index < lyrics.lines.count
     else { return nil }
     return lyrics.lines[index]
   }
@@ -1168,6 +1233,7 @@ final class PlaybackController {
   func refreshLyrics() async {
     guard let song = currentItem else { return }
     currentLyrics = await LyricsService.shared.refreshLyrics(for: song)
+    updateCurrentLyric()
     updateWidget()
   }
 
@@ -1344,6 +1410,7 @@ final class PlaybackController {
           )
           self.currentItem = song
           self.currentTime = state.lastTime
+          self.lyricsClock.currentTime = state.lastTime
           self.isPlaying = false
 
           // Prepare player but don't play
@@ -1485,6 +1552,29 @@ final class PlaybackController {
       obsPlayer.removeTimeObserver(observer)
       timeObserver = nil
     }
+    if let (observer, obsPlayer) = lyricTimeObserver {
+      obsPlayer.removeTimeObserver(observer)
+      lyricTimeObserver = nil
+    }
+
+    // Word timing is isolated from the general playback model so this higher
+    // cadence only refreshes the active karaoke line.
+    let lyricInterval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+    let lyricObserver = player.addPeriodicTimeObserver(
+      forInterval: lyricInterval,
+      queue: .main
+    ) {
+      [weak self] time in
+      MainActor.assumeIsolated {
+        guard let self, !self.isScrubbing, !self.isSeeking else { return }
+        guard !self.lyricLineTimestamps.isEmpty else { return }
+        let seconds = time.seconds
+        guard seconds.isFinite else { return }
+        self.lyricsClock.currentTime = seconds
+        self.updateCurrentLyric(at: seconds)
+      }
+    }
+    lyricTimeObserver = (lyricObserver, player)
 
     // 0.5 s is enough for lyric sync and progress display while keeping the
     // main-thread update rate low. 0.1 s was causing every screen that embeds
@@ -1495,33 +1585,34 @@ final class PlaybackController {
       queue: .main
     ) {
       [weak self] time in
-      guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
-      self.currentTime = time.seconds
-      self.updateCurrentLyric()
+      MainActor.assumeIsolated {
+        guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
+        self.currentTime = time.seconds
 
-      // Crossfade tick
-      if let prefs = self.preferences, prefs.crossfadeEnabled,
-        prefs.crossfadeDuration > 0, self.isPlaying, self.duration > 0
-      {
-        let remaining = self.duration - self.currentTime
-        let fadeDuration = prefs.crossfadeDuration
+        // Crossfade tick
+        if let prefs = self.preferences, prefs.crossfadeEnabled,
+          prefs.crossfadeDuration > 0, self.isPlaying, self.duration > 0
+        {
+          let remaining = self.duration - self.currentTime
+          let fadeDuration = prefs.crossfadeDuration
 
-        if !self.crossfadeStarted && remaining <= fadeDuration && remaining > 0 {
-          let nextIndex = self.currentQueueIndex + 1
-          if nextIndex < self.queue.count {
-            self.startCrossfade(to: self.queue[nextIndex])
+          if !self.crossfadeStarted && remaining <= fadeDuration && remaining > 0 {
+            let nextIndex = self.currentQueueIndex + 1
+            if nextIndex < self.queue.count {
+              self.startCrossfade(to: self.queue[nextIndex])
+            }
+          }
+
+          if self.crossfadeStarted {
+            self.tickCrossfade()
           }
         }
 
-        if self.crossfadeStarted {
-          self.tickCrossfade()
+        // Save at most once every 5 seconds.
+        if self.currentTime - self.lastStateSaveTime >= 5 {
+          self.lastStateSaveTime = self.currentTime
+          self.saveState()
         }
-      }
-
-      // Save at most once every 5 seconds (modulo check fires multiple ticks in a row)
-      if self.currentTime - self.lastStateSaveTime >= 5 {
-        self.lastStateSaveTime = self.currentTime
-        self.saveState()
       }
     }
     timeObserver = (observer, player)

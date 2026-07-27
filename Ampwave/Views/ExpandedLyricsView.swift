@@ -7,8 +7,10 @@
 
 internal import SwiftUI
 
-#if os(iOS)
+#if canImport(UIKit)
   import UIKit
+#elseif canImport(AppKit)
+  import AppKit
 #endif
 
 struct ExpandedLyricsView: View {
@@ -61,11 +63,11 @@ struct ExpandedLyricsView: View {
                   Color.clear
                     .frame(height: 200)
                 }
-                #if os(iOS)
-                  .frame(width: UIScreen.main.bounds.width)
-                #else
-                  .frame(maxWidth: .infinity)
-                #endif
+                // The scroll view's own width, not the screen's: UIScreen
+                // ignores split view, Stage Manager and any window that isn't
+                // full screen, so pinning to it can size the content wider
+                // than the space it actually has.
+                .frame(maxWidth: .infinity)
               }
               .id(playback.currentItem?.id)
               .onChange(of: playback.currentLyricIndex) { _, newIndex in
@@ -125,11 +127,7 @@ struct ExpandedLyricsView: View {
 
                 Color.clear.frame(height: 200)
               }
-              #if os(iOS)
-                .frame(width: UIScreen.main.bounds.width)
-              #else
-                .frame(maxWidth: .infinity)
-              #endif
+              .frame(maxWidth: .infinity)
             }
           } else if playback.isLoading {
             ProgressView()
@@ -180,6 +178,10 @@ struct ExpandedLyricsView: View {
             }
           }
         }
+        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+        // The backdrop behind the bar is always dark artwork, so the title and
+        // buttons need light chrome regardless of the system appearance.
+        .toolbarColorScheme(.dark, for: .navigationBar)
       #endif
       .onAppear {
         isVisible = true
@@ -262,10 +264,10 @@ struct CompactLyricsView: View {
                 Array(lyrics.lines.enumerated()),
                 id: \.element.timestamp
               ) { index, line in
-                // currentTime is NOT read here — it's read only inside LiveWordSyncView
-                // (via CompactLyricLineView) for the current line. This means the
-                // ForEach only re-renders when currentLyricIndex changes (infrequently),
-                // not on every timer tick.
+                // currentTime is NOT read here — only inside KaraokeLineView,
+                // for the current line. So this ForEach re-renders when
+                // currentLyricIndex changes (every few seconds), not on every
+                // playback tick.
                 CompactLyricLineView(
                   line: line,
                   isCurrent: isCurrentLine(index),
@@ -441,6 +443,148 @@ struct CompactLyricsView: View {
   return ExpandedLyricsView(isExpanded: .constant(true))
 }
 
+// MARK: - Karaoke model
+
+/// One display word of a word-synced line, with the window during which its
+/// highlight sweeps across it.
+struct KaraokeWord: Identifiable {
+  let id: Int
+  let text: String
+  let start: TimeInterval
+  var end: TimeInterval
+}
+
+enum KaraokeLine {
+  /// Groups timestamped tokens into display words.
+  ///
+  /// Sources disagree about tokenisation: enhanced-LRC strips the spaces and
+  /// emits one token per syllable ("provoca", "tive"), while TTML and
+  /// LyricsPlus spans carry their own spacing. Guessing word boundaries from
+  /// the token text alone is what produced "wannabe" — "wanna" is
+  /// indistinguishable from a syllable fragment by shape.
+  ///
+  /// `line.text` already holds the correctly spaced line, so use *it* as the
+  /// authority: walk it alongside the tokens and start a new word wherever the
+  /// text has whitespace. If the two disagree the text is stale, and we fall
+  /// back to one word per token.
+  static func words(for line: LyricLine) -> [KaraokeWord] {
+    guard let offsets = line.wordOffsets, !offsets.isEmpty else { return [] }
+
+    let tokens: [(text: String, timestamp: TimeInterval)] = offsets.compactMap {
+      let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+      return text.isEmpty ? nil : (text, $0.timestamp)
+    }
+    guard !tokens.isEmpty else { return [] }
+
+    let grouped =
+      grouped(tokens, using: line.text)
+      ?? tokens.enumerated().map {
+        KaraokeWord(id: $0.offset, text: $0.element.text, start: $0.element.timestamp, end: 0)
+      }
+
+    return withSweepWindows(grouped)
+  }
+
+  private static func grouped(
+    _ tokens: [(text: String, timestamp: TimeInterval)],
+    using lineText: String
+  ) -> [KaraokeWord]? {
+    let characters = Array(lineText)
+
+    // A line whose text lost its spaces (some cached/reconstructed lines come
+    // back with every word run together) can't tell us anything about word
+    // boundaries.
+    guard tokens.count == 1 || characters.contains(where: { $0.isWhitespace }) else { return nil }
+
+    // The tokens must spell out the line once whitespace is removed, otherwise
+    // the text belongs to different lyrics than the timings.
+    guard Array(tokens.map(\.text).joined()) == characters.filter({ !$0.isWhitespace }) else {
+      return nil
+    }
+
+    var words: [KaraokeWord] = []
+    var index = 0
+    var pending = ""
+    var pendingStart: TimeInterval = 0
+
+    for token in tokens {
+      var crossedSpace = false
+      while index < characters.count, characters[index].isWhitespace {
+        index += 1
+        crossedSpace = true
+      }
+      if crossedSpace, !pending.isEmpty {
+        words.append(KaraokeWord(id: words.count, text: pending, start: pendingStart, end: 0))
+        pending = ""
+      }
+      if pending.isEmpty { pendingStart = token.timestamp }
+      pending += token.text
+      index += token.text.count
+    }
+    if !pending.isEmpty {
+      words.append(KaraokeWord(id: words.count, text: pending, start: pendingStart, end: 0))
+    }
+
+    return words.isEmpty ? nil : words
+  }
+
+  /// A word's highlight sweeps from its own timestamp to the next word's, so
+  /// the fill runs continuously along the line. Capped so a word held before a
+  /// long pause doesn't crawl for seconds.
+  private static func withSweepWindows(_ words: [KaraokeWord]) -> [KaraokeWord] {
+    var result = words
+    for index in result.indices {
+      let next =
+        index + 1 < result.count
+        ? result[index + 1].start
+        : result[index].start + 0.6
+      result[index].end = max(
+        result[index].start + 0.12,
+        min(next, result[index].start + 1.1)
+      )
+    }
+    return result
+  }
+}
+
+enum LyricText {
+  /// Prefer the line's own text — every parser reconstructs it with the
+  /// source's real spacing. Only rebuild from tokens when it is missing or has
+  /// lost its spaces, because a run-together line has nowhere to wrap and
+  /// spills off both edges of the screen.
+  static func display(for line: LyricLine) -> String {
+    let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let offsets = line.wordOffsets, !offsets.isEmpty else { return text }
+
+    if !text.isEmpty, offsets.count == 1 || text.contains(where: { $0.isWhitespace }) {
+      return text
+    }
+
+    return
+      offsets
+      .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+  }
+}
+
+private enum LyricMetrics {
+  /// Width of a real space in the lyric font, so a karaoke line's word gaps
+  /// match the plain lines above and below it exactly.
+  static func spaceWidth(fontSize: CGFloat) -> CGFloat {
+    #if canImport(UIKit)
+      let font = UIFont.systemFont(ofSize: fontSize, weight: .bold)
+    #elseif canImport(AppKit)
+      let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+    #else
+      return fontSize * 0.26
+    #endif
+    return (" " as NSString).size(withAttributes: [.font: font]).width
+  }
+}
+
+// MARK: - Lines
+
 struct LyricLineView: View {
   let line: LyricLine
   let index: Int
@@ -448,162 +592,150 @@ struct LyricLineView: View {
   @Bindable var playback: PlaybackController
   @Environment(ThemeManager.self) private var themeManager
 
-  private var wordSyncEnabled: Bool {
-    themeManager.userPreferences?.wordSyncedLyricsEnabled ?? false
-  }
-
-  // True only when this line is active AND karaoke data is available.
-  // Drives the content crossfade independently from the line's own scale/opacity.
-  private var showKaraoke: Bool {
-    isCurrent && wordSyncEnabled && !(line.wordOffsets?.isEmpty ?? true)
-  }
-
-  private var mergedWords: [WordOffset] {
-    guard let offsets = line.wordOffsets else { return [] }
-    return LRCParser.mergeSyllables(offsets)
+  private var karaokeWords: [KaraokeWord] {
+    guard isCurrent, themeManager.userPreferences?.wordSyncedLyricsEnabled ?? false else {
+      return []
+    }
+    return KaraokeLine.words(for: line)
   }
 
   var body: some View {
-    // ZStack (not Group) gives SwiftUI a stable container identity so that
-    // the .transition(.opacity) on each branch actually fires.
     ZStack {
-      if showKaraoke {
-        // LiveWordSyncView isolates currentTime observation so only this small
-        // view re-renders at the high-frequency timer rate, not the full line list.
-        LiveWordSyncView(
-          words: mergedWords,
-          fontSize: 24,
-          activeColor: .white
-        )
-        .transition(.opacity)
+      if !karaokeWords.isEmpty {
+        KaraokeLineView(words: karaokeWords, fontSize: 24, color: .white)
+          .transition(.opacity)
       } else {
-        plainLineText
+        Text(LyricText.display(for: line))
+          .font(.system(size: 24, weight: isCurrent ? .bold : .semibold))
+          .foregroundStyle(.white)
           .transition(.opacity)
       }
     }
-    // Inner animation: crossfades the content (plain ↔ karaoke) with a smooth
-    // ease so the text never pops in or out abruptly.
-    .animation(.easeInOut(duration: 0.35), value: showKaraoke)
+    .animation(.easeInOut(duration: 0.3), value: karaokeWords.isEmpty)
     .multilineTextAlignment(.center)
     .lineLimit(nil)
     .fixedSize(horizontal: false, vertical: true)
     .lineSpacing(4)
+    // Inactive lines recede rather than shrink — matching Apple Music, where
+    // the sung line is simply the one in focus.
+    //
+    // Modifier order below is load-bearing, not stylistic. Tap-to-seek broke
+    // when `.animation(_:value:)` sat at the very end of the chain, wrapping
+    // the gesture: taps on a line stopped registering entirely. Keep every
+    // visual/animated modifier *above* the tap target so the gesture is the
+    // outermost thing on the row. (Verified by testing: `.blur` and the
+    // position of `.id` were both ruled out as causes.)
+    .opacity(isCurrent ? 1.0 : 0.34)
+    .blur(radius: isCurrent ? 0 : 1.1)
+    .scaleEffect(isCurrent ? 1.0 : 0.965, anchor: .center)
+    .animation(.spring(response: 0.45, dampingFraction: 0.78), value: isCurrent)
+    // Padding first, then the flexible frame: the other way round the frame
+    // takes the full width and the padding pushes past both edges.
     .padding(.horizontal, 32)
-    #if os(iOS)
-      .frame(maxWidth: UIScreen.main.bounds.width - 64)
-    #else
-      .frame(maxWidth: .infinity)
-    #endif
-    .opacity(isCurrent ? 1.0 : 0.28)
-    .scaleEffect(isCurrent ? 1.08 : 1.0, anchor: .center)
+    .frame(maxWidth: .infinity)
     .id(index)
+    // The whole row seeks, not just the glyphs.
+    .contentShape(Rectangle())
     .onTapGesture {
       playback.seek(to: line.timestamp)
       if !playback.isPlaying { playback.play() }
     }
-    // Outer animation: the scale + opacity breathe when the line becomes current.
-    .animation(.spring(response: 0.45, dampingFraction: 0.75), value: isCurrent)
-  }
-
-  private var plainLineText: some View {
-    Text(displayText)
-      .font(.system(size: 24, weight: isCurrent ? .bold : .semibold))
-      .foregroundStyle(.white)
-  }
-
-  /// Display text derived from (merged) wordOffsets so stale cached
-  /// line.text values and unmerged syllable fragments are never shown.
-  private var displayText: String {
-    guard let offsets = line.wordOffsets, !offsets.isEmpty else { return line.text }
-    return LRCParser.mergeSyllables(offsets).map(\.text).joined(separator: " ")
   }
 }
 
-/// Single word token — Apple Music style.
+/// The active word-synced line.
 ///
-/// Three layered transitions fire together on a spring when `isActive` flips:
-///   • Blur  2.5 → 0     words come *into focus* (the "breathe in" sensation)
-///   • Scale 0.92 → 1.0  each word gently expands as it activates
-///   • Opacity 0.22 → 1.0 dim → full brightness
-///
-/// `scaleEffect` is a visual-only transform in SwiftUI — it never affects
-/// layout, so neighbouring words in the wrapping grid cannot shift.
-private struct WordToken: View {
-  let text: String
-  let isActive: Bool
-  let activeColor: Color
+/// Drawn from a display-linked timeline rather than the player's 30 Hz sampling
+/// so the highlight sweeps continuously instead of stepping word to word.
+private struct KaraokeLineView: View {
+  @Bindable private var playback = PlaybackController.shared
+  let words: [KaraokeWord]
   let fontSize: CGFloat
-  let isScrubbing: Bool
-
-  // Slight overshoot (dampingFraction 0.62) gives the activation a tiny
-  // elastic "pop" that reads as a breath rather than a mechanical toggle.
-  private let spring = Animation.spring(response: 0.45, dampingFraction: 0.62)
+  let color: Color
 
   var body: some View {
-    Text(text)
-      .font(.system(size: fontSize, weight: .bold))
-      .foregroundStyle(activeColor)
-      .opacity(isScrubbing ? 0.38 : isActive ? 1.0 : 0.22)
-      .scaleEffect(isActive && !isScrubbing ? 1.0 : 0.92, anchor: .center)
-      .animation(spring, value: isActive)
-      .animation(.easeOut(duration: 0.2), value: isScrubbing)
-  }
-}
+    TimelineView(.animation(paused: !playback.isPlaying || playback.isScrubbing)) { _ in
+      let now = playback.lyricsClock.interpolatedTime(
+        isPlaying: playback.isPlaying && !playback.isScrubbing
+      )
 
-struct WordByWordLyricView: View {
-  let words: [WordOffset]
-  let currentTime: TimeInterval
-  let fontSize: CGFloat
-  let activeColor: Color
-  var isScrubbing: Bool = false
-
-  /// Index of the word whose timestamp has most recently been crossed.
-  private var activeUpToIndex: Int {
-    var idx = -1
-    for (i, word) in words.enumerated() {
-      if currentTime >= word.timestamp { idx = i } else { break }
-    }
-    return idx
-  }
-
-  var body: some View {
-    WrappingWordsLayout(
-      horizontalSpacing: max(5, fontSize * 0.3),
-      verticalSpacing:   max(4, fontSize * 0.22)
-    ) {
-      ForEach(Array(words.enumerated()), id: \.offset) { index, word in
-        WordToken(
-          text: word.text.trimmingCharacters(in: .whitespacesAndNewlines),
-          isActive: index <= activeUpToIndex,
-          activeColor: activeColor,
-          fontSize: fontSize,
-          isScrubbing: isScrubbing
-        )
+      WrappingWordsLayout(
+        horizontalSpacing: LyricMetrics.spaceWidth(fontSize: fontSize),
+        verticalSpacing: fontSize * 0.3
+      ) {
+        ForEach(words) { word in
+          KaraokeWordView(
+            text: word.text,
+            progress: playback.isScrubbing ? 0 : progress(of: word, at: now),
+            fontSize: fontSize,
+            color: color
+          )
+          // Seek to the exact word. Sits inside the line's own tap target, so
+          // tapping a word goes to that word and tapping the gaps around them
+          // falls through to the start of the line.
+          .contentShape(Rectangle())
+          .onTapGesture {
+            playback.seek(to: word.start)
+            if !playback.isPlaying { playback.play() }
+          }
+        }
       }
     }
-    // NOTE: drawingGroup() is intentionally omitted. It composites everything
-    // into a single Metal texture which prevents the per-word spring animations
-    // from working — the whole point of the karaoke highlight effect.
+  }
+
+  private func progress(of word: KaraokeWord, at time: TimeInterval) -> Double {
+    guard time > word.start else { return 0 }
+    guard time < word.end else { return 1 }
+    return (time - word.start) / (word.end - word.start)
   }
 }
 
-/// Isolated view that reads PlaybackController.currentTime independently.
-/// By confining the high-frequency observation here, the parent lyric-list views
-/// only re-render when currentLyricIndex changes (once per line, every few seconds).
-private struct LiveWordSyncView: View {
-  @Bindable private var playback = PlaybackController.shared
-  let words: [WordOffset]
+/// A single word, lit by a soft-edged wipe travelling through its glyphs.
+private struct KaraokeWordView: View {
+  let text: String
+  let progress: Double
   let fontSize: CGFloat
-  let activeColor: Color
+  let color: Color
+
+  private var isSinging: Bool { progress > 0 && progress < 1 }
 
   var body: some View {
-    WordByWordLyricView(
-      words: words,
-      currentTime: playback.currentTime,       // high-frequency — only THIS view re-renders
-      fontSize: fontSize,
-      activeColor: activeColor,
-      isScrubbing: playback.isScrubbing
-    )
+    label(color.opacity(0.3))
+      .overlay(alignment: .leading) {
+        label(color).mask(alignment: .leading) { sweep }
+      }
+      // A breath of lift and glow on the word being sung. Deliberately no
+      // scaling: scaling individual words changes the gaps around them and
+      // makes the line look unevenly spaced.
+      .offset(y: isSinging ? -1.5 : 0)
+      .shadow(color: color.opacity(isSinging ? 0.4 : 0), radius: 9)
+      .animation(.spring(response: 0.4, dampingFraction: 0.7), value: isSinging)
+  }
+
+  private func label(_ style: Color) -> some View {
+    Text(text)
+      .font(.system(size: fontSize, weight: .bold))
+      .foregroundStyle(style)
+      .lineLimit(1)
+      .minimumScaleFactor(0.5)
+  }
+
+  @ViewBuilder
+  private var sweep: some View {
+    if progress >= 1 {
+      Color.white
+    } else if progress <= 0 {
+      Color.clear
+    } else {
+      LinearGradient(
+        stops: [
+          .init(color: .white, location: max(0, progress - 0.22)),
+          .init(color: .white.opacity(0), location: min(1, progress + 0.08)),
+        ],
+        startPoint: .leading,
+        endPoint: .trailing
+      )
+    }
   }
 }
 
@@ -612,18 +744,17 @@ private struct CompactLyricLineView: View {
   let isCurrent: Bool
   let wordSyncEnabled: Bool
 
+  private var karaokeWords: [KaraokeWord] {
+    guard isCurrent, wordSyncEnabled else { return [] }
+    return KaraokeLine.words(for: line)
+  }
+
   var body: some View {
     Group {
-      if isCurrent, wordSyncEnabled, let words = line.wordOffsets, !words.isEmpty {
-        // LiveWordSyncView isolates high-frequency currentTime reads so only
-        // this word view re-renders on every timer tick, not the full scroll list.
-        LiveWordSyncView(
-          words: LRCParser.mergeSyllables(words),
-          fontSize: 15,
-          activeColor: .primary
-        )
+      if !karaokeWords.isEmpty {
+        KaraokeLineView(words: karaokeWords, fontSize: 15, color: .primary)
       } else {
-        Text(displayText)
+        Text(LyricText.display(for: line))
           .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
           .foregroundStyle(isCurrent ? Color.primary : Color.secondary)
       }
@@ -634,152 +765,173 @@ private struct CompactLyricLineView: View {
     .padding(.horizontal, 16)
     .frame(minWidth: 0, maxWidth: .infinity, alignment: .center)
     .opacity(isCurrent ? 1.0 : 0.55)
-    .scaleEffect(isCurrent ? 1.05 : 1.0, anchor: .center)
-    .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isCurrent)
-  }
-
-  private var displayText: String {
-    guard let offsets = line.wordOffsets, !offsets.isEmpty else { return line.text }
-    return LRCParser.mergeSyllables(offsets).map(\.text).joined(separator: " ")
+    .animation(.spring(response: 0.3, dampingFraction: 0.78), value: isCurrent)
   }
 }
 
 // MARK: - Ambient background orbs
 
 /// Slow-moving colour blobs that sit between the blurred artwork and the
-/// lyrics text, mimicking the ambient gradient effect in Apple Music's
-/// full-screen lyrics view. They breathe independently at different rates
-/// so the result never looks mechanical.
+/// lyrics text, mimicking the ambient gradient in Apple Music's full-screen
+/// lyrics. They breathe at different rates so the result never looks
+/// mechanical.
 private struct LyricsAmbientOrbs: View {
   let color: Color
   @State private var phase = false
 
   var body: some View {
-    ZStack {
-      // Primary orb — top-left, largest
-      Circle()
-        .fill(color.opacity(0.5))
-        .frame(width: 360)
-        .blur(radius: 100)
-        .offset(x: phase ? -60 : -100, y: phase ? -200 : -260)
-        .scaleEffect(phase ? 1.2 : 0.8)
-        .animation(
-          .easeInOut(duration: 8).repeatForever(autoreverses: true),
-          value: phase
-        )
+    // Sized off the container rather than fixed points, so the orbs can never
+    // be wider than the screen they sit on.
+    GeometryReader { proxy in
+      let unit = min(proxy.size.width, proxy.size.height)
 
-      // Secondary orb — top-right, medium
-      Circle()
-        .fill(color.opacity(0.35))
-        .frame(width: 280)
-        .blur(radius: 85)
-        .offset(x: phase ? 110 : 70, y: phase ? -140 : -190)
-        .scaleEffect(phase ? 0.85 : 1.15)
-        .animation(
-          .easeInOut(duration: 6.5).repeatForever(autoreverses: true),
-          value: phase
-        )
+      ZStack {
+        orb(diameter: unit * 0.9, opacity: 0.5, blur: 100)
+          .offset(x: phase ? -60 : -100, y: phase ? -200 : -260)
+          .scaleEffect(phase ? 1.2 : 0.8)
+          .animation(.easeInOut(duration: 8).repeatForever(autoreverses: true), value: phase)
 
-      // Accent orb — lower-centre, small
-      Circle()
-        .fill(color.opacity(0.25))
-        .frame(width: 200)
-        .blur(radius: 70)
-        .offset(x: phase ? 20 : -30, y: phase ? 60 : 20)
-        .scaleEffect(phase ? 1.1 : 0.88)
-        .animation(
-          .easeInOut(duration: 9).repeatForever(autoreverses: true),
-          value: phase
-        )
+        orb(diameter: unit * 0.7, opacity: 0.35, blur: 85)
+          .offset(x: phase ? 110 : 70, y: phase ? -140 : -190)
+          .scaleEffect(phase ? 0.85 : 1.15)
+          .animation(.easeInOut(duration: 6.5).repeatForever(autoreverses: true), value: phase)
+
+        orb(diameter: unit * 0.5, opacity: 0.25, blur: 70)
+          .offset(x: phase ? 20 : -30, y: phase ? 60 : 20)
+          .scaleEffect(phase ? 1.1 : 0.88)
+          .animation(.easeInOut(duration: 9).repeatForever(autoreverses: true), value: phase)
+      }
+      .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .allowsHitTesting(false)
     .onAppear { phase = true }
   }
+
+  private func orb(diameter: CGFloat, opacity: Double, blur: CGFloat) -> some View {
+    Circle()
+      .fill(color.opacity(opacity))
+      .frame(width: diameter, height: diameter)
+      .blur(radius: blur)
+  }
 }
 
+// MARK: - Layout
+
+/// Centred, wrapping row layout for the individual words of a karaoke line.
 private struct WrappingWordsLayout: Layout {
   var horizontalSpacing: CGFloat
   var verticalSpacing: CGFloat
 
+  struct Row {
+    var items: [(index: Int, x: CGFloat, width: CGFloat)]
+    var y: CGFloat
+    var width: CGFloat
+    var height: CGFloat
+  }
+
+  struct Cache {
+    var sizes: [CGSize]
+    var width: CGFloat = .nan
+    var rows: [Row] = []
+    var total: CGSize = .zero
+  }
+
+  func makeCache(subviews: Subviews) -> Cache {
+    Cache(sizes: subviews.map { $0.sizeThatFits(.unspecified) })
+  }
+
+  func updateCache(_ cache: inout Cache, subviews: Subviews) {
+    cache.sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+    cache.width = .nan
+  }
+
   func sizeThatFits(
     proposal: ProposedViewSize,
     subviews: Subviews,
-    cache: inout Void
+    cache: inout Cache
   ) -> CGSize {
-    let rows = arrangedRows(proposal: proposal, subviews: subviews)
-    let width = rows.map(\.width).max() ?? 0
-    let height = rows.last.map { $0.y + $0.height } ?? 0
-    return CGSize(width: width, height: height)
+    let width = resolvedWidth(proposal, cache: cache)
+    layoutRows(width: width, cache: &cache)
+    // Never report more than we were offered. A Layout that returns an
+    // oversized width is not clipped by the parent frame — it simply spills
+    // out over both edges of the screen.
+    return CGSize(width: min(cache.total.width, width), height: cache.total.height)
   }
 
   func placeSubviews(
     in bounds: CGRect,
     proposal: ProposedViewSize,
     subviews: Subviews,
-    cache: inout Void
+    cache: inout Cache
   ) {
-    let rows = arrangedRows(proposal: ProposedViewSize(width: bounds.width, height: proposal.height), subviews: subviews)
+    // Measure and place agree because both go through layoutRows.
+    layoutRows(width: bounds.width, cache: &cache)
 
-    for row in rows {
-      let rowX = bounds.minX + max(0, (bounds.width - row.width) / 2)
+    for row in cache.rows {
+      let originX = bounds.minX + max(0, (bounds.width - row.width) / 2)
 
       for item in row.items {
         subviews[item.index].place(
-          at: CGPoint(x: rowX + item.x, y: bounds.minY + row.y),
+          at: CGPoint(x: originX + item.x, y: bounds.minY + row.y),
           anchor: .topLeading,
-          proposal: ProposedViewSize(item.size)
+          proposal: ProposedViewSize(
+            width: item.width,
+            height: cache.sizes[item.index].height
+          )
         )
       }
     }
   }
 
-  private func arrangedRows(proposal: ProposedViewSize, subviews: Subviews) -> [Row] {
-    let maxWidth = proposal.width ?? subviews.reduce(CGFloat.zero) { partial, subview in
-      partial + subview.sizeThatFits(.unspecified).width + horizontalSpacing
-    }
+  private func resolvedWidth(_ proposal: ProposedViewSize, cache: Cache) -> CGFloat {
+    if let width = proposal.width, width.isFinite, width > 0 { return width }
+    // An unspecified proposal must not turn into "one row holding every word":
+    // that reports a width several times the screen's and drags the whole line
+    // off to the side. The widest single word always fits whatever the parent
+    // ends up offering.
+    return cache.sizes.map(\.width).max() ?? 0
+  }
+
+  private func layoutRows(width: CGFloat, cache: inout Cache) {
+    // NaN != NaN, so a freshly made or invalidated cache always rebuilds.
+    guard cache.width != width else { return }
 
     var rows: [Row] = []
-    var currentItems: [RowItem] = []
-    var currentX: CGFloat = 0
-    var currentY: CGFloat = 0
-    var currentHeight: CGFloat = 0
+    var items: [(index: Int, x: CGFloat, width: CGFloat)] = []
+    var x: CGFloat = 0
+    var y: CGFloat = 0
+    var rowHeight: CGFloat = 0
+    var widest: CGFloat = 0
 
-    for index in subviews.indices {
-      let size = subviews[index].sizeThatFits(.unspecified)
-      let nextX = currentItems.isEmpty ? size.width : currentX + horizontalSpacing + size.width
+    for index in cache.sizes.indices {
+      let size = cache.sizes[index]
+      // A single word longer than the line gets capped and shrinks to fit
+      // (see minimumScaleFactor on the word) instead of overflowing.
+      let itemWidth = min(size.width, width)
+      let projected = items.isEmpty ? itemWidth : x + horizontalSpacing + itemWidth
 
-      if nextX > maxWidth, !currentItems.isEmpty {
-        rows.append(Row(items: currentItems, y: currentY, width: currentX, height: currentHeight))
-        currentY += currentHeight + verticalSpacing
-        currentItems = []
-        currentX = 0
-        currentHeight = 0
+      if projected > width, !items.isEmpty {
+        rows.append(Row(items: items, y: y, width: x, height: rowHeight))
+        widest = max(widest, x)
+        y += rowHeight + verticalSpacing
+        items = []
+        x = 0
+        rowHeight = 0
       }
 
-      let x = currentItems.isEmpty ? 0 : currentX + horizontalSpacing
-      currentItems.append(RowItem(index: index, x: x, size: size))
-      currentX = x + size.width
-      currentHeight = max(currentHeight, size.height)
+      let itemX = items.isEmpty ? 0 : x + horizontalSpacing
+      items.append((index: index, x: itemX, width: itemWidth))
+      x = itemX + itemWidth
+      rowHeight = max(rowHeight, size.height)
     }
 
-    if !currentItems.isEmpty {
-      rows.append(Row(items: currentItems, y: currentY, width: currentX, height: currentHeight))
+    if !items.isEmpty {
+      rows.append(Row(items: items, y: y, width: x, height: rowHeight))
+      widest = max(widest, x)
     }
 
-    return rows
-  }
-
-  private struct Row {
-    let items: [RowItem]
-    let y: CGFloat
-    let width: CGFloat
-    let height: CGFloat
-  }
-
-  private struct RowItem {
-    let index: Int
-    let x: CGFloat
-    let size: CGSize
+    cache.width = width
+    cache.rows = rows
+    cache.total = CGSize(width: widest, height: rows.last.map { $0.y + $0.height } ?? 0)
   }
 }
