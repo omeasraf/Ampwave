@@ -549,6 +549,7 @@ import SwiftData
       let lastScanDate = Date(timeIntervalSince1970: lastScanTime)
       if modDate < lastScanDate {
         print("[DEBUG] indexOnStartup: Directory hasn't changed since last scan (\(lastScanDate)). Skipping scan.")
+        await repairStoredFilePathsIfNeeded(in: modelContext)
         indexingStatus = .complete
         isIndexing = false
         // Still run metadata backfill check just in case
@@ -611,6 +612,7 @@ import SwiftData
       let expectedPath = expectedURL.path
 
       if audioPathSet.contains(expectedPath) {
+        updateStoredFilePath(for: song, to: expectedURL)
         accountedForPaths.insert(expectedPath)
         continue
       }
@@ -622,7 +624,8 @@ import SwiftData
           if await self.fileHash(at: possibleURL) == song.fileHash {
             // Found it at a new path in our directory - update it
             print("[DEBUG] indexOnStartup: Found moved file for \(song.title) at \(possibleURL.lastPathComponent)")
-            // We don't move it back here (to avoid disk churn), just account for it
+            // We don't move it back here (to avoid disk churn), just store the actual path.
+            updateStoredFilePath(for: song, to: possibleURL)
             accountedForPaths.insert(possibleURL.standardizedFileURL.path)
             foundMoved = true
             break
@@ -680,6 +683,60 @@ import SwiftData
     
     // 6. Check for missing metadata
     await fetchMetadataForNewSongs()
+  }
+
+  private func repairStoredFilePathsIfNeeded(in modelContext: ModelContext) async {
+    let descriptor = FetchDescriptor<LibrarySong>()
+    let existingSongs = (try? modelContext.fetch(descriptor)) ?? []
+    let copiedSongsNeedingRepair = existingSongs.filter { song in
+      guard song.storageMode == .copied else { return false }
+
+      guard let storedURL = resolvedStoredFileURL(for: song) else { return true }
+      return !fileManager.fileExists(atPath: storedURL.path)
+    }
+
+    guard !copiedSongsNeedingRepair.isEmpty else { return }
+
+    print(
+      "[DEBUG] SongLibrary.repairStoredFilePathsIfNeeded: Checking \(copiedSongsNeedingRepair.count) copied songs"
+    )
+
+    let audioURLs = await Task.detached(priority: .utility) {
+      self.findAudioFiles(in: self.songsDirectory)
+    }.value
+
+    var fileNameToURLs: [String: [URL]] = [:]
+    for url in audioURLs {
+      fileNameToURLs[url.lastPathComponent, default: []].append(url)
+    }
+
+    var repairedCount = 0
+    for song in copiedSongsNeedingRepair {
+      let legacyURL = legacyMetadataFileURL(for: song)
+      if fileManager.fileExists(atPath: legacyURL.path) {
+        if updateStoredFilePath(for: song, to: legacyURL) {
+          repairedCount += 1
+        }
+        continue
+      }
+
+      guard let candidates = fileNameToURLs[song.fileName] else { continue }
+      for candidate in candidates {
+        if await fileHash(at: candidate) == song.fileHash {
+          if updateStoredFilePath(for: song, to: candidate) {
+            repairedCount += 1
+          }
+          break
+        }
+      }
+    }
+
+    if repairedCount > 0 {
+      print(
+        "[DEBUG] SongLibrary.repairStoredFilePathsIfNeeded: Repaired \(repairedCount) stored file paths"
+      )
+      try? modelContext.save()
+    }
   }
 
   /// Removes albums that have no songs associated with them
@@ -855,15 +912,25 @@ import SwiftData
 
     // Perform SwiftData operations on Main Actor
     print("[DEBUG] SongLibrary.importFile: Checking for existing song with hash: \(fileHash)")
+    var songToRepair: LibrarySong?
     do {
       var descriptor = FetchDescriptor<LibrarySong>(
         predicate: #Predicate<LibrarySong> { $0.fileHash == fileHash }
       )
       descriptor.fetchLimit = 1
-      let count = try modelContext.fetchCount(descriptor)
-      if count > 0 {
-        print("[DEBUG] SongLibrary.importFile: Song already exists in library (hash: \(fileHash))")
-        return nil
+      if let existingSong = try modelContext.fetch(descriptor).first {
+        let existingURL = getFileURL(for: existingSong)
+        if fileManager.fileExists(atPath: existingURL.path) {
+          print(
+            "[DEBUG] SongLibrary.importFile: Song already exists in library (hash: \(fileHash))"
+          )
+          return nil
+        } else {
+          print(
+            "[DEBUG] SongLibrary.importFile: Reusing stale record for missing file: \(existingURL.path)"
+          )
+          songToRepair = existingSong
+        }
       }
     } catch {
       print("[DEBUG] SongLibrary.importFile: Error checking for existing song: \(error)")
@@ -931,15 +998,6 @@ import SwiftData
 
     let uniqueFileName = destinationURL.lastPathComponent
 
-    // Cache artwork
-    print("[DEBUG] SongLibrary.importFile: Caching artwork")
-    let artworkPath: String?
-    if let data = metadata.artwork {
-      artworkPath = await cacheArtwork(data)
-    } else {
-      artworkPath = nil
-    }
-
     // Check for companion .lrc file in the source location
     var songLyrics = metadata.lyrics
     let lrcURL = url.deletingPathExtension().appendingPathExtension("lrc")
@@ -955,11 +1013,34 @@ import SwiftData
       }
     }
 
+    if let songToRepair {
+      print("[DEBUG] SongLibrary.importFile: Repairing existing LibrarySong storage")
+      // Preserve identity and user state; only replace fields that locate the audio file.
+      songToRepair.fileName = uniqueFileName
+      updateStoredFilePath(for: songToRepair, to: destinationURL)
+      songToRepair.fileHash = fileHash
+      songToRepair.size = fileSize
+      songToRepair.storageMode = storageMode
+      songToRepair.bookmarkData = bookmarkData
+      print("[DEBUG] SongLibrary.importFile: Repaired existing LibrarySong \(songToRepair.id)")
+      return songToRepair
+    }
+
+    // Cache artwork only when creating a new model.
+    print("[DEBUG] SongLibrary.importFile: Caching artwork")
+    let artworkPath: String?
+    if let data = metadata.artwork {
+      artworkPath = await cacheArtwork(data)
+    } else {
+      artworkPath = nil
+    }
+
     print("[DEBUG] SongLibrary.importFile: Creating LibrarySong object")
     let song = LibrarySong(
       title: metadata.title,
       artist: metadata.artist,
       fileName: uniqueFileName,
+      filePath: PathManager.relativePath(from: destinationURL.path),
       fileHash: fileHash,
       size: fileSize,
       duration: metadata.duration,
@@ -1091,6 +1172,7 @@ import SwiftData
       title: metadata.title,
       artist: metadata.artist,
       fileName: fileName,
+      filePath: PathManager.relativePath(from: url.path),
       fileHash: fileHash,
       size: fileSize,
       duration: metadata.duration,
@@ -1867,6 +1949,27 @@ import SwiftData
       }
     }
 
+    if let storedURL = resolvedStoredFileURL(for: song),
+      fileManager.fileExists(atPath: storedURL.path)
+    {
+      return storedURL
+    }
+
+    let legacyURL = legacyMetadataFileURL(for: song)
+    if fileManager.fileExists(atPath: legacyURL.path) {
+      updateStoredFilePath(for: song, to: legacyURL)
+      return legacyURL
+    }
+
+    return resolvedStoredFileURL(for: song) ?? legacyURL
+  }
+
+  private func resolvedStoredFileURL(for song: LibrarySong) -> URL? {
+    guard let path = song.filePath, !path.isEmpty else { return nil }
+    return PathManager.resolve(path)?.standardizedFileURL
+  }
+
+  private func legacyMetadataFileURL(for song: LibrarySong) -> URL {
     guard let modelContext = modelContext else {
       return songsDirectory.appendingPathComponent(song.fileName)
     }
@@ -1876,6 +1979,14 @@ import SwiftData
       album: song.album, artist: song.artist, groupByAlbum: settings.groupSongsByAlbum
     )
     .appendingPathComponent(song.fileName)
+  }
+
+  @discardableResult
+  private func updateStoredFilePath(for song: LibrarySong, to url: URL) -> Bool {
+    let relativePath = PathManager.relativePath(from: url.standardizedFileURL.path)
+    guard song.filePath != relativePath else { return false }
+    song.filePath = relativePath
+    return true
   }
 
   nonisolated private func getAlbumDirectory(album: String?, artist: String?, groupByAlbum: Bool)
