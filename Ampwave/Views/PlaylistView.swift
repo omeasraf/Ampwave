@@ -136,18 +136,26 @@ struct PlaylistView: View {
 
   private var emptySongsSection: some View {
     Section {
+      // The empty states tell you what to do, so they also give you the button
+      // to do it — otherwise the only route is the overflow menu.
       if isSmartPlaylist {
-        ContentUnavailableView(
-          "No Matching Songs",
-          systemImage: "music.note.list",
-          description: Text("Adjust your rules to find matching songs")
-        )
+        ContentUnavailableView {
+          Label("No Matching Songs", systemImage: "music.note.list")
+        } description: {
+          Text("Adjust your rules to find matching songs")
+        } actions: {
+          Button("Edit Rules") { showingRulesSheet = true }
+            .buttonStyle(.borderedProminent)
+        }
       } else {
-        ContentUnavailableView(
-          "Empty Playlist",
-          systemImage: "music.note.list",
-          description: Text("Add songs to get started")
-        )
+        ContentUnavailableView {
+          Label("Empty Playlist", systemImage: "music.note.list")
+        } description: {
+          Text("Add songs to get started")
+        } actions: {
+          Button("Add Songs") { showingAddSongsSheet = true }
+            .buttonStyle(.borderedProminent)
+        }
       }
     }
     .listRowBackground(themeManager.cardBackgroundColor)

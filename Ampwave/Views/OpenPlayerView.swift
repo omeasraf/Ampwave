@@ -26,6 +26,10 @@ struct OpenPlayerView: View {
   @State private var showingSleepTimerOptions = false
   @State private var artworkColor: Color = .clear
   @State private var rawArtworkColor: Color = .clear
+  /// Measured height of the whole controls block (track info through the
+  /// utility row). The artwork is sized around this so the bottom row is never
+  /// pushed below the fold, whatever the device or text size.
+  @State private var controlsHeight: CGFloat = 0
   #if os(iOS)
     @State private var isAirPlayActive = false
   #endif
@@ -59,7 +63,20 @@ struct OpenPlayerView: View {
         GeometryReader { geometry in
           let availableHeight = geometry.size.height
           let isFullBackground = userPreferences?.fullArtworkBackground ?? true
-          
+          // The scroll view draws under the home indicator, so the first page
+          // has to cover the safe-area inset too — sizing it to
+          // `geometry.size.height` alone left a sliver of the lyrics section
+          // peeking up from the bottom.
+          let pageHeight = availableHeight + geometry.safeAreaInsets.bottom
+          // The artwork gives up whatever height the controls actually need,
+          // rather than always claiming 62%. On shorter screens — or with
+          // larger text — a fixed share pushed the utility row off the bottom
+          // of the first screenful. Floored so the artwork never collapses.
+          let artworkHeight = max(
+            pageHeight * 0.3,
+            min(pageHeight * 0.62, pageHeight - controlsHeight)
+          )
+
           ScrollView(showsIndicators: false) {
               VStack(spacing: 0) {
                   // ── First page: fills exactly the viewport ──
@@ -68,7 +85,7 @@ struct OpenPlayerView: View {
                           // Taller artwork for full background mode
                           let accentOn = userPreferences?.coverArtAccentPlayer ?? false
                           FullArtworkBackgroundView(artworkPath: playback.currentItem?.effectiveArtworkPath)
-                              .frame(height: availableHeight * 0.62)
+                              .frame(height: artworkHeight)
                               .overlay {
                                   // Primary fade:" artwork → theme background
                                   LinearGradient(
@@ -110,6 +127,9 @@ struct OpenPlayerView: View {
                           .padding(.top, 10)
                           .padding(.bottom, 10)
                           .padding(.horizontal, 16)
+                          // Same reasoning as the full-bleed branch: the cover
+                          // shrinks before the controls get clipped.
+                          .frame(maxHeight: artworkHeight)
                       }
                       
                       Spacer(minLength: 0)
@@ -123,7 +143,11 @@ struct OpenPlayerView: View {
                           
                           extraControls
                       }
-                      .padding(.vertical, isFullBackground ? 24 : 16)
+                      .padding(.top, isFullBackground ? 24 : 16)
+                      // Asymmetric on purpose: the utility row should sit close
+                      // to the bottom edge rather than floating above a band of
+                      // empty card.
+                      .padding(.bottom, isFullBackground ? 8 : 6)
                       .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 24 : 12)
                       .background(
                         Group {
@@ -145,9 +169,15 @@ struct OpenPlayerView: View {
                         }
                       )
                       .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 16 : 8)
-                      .padding(.bottom, 10)
+                      // Clear the home indicator: the page now extends under it.
+                      .padding(.bottom, 10 + geometry.safeAreaInsets.bottom)
+                      .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                      } action: { height in
+                        controlsHeight = height
+                      }
                   }
-                  .frame(minHeight: availableHeight)
+                  .frame(minHeight: pageHeight)
                   
                   // ── Lyrics section: only visible on scroll ──
                   tabSection
@@ -162,6 +192,13 @@ struct OpenPlayerView: View {
               rawArtworkColor.opacity(0.18)
             }
           }
+          // Hiding the toolbar background isn't enough on its own: content
+          // scrolling under the bar still gets the system's scroll edge
+          // effect, which paints a blurred/tinted band over the artwork and
+          // reads as a solid nav-bar background.
+          #if os(iOS)
+            .scrollEdgeEffectHidden(true, for: .top)
+          #endif
         }
         .ignoresSafeArea(edges: (userPreferences?.fullArtworkBackground ?? true) ? .top : [])
       }

@@ -7,6 +7,18 @@
 
 internal import SwiftUI
 
+/// The "E" marker Apple Music and Spotify use for explicit tracks.
+struct ExplicitBadge: View {
+  var size: CGFloat = 12
+
+  var body: some View {
+    Image(systemName: "e.square.fill")
+      .font(.system(size: size))
+      .foregroundStyle(.secondary)
+      .accessibilityLabel("Explicit")
+  }
+}
+
 struct SongRow: View {
   let song: LibrarySong
   let isCurrent: Bool
@@ -27,10 +39,13 @@ struct SongRow: View {
           .font(.system(size: 16, weight: isCurrent ? .semibold : .regular))
           .lineLimit(1)
 
-        Text(song.artist)
-          .font(.system(size: 14))
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
+        HStack(spacing: 4) {
+          if song.isExplicit { ExplicitBadge(size: 12) }
+          Text(song.artist)
+            .font(.system(size: 14))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
       }
 
       Spacer()
@@ -71,10 +86,13 @@ struct CompactSongRow: View {
           .font(.system(size: 15, weight: isCurrent ? .semibold : .medium))
           .lineLimit(1)
 
-        Text(song.artist)
-          .font(.system(size: 13))
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
+        HStack(spacing: 4) {
+          if song.isExplicit { ExplicitBadge(size: 11) }
+          Text(song.artist)
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
       }
 
       Spacer()
@@ -124,10 +142,13 @@ struct NumberedSongRow: View {
           .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
           .lineLimit(1)
 
-        Text(song.artist)
-          .font(.system(size: 13))
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
+        HStack(spacing: 4) {
+          if song.isExplicit { ExplicitBadge(size: 11) }
+          Text(song.artist)
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
       }
 
       Spacer()

@@ -22,6 +22,7 @@ final class AppleMusicMetadataService {
     
     private var isAuthorized = false
     private var cache: [String: FetchedMetadata] = [:]
+    private var artistArtworkCache: [String: URL?] = [:]
     
     private init() {}
     
@@ -95,16 +96,7 @@ final class AppleMusicMetadataService {
                 artistBio = try? await fetchArtistEditorialNotesByName(song.artistName)
             }
             
-            var directLyrics: String?
-            if song.hasLyrics {
-                print("[DEBUG] AppleMusicMetadataService: Song has lyrics, attempting experimental direct fetch...")
-                directLyrics = await fetchLyricsDirectly(songId: song.id.rawValue)
-            }
-            
-            var metadata = mapSongToMetadata(song, albumDescription: albumDescription, artistBio: artistBio)
-            if let lyrics = directLyrics {
-                metadata.lyrics = lyrics
-            }
+            let metadata = mapSongToMetadata(song, albumDescription: albumDescription, artistBio: artistBio)
             cache[cacheKey] = metadata
             return metadata
         } catch {
@@ -131,6 +123,42 @@ final class AppleMusicMetadataService {
         let searchResponse = try await searchRequest.response()
         guard let found = searchResponse.albums.first else { return nil }
         return cleanEditorialNotes(found.editorialNotes?.standard ?? found.editorialNotes?.short)
+    }
+
+    /// Apple Music's artist image for `name`, if the catalog has one.
+    ///
+    /// Artist metadata otherwise comes from MusicBrainz/TheAudioDB, which have
+    /// patchy image coverage — Apple Music has a proper photo for most artists.
+    func fetchArtistArtworkURL(name: String, width: Int = 800, height: Int = 800) async -> URL? {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        if let cached = artistArtworkCache[name.lowercased()] { return cached }
+
+        do {
+            var request = MusicCatalogSearchRequest(term: name, types: [MKART.self])
+            request.limit = 5
+            let response = try await request.response()
+
+            // Exact-ish name match only: a fuzzy hit would attach a stranger's
+            // photo to the artist, which is worse than showing no image.
+            let target = normalizedArtistName(name)
+            let match = response.artists.first { normalizedArtistName($0.name) == target }
+            guard let match else {
+                print("[DEBUG] AppleMusicMetadataService: No artist artwork match for \(name)")
+                return nil
+            }
+
+            let url = match.artwork?.url(width: width, height: height)
+            artistArtworkCache[name.lowercased()] = url
+            return url
+        } catch {
+            print("[DEBUG] AppleMusicMetadataService: Artist artwork search error: \(error)")
+            return nil
+        }
+    }
+
+    private func normalizedArtistName(_ name: String) -> String {
+        name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
     }
 
     private func fetchArtistEditorialNotes(_ artist: MKART) async throws -> String? {
@@ -230,26 +258,4 @@ final class AppleMusicMetadataService {
         return String(format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255))
     }
 
-    private func fetchLyricsDirectly(songId: String) async -> String? {
-        do {
-            let storefront = try await MusicDataRequest.currentCountryCode
-            let url = URL(string: "https://api.music.apple.com/v1/catalog/\(storefront)/songs/\(songId)/lyrics")!
-            let request = MusicDataRequest(urlRequest: URLRequest(url: url))
-            let response = try await request.response()
-            
-            // The response for lyrics is complex and usually returns TTML data
-            // We'll try to extract something readable if it succeeds
-            let json = try JSONSerialization.jsonObject(with: response.data) as? [String: Any]
-            if let data = json?["data"] as? [[String: Any]], let first = data.first {
-                if let attributes = first["attributes"] as? [String: Any], let ttml = attributes["ttml"] as? String {
-                    print("[DEBUG] AppleMusicMetadataService: Successfully retrieved TTML lyrics")
-                    return ttml
-                }
-            }
-            return nil
-        } catch {
-            print("[DEBUG] AppleMusicMetadataService: Experimental lyrics fetch failed: \(error)")
-            return nil
-        }
-    }
 }

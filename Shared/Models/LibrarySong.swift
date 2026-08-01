@@ -77,6 +77,7 @@ final class LibrarySong: Identifiable, Hashable {
   var metadataSourceAlbum: String?
   var isLive: Bool = false
   var isMedley: Bool = false
+  var isExplicit: Bool = false
 
   @Relationship(inverse: \Album.songs)
   var albumReference: Album?
@@ -165,7 +166,8 @@ final class LibrarySong: Identifiable, Hashable {
     metadataSourceArtist: String? = nil,
     metadataSourceAlbum: String? = nil,
     isLive: Bool = false,
-    isMedley: Bool = false
+    isMedley: Bool = false,
+    isExplicit: Bool = false
   ) {
     self.id = UUID()
     self.title = title
@@ -218,6 +220,7 @@ final class LibrarySong: Identifiable, Hashable {
     self.metadataSourceAlbum = metadataSourceAlbum
     self.isLive = isLive
     self.isMedley = isMedley
+    self.isExplicit = isExplicit
   }
 
   static func == (lhs: LibrarySong, rhs: LibrarySong) -> Bool {
@@ -265,5 +268,23 @@ final class LibrarySong: Identifiable, Hashable {
 
     // Limit indexing to first 5000 characters to allow better lyric searching for long songs
     return String(cleaned.prefix(5000))
+  }
+
+  // MARK: - Album Track Ordering
+
+  /// Orders songs the way an album track list should read: disc first, then
+  /// track number within the disc, with unknown numbers sorting to the end
+  /// (not collapsing to the front the way `?? 0` does) and title as the final
+  /// tiebreak.
+  static func albumTrackOrder(_ lhs: LibrarySong, _ rhs: LibrarySong) -> Bool {
+    let lhsDisc = lhs.discNumber ?? 1
+    let rhsDisc = rhs.discNumber ?? 1
+    if lhsDisc != rhsDisc { return lhsDisc < rhsDisc }
+
+    let lhsTrack = lhs.trackNumber ?? .max
+    let rhsTrack = rhs.trackNumber ?? .max
+    if lhsTrack != rhsTrack { return lhsTrack < rhsTrack }
+
+    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
   }
 }

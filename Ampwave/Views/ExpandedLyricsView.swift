@@ -654,9 +654,11 @@ private struct KaraokeLineView: View {
   let color: Color
 
   var body: some View {
-    TimelineView(.animation(paused: !playback.isPlaying || playback.isScrubbing)) { _ in
+    TimelineView(
+      .animation(paused: !playback.isPlaying || playback.isScrubbing || playback.isSeeking)
+    ) { _ in
       let now = playback.lyricsClock.interpolatedTime(
-        isPlaying: playback.isPlaying && !playback.isScrubbing
+        isPlaying: playback.isPlaying && !playback.isScrubbing && !playback.isSeeking
       )
 
       WrappingWordsLayout(

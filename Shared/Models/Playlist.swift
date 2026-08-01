@@ -164,27 +164,10 @@ final class Playlist: Identifiable, Hashable {
       return Array(uniquePaths.prefix(1))
     }
 
-    // If we have at least 4 unique artworks, use the first 4 unique ones
-    if uniquePaths.count >= 4 {
-      return Array(uniquePaths.prefix(4))
-    }
-
-    // If we have between 1 and 3 unique artworks, and we want a grid:
-    // We can either return just the unique ones and let the view handle it,
-    // or return a single one if it's not "enough" for a good grid.
-    // Most apps only show the grid if there are 4+ unique albums.
-    // But to "respect the 2x2 grid" selection, let's return up to 4 paths even if we repeat.
-
-    if artworkType == .grid && !allPaths.isEmpty {
-      // If we have 4+ songs, just take the first 4 even if they aren't unique
-      if allPaths.count >= 4 {
-        return Array(allPaths.prefix(4))
-      }
-      // If we have fewer than 4 songs, return all of them
-      return allPaths
-    }
-
-    return Array(uniquePaths.prefix(1))
+    // Only ever hand back *distinct* covers. Padding a grid with repeats to
+    // reach four tiles produced a 2x2 of the same image for any single-album
+    // playlist; the view falls back to one full-bleed cover instead.
+    return Array(uniquePaths.prefix(4))
   }
 
   /// Generates a collage artwork from song artworks

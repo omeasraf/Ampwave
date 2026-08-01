@@ -14,9 +14,31 @@ struct AlbumView: View {
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  private var library: SongLibrary { SongLibrary.shared }
+
+  /// Library-wide work already reports through `IndexingStatusView`; this just
+  /// keeps the menu item from queuing a second pass on top of it.
+  private var isLibraryBusy: Bool {
+    switch library.indexingStatus {
+    case .indexing, .fetchingMetadata: return true
+    case .idle, .complete: return false
+    }
+  }
 
   var sortedSongs: [LibrarySong] {
-    album.songs.sorted { ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0) }
+    album.songs.sorted(by: LibrarySong.albumTrackOrder)
+  }
+
+  /// Tracks split into discs, in order. A single-disc album yields one group
+  /// with a nil number so no "Disc 1" header is drawn.
+  private var discGroups: [(disc: Int?, songs: [LibrarySong])] {
+    let songs = sortedSongs
+    let discs = Set(songs.map { $0.discNumber ?? 1 })
+    guard discs.count > 1 else { return [(nil, songs)] }
+
+    return discs.sorted().map { disc in
+      (disc, songs.filter { ($0.discNumber ?? 1) == disc })
+    }
   }
 
   @Environment(ThemeManager.self) private var themeManager
@@ -34,23 +56,27 @@ struct AlbumView: View {
       }
       .listRowBackground(Color.clear)
 
-      if !sortedSongs.isEmpty {
+      ForEach(discGroups, id: \.disc) { group in
         Section {
-          ForEach(Array(sortedSongs.enumerated()), id: \.element.id) {
-            index,
-            song in
+          ForEach(Array(group.songs.enumerated()), id: \.element.id) { offset, song in
             NumberedSongRow(
-              number: index + 1,
+              // Prefer the real tag — a positional index silently renumbers
+              // albums whose tracks are only partly tagged.
+              number: song.trackNumber ?? (offset + 1),
               song: song,
               isCurrent: playback.currentItem?.id == song.id
             )
             .contentShape(Rectangle())
             .onTapGesture {
-              playback.playAlbum(album, startingAtTrack: index)
+              // Index into the flat sorted list, which is the order
+              // playAlbum queues tracks in.
+              if let index = sortedSongs.firstIndex(where: { $0.id == song.id }) {
+                playback.playAlbum(album, startingAtTrack: index)
+              }
             }
             .swipeActions(edge: .trailing) {
               Button {
-                playlistManager.toggleLike(song: song)
+                _ = playlistManager.toggleLike(song: song)
               } label: {
                 Image(
                   systemName: playlistManager.isLiked(
@@ -69,7 +95,7 @@ struct AlbumView: View {
             }
           }
         } header: {
-          Text("Tracks")
+          Text(group.disc.map { "Disc \($0)" } ?? "Tracks")
         }
         .listRowBackground(themeManager.cardBackgroundColor)
       }
@@ -99,13 +125,14 @@ struct AlbumView: View {
           Divider()
 
           Button {
-            // Refresh metadata
+            Task { await library.refreshMetadata(for: album) }
           } label: {
             Label(
               "Refresh Metadata",
               systemImage: "arrow.clockwise"
             )
           }
+          .disabled(isLibraryBusy)
         } label: {
           Image(systemName: "ellipsis.circle")
             .foregroundStyle(themeManager.accentColor)

@@ -5,6 +5,11 @@
 
 import Foundation
 
+/// The single source of truth for smart playlist matching.
+///
+/// PlaylistManager used to carry a second, subtly different implementation, so
+/// the "N songs match" preview could disagree with the playlist you actually
+/// got. Everything routes through here now.
 enum SmartPlaylistEvaluator {
 
   // MARK: - Public API
@@ -14,29 +19,41 @@ enum SmartPlaylistEvaluator {
   /// **Grouping semantics:**
   /// Rules are grouped by `field`. Within a group the `connector` on each rule (except the
   /// first in the group) is used to AND/OR that rule with the accumulated group result.
-  /// All field groups are AND'd together — cross-group logic is not configurable.
+  /// `rules.matchMode` then decides whether every group must pass or just one.
   static func evaluate(
     songs allSongs: [LibrarySong],
     rules: SmartPlaylistRules,
     stats: [UUID: SongPlayStatistics]
   ) -> [LibrarySong] {
 
-    guard !rules.rules.isEmpty else { return allSongs }
+    // No rules means no filter, which previously matched the *entire library*.
+    // A smart playlist that quietly swallows every song is never what was
+    // wanted, so an empty ruleset matches nothing instead.
+    guard !rules.rules.isEmpty else { return [] }
 
     let groups = fieldGroups(from: rules.rules)
 
-    var matched = allSongs.filter { song in
-      // Every field group must pass (AND between groups)
-      groups.allSatisfy { groupRules in
-        evaluateGroup(groupRules, song: song, stats: stats[song.id])
+    let matched = allSongs.filter { song in
+      let songStats = stats[song.id]
+      switch rules.matchMode {
+      case .all:
+        return groups.allSatisfy { evaluateGroup($0, song: song, stats: songStats) }
+      case .any:
+        return groups.contains { evaluateGroup($0, song: song, stats: songStats) }
       }
     }
 
-    if rules.limitEnabled && rules.limitCount > 0 {
-      matched = applyLimit(matched, count: rules.limitCount, by: rules.limitBy, stats: stats)
-    }
+    return applyLimitIfNeeded(matched, rules: rules, stats: stats)
+  }
 
-    return matched
+  private static func applyLimitIfNeeded(
+    _ songs: [LibrarySong],
+    rules: SmartPlaylistRules,
+    stats: [UUID: SongPlayStatistics]
+  ) -> [LibrarySong] {
+    // A limit of zero used to wipe the playlist. Treat it as "no limit set".
+    guard rules.limitEnabled, rules.limitCount > 0 else { return songs }
+    return applyLimit(songs, count: rules.limitCount, by: rules.limitBy, stats: stats)
   }
 
   // MARK: - Field grouping helper (also used by the UI)
@@ -64,7 +81,8 @@ enum SmartPlaylistEvaluator {
     song: LibrarySong,
     stats: SongPlayStatistics?
   ) -> Bool {
-    var result = matches(song: song, rule: groupRules[0], stats: stats)
+    guard let first = groupRules.first else { return true }
+    var result = matches(song: song, rule: first, stats: stats)
     for rule in groupRules.dropFirst() {
       let r = matches(song: song, rule: rule, stats: stats)
       switch rule.connector {
@@ -83,14 +101,18 @@ enum SmartPlaylistEvaluator {
     stats: SongPlayStatistics?
   ) -> Bool {
     switch rule.field {
-    case .artist:    return matchString(song.artist,        op: rule.operation, value: rule.value)
-    case .album:     return matchString(song.album ?? "",   op: rule.operation, value: rule.value)
-    case .genre:     return matchString(song.genre ?? "",   op: rule.operation, value: rule.value)
-    case .year:      return matchInt(song.year ?? 0,        op: rule.operation, value: rule.value)
-    case .playCount: return matchInt(stats?.playCount ?? 0, op: rule.operation, value: rule.value)
-    case .rating:    return matchInt(stats?.userRating ?? 0,op: rule.operation, value: rule.value)
-    case .duration:  return matchDouble(song.duration,      op: rule.operation, value: rule.value)
-    case .lastPlayed:return matchDate(stats?.lastPlayedAt,  op: rule.operation, value: rule.value)
+    case .title:      return matchString(song.title,          op: rule.operation, value: rule.value)
+    case .artist:     return matchString(song.artist,         op: rule.operation, value: rule.value)
+    case .album:      return matchString(song.album ?? "",    op: rule.operation, value: rule.value)
+    case .genre:      return matchString(song.genre ?? "",    op: rule.operation, value: rule.value)
+    case .year:       return matchInt(song.year ?? 0,         op: rule.operation, value: rule.value)
+    case .playCount:  return matchInt(stats?.playCount ?? 0,  op: rule.operation, value: rule.value)
+    case .skipCount:  return matchInt(stats?.skipCount ?? 0,  op: rule.operation, value: rule.value)
+    case .rating:     return matchInt(stats?.userRating ?? 0, op: rule.operation, value: rule.value)
+    case .duration:   return matchDouble(song.duration,       op: rule.operation, value: rule.value)
+    case .lastPlayed: return matchDate(stats?.lastPlayedAt,   op: rule.operation, value: rule.value)
+    case .dateAdded:  return matchDate(song.importedDate,     op: rule.operation, value: rule.value)
+    case .liked:      return matchBool(stats?.isLiked ?? false, op: rule.operation, value: rule.value)
     }
   }
 
@@ -102,46 +124,60 @@ enum SmartPlaylistEvaluator {
     case .isNot:          return actual.localizedCaseInsensitiveCompare(value) != .orderedSame
     case .contains:       return actual.localizedCaseInsensitiveContains(value)
     case .doesNotContain: return !actual.localizedCaseInsensitiveContains(value)
-    case .greaterThan, .lessThan, .inTheLast: return false
+    case .greaterThan, .lessThan, .inTheLast, .notInTheLast: return false
     }
   }
 
   private static func matchInt(_ actual: Int, op: RuleOperation, value: String) -> Bool {
-    guard let rhs = Int(value) else { return false }
+    guard let rhs = Int(value.trimmingCharacters(in: .whitespaces)) else { return false }
     switch op {
-    case .is_:        return actual == rhs
-    case .isNot:      return actual != rhs
-    case .greaterThan:return actual > rhs
-    case .lessThan:   return actual < rhs
-    case .contains, .doesNotContain, .inTheLast: return false
+    case .is_:         return actual == rhs
+    case .isNot:       return actual != rhs
+    case .greaterThan: return actual > rhs
+    case .lessThan:    return actual < rhs
+    case .contains, .doesNotContain, .inTheLast, .notInTheLast: return false
     }
   }
 
   private static func matchDouble(_ actual: Double, op: RuleOperation, value: String) -> Bool {
-    guard let rhs = Double(value) else { return false }
+    guard let rhs = Double(value.trimmingCharacters(in: .whitespaces)) else { return false }
     switch op {
-    case .is_:        return actual == rhs
-    case .isNot:      return actual != rhs
-    case .greaterThan:return actual > rhs
-    case .lessThan:   return actual < rhs
-    case .contains, .doesNotContain, .inTheLast: return false
+    case .is_:         return abs(actual - rhs) < 0.5
+    case .isNot:       return abs(actual - rhs) >= 0.5
+    case .greaterThan: return actual > rhs
+    case .lessThan:    return actual < rhs
+    case .contains, .doesNotContain, .inTheLast, .notInTheLast: return false
     }
   }
 
+  /// Date fields compare in "days ago". `is`/`is not` ask whether the date exists
+  /// at all, which is how you build "never played".
   private static func matchDate(_ actual: Date?, op: RuleOperation, value: String) -> Bool {
     switch op {
-    case .inTheLast:
-      guard let days = Double(value), let date = actual else { return false }
-      return date >= Date().addingTimeInterval(-days * 86_400)
-    case .greaterThan:   // "played more than N days ago"
-      guard let days = Double(value), let date = actual else { return false }
-      return date < Date().addingTimeInterval(-days * 86_400)
-    case .lessThan:      // "played less than N days ago"
-      guard let days = Double(value), let date = actual else { return false }
-      return date > Date().addingTimeInterval(-days * 86_400)
-    case .is_:    return actual != nil
-    case .isNot:  return actual == nil
+    case .is_:   return actual != nil
+    case .isNot: return actual == nil
     case .contains, .doesNotContain: return false
+    case .inTheLast, .notInTheLast, .greaterThan, .lessThan:
+      guard let days = Double(value.trimmingCharacters(in: .whitespaces)) else { return false }
+      guard let date = actual else {
+        // A song that has never been played is not "in the last N days", but it
+        // *is* outside that window.
+        return op == .notInTheLast || op == .greaterThan
+      }
+      let cutoff = Date().addingTimeInterval(-days * 86_400)
+      switch op {
+      case .inTheLast, .lessThan: return date >= cutoff   // more recent than the cutoff
+      default:                    return date < cutoff    // older than the cutoff
+      }
+    }
+  }
+
+  private static func matchBool(_ actual: Bool, op: RuleOperation, value: String) -> Bool {
+    let expected = (value as NSString).boolValue || value.localizedCaseInsensitiveCompare("yes") == .orderedSame
+    switch op {
+    case .is_:   return actual == expected
+    case .isNot: return actual != expected
+    default:     return false
     }
   }
 

@@ -34,9 +34,16 @@ private struct AppThemeChrome: ViewModifier {
 struct AmpwaveApp: App {
   // Shared model container for SwiftData
   let modelContainer: ModelContainer
+  @Environment(\.scenePhase) private var scenePhase
 
   init() {
     print("[DEBUG] AmpwaveApp init started")
+
+    // Must register before the app finishes launching, or BGTaskScheduler traps.
+    #if os(iOS)
+      BackgroundWorkCoordinator.activate()
+    #endif
+
     // Initialize model container with all our data models
     let schema = Schema([
       LibrarySong.self,
@@ -116,6 +123,16 @@ struct AmpwaveApp: App {
       .environment(ThemeManager.shared)
       .environment(SleepTimerService.shared)
       .onOpenURL { AmpwaveURLRouter.handle($0) }
+      #if os(iOS)
+        .onChange(of: scenePhase) { _, phase in
+          // Leaving the app: ask for a later window so anything the
+          // post-backgrounding grace period doesn't finish still gets done.
+          guard phase == .background else { return }
+          if SongLibrary.shared.hasPendingMetadataWork {
+            BackgroundWorkCoordinator.scheduleMetadataRefresh()
+          }
+        }
+      #endif
     }
     .modelContainer(modelContainer)
 

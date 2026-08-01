@@ -270,6 +270,11 @@ final class MetadataService {
 
     let artistInfo = await searchArtist(artist: artist)
     let theAudioDBInfo = await searchTheAudioDBArtist(artist: artist)
+    // Apple Music has artist photos for far more artists than TheAudioDB, so
+    // prefer it and fall back to the TheAudioDB thumbnail.
+    let appleArtworkURL = await AppleMusicMetadataService.shared.fetchArtistArtworkURL(
+      name: artist.name
+    )
 
     var genres: Set<String> = []
     if let mbGenres = artistInfo?.genres {
@@ -293,7 +298,7 @@ final class MetadataService {
       genres: Array(genres).sorted(),
       biography: theAudioDBInfo?.strBiography,
       musicBrainzId: artistInfo?.id ?? theAudioDBInfo?.strMusicBrainzID,
-      artworkURL: theAudioDBInfo?.strArtistThumb.flatMap { URL(string: $0) },
+      artworkURL: appleArtworkURL ?? theAudioDBInfo?.strArtistThumb.flatMap { URL(string: $0) },
       fanartURL: theAudioDBInfo?.strArtistFanart.flatMap { URL(string: $0) }
     )
   }
@@ -720,6 +725,24 @@ final class MetadataService {
       song.year == nil || song.year == 0
     {
       song.year = year
+      needsSave = true
+    }
+    if let trackNumber = metadata.trackNumber,
+      !song.userEditedFields.contains("trackNumber"),
+      song.trackNumber == nil
+    {
+      song.trackNumber = trackNumber
+      needsSave = true
+    }
+    if let discNumber = metadata.discNumber,
+      !song.userEditedFields.contains("discNumber"),
+      song.discNumber == nil
+    {
+      song.discNumber = discNumber
+      needsSave = true
+    }
+    if let explicit = metadata.isExplicit, explicit != song.isExplicit {
+      song.isExplicit = explicit
       needsSave = true
     }
     if let genre = metadata.genre, !genre.isEmpty,

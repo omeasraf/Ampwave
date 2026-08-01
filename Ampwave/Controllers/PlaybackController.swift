@@ -75,7 +75,7 @@ final class PlaybackController {
   private(set) var isPlaying: Bool = false
   private(set) var isLoading: Bool = false
   var isScrubbing: Bool = false
-  private var isSeeking: Bool = false
+  private(set) var isSeeking: Bool = false
 
   var volume: Float = 1.0 {
     didSet {
@@ -559,9 +559,12 @@ final class PlaybackController {
 
     setupAudioSession()
 
-    let url = library.getFileURL(for: song)
-    guard FileManager.default.fileExists(atPath: url.path) else {
-      print("[ERROR] PlaybackController: Audio file not found: \(url.path)")
+    // Must go through the library: a referenced song (Copy Imported Music
+    // off) lives outside the container and its file is invisible to a plain
+    // FileManager check until security-scoped access is opened.
+    guard library.fileExists(for: song) else {
+      print(
+        "[ERROR] PlaybackController: Audio file not found: \(library.getFileURL(for: song).path)")
       isLoading = false
       return
     }
@@ -574,6 +577,13 @@ final class PlaybackController {
           "[VALIDATION] PlaybackController: AVPlayerItem ready with audioMix: \(item.audioMix != nil)"
         )
 
+        // A player that failed (e.g. its item pointed at a file that's since
+        // been deleted) is stuck for good — AVQueuePlayer never recovers
+        // from `.failed`, so reusing it here would silently no-op forever.
+        // Tear it down and recreate instead of just checking for nil.
+        if self.player?.status == .failed {
+          self.cleanupPlayer()
+        }
         if self.player == nil {
           self.player = AVQueuePlayer(items: [item])
           self.applyEQPresetForPlayback()
@@ -658,6 +668,12 @@ final class PlaybackController {
         } else if item.status == .failed {
           print(
             "[ERROR] PlaybackController: AVPlayerItem failed: \(String(describing: item.error))")
+          // Only the actively-playing item failing needs a response — a
+          // preloaded next-item failure just gets discovered fresh when
+          // play() reaches it. Skip ahead rather than sitting on a dead item.
+          if self?.player?.currentItem === item {
+            self?.playNext()
+          }
         }
       }
     }
@@ -675,6 +691,10 @@ final class PlaybackController {
     let nextIndex = currentQueueIndex + 1
     if nextIndex < queue.count {
       let nextSong = queue[nextIndex]
+      guard library.fileExists(for: nextSong) else {
+        print("[ERROR] PlaybackController: Skipping gapless preload, file missing for \(nextSong.title)")
+        return
+      }
       print("[VALIDATION] PlaybackController: preparing next item \(nextSong.title)")
 
       Task {
@@ -755,9 +775,9 @@ final class PlaybackController {
   }
 
   func playAlbum(_ album: Album, startingAtTrack index: Int = 0) {
-    let sortedSongs = album.songs.sorted {
-      ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0)
-    }
+    // Must match the order AlbumView lists tracks in — the caller passes an
+    // index into that list, so a divergent sort here plays the wrong song.
+    let sortedSongs = album.songs.sorted(by: LibrarySong.albumTrackOrder)
     playQueue(sortedSongs, startingAt: index, from: .album)
   }
 
@@ -819,6 +839,11 @@ final class PlaybackController {
     }
   }
 
+  /// Identifies the in-flight seek so a completion handler from a
+  /// superseded seek (or the timeout fallback below) can't clobber state
+  /// written by a newer one.
+  private var seekToken = UUID()
+
   func seek(to time: TimeInterval) {
     guard time.isFinite, time >= 0 else { return }
     self.currentTime = time
@@ -830,17 +855,40 @@ final class PlaybackController {
     }
 
     isSeeking = true
+    let token = UUID()
+    seekToken = token
     let cmTime = CMTime(seconds: time, preferredTimescale: 600)
+
+    // AVPlayer's seek completion handler can be dropped entirely if the
+    // player item gets swapped out mid-seek (gapless auto-advance /
+    // crossfade). Without a fallback, `isSeeking` would stay true forever,
+    // which permanently freezes lyric sync: both periodic time observers
+    // refuse to run while it's set, and the karaoke clock keeps
+    // extrapolating from its last (now stale) anchor with nothing to ever
+    // re-anchor it.
+    Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .seconds(1.5))
+      guard let self, self.seekToken == token, self.isSeeking else { return }
+      self.isSeeking = false
+      let playerSeconds = self.player?.currentTime().seconds
+      let resolvedTime = (playerSeconds?.isFinite == true) ? playerSeconds! : time
+      self.currentTime = resolvedTime
+      self.lyricsClock.currentTime = resolvedTime
+      self.updateCurrentLyric(at: resolvedTime)
+      self.updateNowPlaying()
+    }
+
     player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) {
       [weak self] finished in
       Task { @MainActor in
-        self?.isSeeking = false
+        guard let self, self.seekToken == token else { return }
+        self.isSeeking = false
         if finished {
-          self?.currentTime = time
-          self?.lyricsClock.currentTime = time
-          self?.updateCurrentLyric(at: time)
-          self?.updateNowPlaying()
-          self?.saveState()
+          self.currentTime = time
+          self.lyricsClock.currentTime = time
+          self.updateCurrentLyric(at: time)
+          self.updateNowPlaying()
+          self.saveState()
         }
       }
     }
@@ -1339,6 +1387,27 @@ final class PlaybackController {
     }
   }
 
+  /// Finds the closest index in `songs` (searching outward from
+  /// `startingAt`) whose audio file actually exists on disk, so a stale
+  /// saved index pointing at a deleted file doesn't get handed to the player.
+  /// Returns `nil` if nothing in `songs` is playable.
+  private func nearestPlayableIndex(in songs: [LibrarySong], startingAt: Int) -> Int? {
+    guard !songs.isEmpty else { return nil }
+    let start = min(max(startingAt, 0), songs.count - 1)
+    if library.fileExists(for: songs[start]) { return start }
+    var offset = 1
+    while start - offset >= 0 || start + offset < songs.count {
+      if start + offset < songs.count, library.fileExists(for: songs[start + offset]) {
+        return start + offset
+      }
+      if start - offset >= 0, library.fileExists(for: songs[start - offset]) {
+        return start - offset
+      }
+      offset += 1
+    }
+    return nil
+  }
+
   private func restoreState() {
     print("[DEBUG] PlaybackController.restoreState: Starting restoration")
     guard let state = persistentState else {
@@ -1382,9 +1451,17 @@ final class PlaybackController {
       restoredQueue.insert(restoredSong, at: min(max(state.lastQueueIndex, 0), restoredQueue.count))
     }
 
-    let resolvedQueueIndex =
+    // Files can vanish out from under the library (e.g. deleted via the
+    // Files app) between app launches. Restoring a player against a song
+    // whose file is gone poisons the AVQueuePlayer for good — every future
+    // play() call reuses that dead player and silently no-ops — so pick the
+    // nearest song that still has a readable file instead of trusting the
+    // saved index blindly.
+    let preferredIndex =
       restoredQueue.firstIndex(where: { $0.id == restoredSong.id })
       ?? min(max(state.lastQueueIndex, 0), max(restoredQueue.count - 1, 0))
+    let resolvedQueueIndex =
+      nearestPlayableIndex(in: restoredQueue, startingAt: preferredIndex) ?? preferredIndex
 
     if !restoredQueue.isEmpty {
       Task { @MainActor in
@@ -1403,7 +1480,7 @@ final class PlaybackController {
           ?? .library
         self.currentPlaylistId = state.lastPlaylistId
 
-        if currentQueueIndex < queue.count {
+        if currentQueueIndex < queue.count, library.fileExists(for: queue[currentQueueIndex]) {
           let song = queue[currentQueueIndex]
           print(
             "[DEBUG] PlaybackController.restoreState.MainActor: Current song: \(song.title)"
@@ -1442,7 +1519,7 @@ final class PlaybackController {
           }
         } else {
           print(
-            "[DEBUG] PlaybackController.restoreState.MainActor: FAILED - index \(currentQueueIndex) out of bounds"
+            "[DEBUG] PlaybackController.restoreState.MainActor: SKIPPED - no restorable song with a readable file at index \(currentQueueIndex)"
           )
         }
       }

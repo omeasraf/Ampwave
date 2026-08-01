@@ -31,6 +31,7 @@ struct SettingsView: View {
   @State private var showingResetStatsConfirmation = false
   @State private var isResetting = false
   @State private var backupExportURL: URL?
+  @State private var showingBulkTagEditor = false
   @State private var showingOnboarding = false
 
   private var library: SongLibrary { SongLibrary.shared }
@@ -98,6 +99,9 @@ struct SettingsView: View {
     .sheet(isPresented: $showingOnboarding) {
       OnboardingView()
         .environment(ThemeManager.shared)
+    }
+    .sheet(isPresented: $showingBulkTagEditor) {
+      BulkTagEditorSheet()
     }
     .fileImporter(
       isPresented: $isShowingImporter,
@@ -749,6 +753,18 @@ struct SettingsView: View {
         MetadataQueueView()
       } label: {
         Label("Review Missing Metadata", systemImage: "questionmark.circle")
+      }
+
+      NavigationLink {
+        MissingFilesView()
+      } label: {
+        Label("Find Missing Files", systemImage: "exclamationmark.triangle")
+      }
+
+      Button {
+        showingBulkTagEditor = true
+      } label: {
+        Label("Bulk Tag Editor", systemImage: "tag")
       }
 
       if let backupExportURL {

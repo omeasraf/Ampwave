@@ -14,13 +14,12 @@ public struct PlaySongIntent: AudioPlaybackIntent {
   public static var description = IntentDescription(
     "Searches your music library and starts playback in Ampwave."
   )
-  public static var openAppWhenRun: Bool = true
+  // AudioPlaybackIntent exists so playback can start without foregrounding the
+  // app — forcing it open also made this fail from a locked screen.
+  public static var openAppWhenRun: Bool = false
 
   @Parameter(title: "Song", requestValueDialog: IntentDialog("What song would you like to play?"))
-  public var song: String
-
-  @Parameter(title: "Artist")
-  public var artist: String?
+  var song: SongEntity
 
   public init() {}
 
@@ -29,7 +28,9 @@ public struct PlaySongIntent: AudioPlaybackIntent {
   }
 
   public func perform() async throws -> some IntentResult {
-    _ = try await SiriPlaybackRouter.shared.playSong(songTitle: song, artistName: artist)
+    let title = song.title
+    let artist = song.artist
+    _ = try await SiriPlaybackRouter.shared.playSong(songTitle: title, artistName: artist)
     return .result()
   }
 }

@@ -303,9 +303,9 @@ struct ArtistView: View {
   }
 
   private func calculateTotalPlays() -> Int? {
-    let tracker = ListeningHistoryTracker.shared
+    let stats = ListeningHistoryTracker.shared.statisticsBySongId()
     let total = viewModel.songs.reduce(0) { sum, song in
-      sum + (tracker.getStatistics(for: song)?.playCount ?? 0)
+      sum + (stats[song.id]?.playCount ?? 0)
     }
     return total > 0 ? total : nil
   }
@@ -442,20 +442,24 @@ class ArtistDetailViewModel {
       ($0.year ?? 0) > ($1.year ?? 0)
     }
 
-    // Get top songs (by play count)
-    let tracker = ListeningHistoryTracker.shared
-    topSongs = songs.sorted {
-      let plays1 = tracker.getStatistics(for: $0)?.playCount ?? 0
-      let plays2 = tracker.getStatistics(for: $1)?.playCount ?? 0
-      return plays1 > plays2
-    }
-    topSongs = Array(topSongs.prefix(5))
+    // Get top songs (by play count). Stats are resolved once up front — looking
+    // them up inside the comparator meant a database round trip per comparison.
+    let stats = ListeningHistoryTracker.shared.statisticsBySongId()
+    topSongs = Array(
+      songs
+        .sorted { (stats[$0.id]?.playCount ?? 0) > (stats[$1.id]?.playCount ?? 0) }
+        .prefix(5)
+    )
 
     // Find related artists based on genre similarity
     await findRelatedArtists()
 
-    // If genres are missing, try to fetch them
-    if artist.genres == nil || artist.genres?.isEmpty == true {
+    // Fetch when genres are missing, or when the artist still has no photo of
+    // their own — `artworkPath` may just be borrowed album art, which leaves
+    // the header looking like an album cover rather than an artist portrait.
+    let needsGenres = artist.genres == nil || artist.genres?.isEmpty == true
+    let needsArtwork = !artist.isDedicatedArtwork
+    if needsGenres || needsArtwork {
       await refreshMetadata()
     }
   }

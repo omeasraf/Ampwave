@@ -67,7 +67,10 @@ struct DuplicateManagementView: View {
         .navigationTitle("Manage Duplicates")
         .sheet(item: $selectedGroupForManual) { group in
             ManualDuplicateSelectionView(group: group) { songsToDelete in
-                deleteSongs(songsToDelete)
+                // Whatever the user left unchecked is the copy being kept.
+                let deletedIds = Set(songsToDelete.map(\.id))
+                let keeper = group.songs.first { !deletedIds.contains($0.id) }
+                deleteSongs(songsToDelete, keeping: keeper)
                 selectedGroupForManual = nil
                 refreshDuplicates()
             }
@@ -108,7 +111,7 @@ struct DuplicateManagementView: View {
             }
 
             let toDelete = Array(sorted.dropFirst())
-            deleteSongs(toDelete)
+            deleteSongs(toDelete, keeping: sorted.first)
 
             await MainActor.run {
                 refreshDuplicates()
@@ -126,7 +129,7 @@ struct DuplicateManagementView: View {
                         > library.calculateQualityScore(for: s2)
                 }
                 let toDelete = Array(sorted.dropFirst())
-                deleteSongs(toDelete)
+                deleteSongs(toDelete, keeping: sorted.first)
             }
 
             await MainActor.run {
@@ -136,10 +139,20 @@ struct DuplicateManagementView: View {
         }
     }
 
-    private func deleteSongs(_ songsToDelete: [LibrarySong]) {
+    /// Deletes `songsToDelete`, folding each one's listening history and
+    /// playlist memberships into `keeper` first so a merge never costs play
+    /// counts or quietly shrinks a playlist.
+    private func deleteSongs(_ songsToDelete: [LibrarySong], keeping keeper: LibrarySong?) {
         for song in songsToDelete {
-            // Transfer playlist memberships to the version we're keeping (not implemented here for simplicity, but should be)
-            // For now, follow the requirement: NEVER auto-delete without explicit user action (this is triggered by user)
+            if let keeper {
+                LibraryMaintenanceService.transferState(
+                    from: song,
+                    to: keeper,
+                    tracker: ListeningHistoryTracker.shared,
+                    playlists: PlaylistManager.shared,
+                    modelContext: modelContext
+                )
+            }
 
             let url = library.getFileURL(for: song)
             if song.storageMode == .copied
