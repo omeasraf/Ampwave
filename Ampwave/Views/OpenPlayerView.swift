@@ -215,6 +215,18 @@ struct OpenPlayerView: View {
       #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
       #endif
+      // Something inside the player asked to navigate out of it.
+      .onChange(of: AppNavigator.shared.shouldCollapsePlayer) { _, shouldCollapse in
+        guard shouldCollapse else { return }
+        dismiss()
+      }
+      .onDisappear {
+        // Push only after the cover is gone; doing it mid-transition drops
+        // the navigation.
+        if AppNavigator.shared.shouldCollapsePlayer {
+          AppNavigator.shared.playerDidCollapse()
+        }
+      }
       .toolbar {
         ToolbarItem(placement: .navigation) {
           Button {
@@ -437,7 +449,12 @@ struct OpenPlayerView: View {
           if let song = playback.currentItem,
             let artist = SongLibrary.shared.getArtist(named: song.artist)
           {
-            NavigationLink(destination: ArtistView(artist: artist)) {
+            // Collapses the player first rather than pushing inside its own
+            // cover, which would hide the player and mini player with no way
+            // back to playback.
+            Button {
+              AppNavigator.shared.show(.artist(artist), collapsingPlayer: true)
+            } label: {
               Text(song.artist)
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.secondary)

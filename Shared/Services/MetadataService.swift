@@ -238,8 +238,20 @@ final class MetadataService {
   func fetchMetadata(for album: Album) async -> FetchedMetadata? {
     await respectRateLimit()
 
+    // Apple Music covers albums MusicBrainz misses, so ask it regardless of
+    // whether a release match turns up — bailing early used to mean no artwork
+    // at all for anything MusicBrainz didn't know.
+    let appleArtworkURL = await AppleMusicMetadataService.shared.fetchAlbumArtworkURL(
+      album: album.name,
+      artist: album.artist
+    )
+
     guard let release = await searchRelease(album: album) else {
-      return nil
+      guard let appleArtworkURL else { return nil }
+      return FetchedMetadata(
+        album: album.name,
+        artworkURL: appleArtworkURL
+      )
     }
 
     // Parse release date
@@ -258,8 +270,12 @@ final class MetadataService {
       artworkURL: nil
     )
 
-    // Fetch artwork
-    metadata.artworkURL = await fetchArtworkURL(forRelease: release.id)
+    // Prefer Apple Music's cover; fall back to the Cover Art Archive.
+    if let appleArtworkURL {
+      metadata.artworkURL = appleArtworkURL
+    } else {
+      metadata.artworkURL = await fetchArtworkURL(forRelease: release.id)
+    }
 
     return metadata
   }

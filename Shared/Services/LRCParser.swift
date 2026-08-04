@@ -188,6 +188,47 @@ enum LRCParser {
     }.joined(separator: "\n")
   }
 
+  /// Strips every LRC marker out of `content`, leaving readable text.
+  ///
+  /// Covers all three things an LRC file can carry: line timestamps
+  /// (`[00:12.34]`), metadata tags (`[ar:…]`, `[offset:…]`), and the inline
+  /// word timestamps `toLRC` writes for word-synced lyrics (`<00:12.340>`).
+  /// Missing that last form is why raw timings showed up in the plain-text
+  /// view.
+  static func plainText(from content: String) -> String {
+    let patterns = [
+      #"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]"#,  // line timestamps
+      #"\[[a-zA-Z#]+:[^\]]*\]"#,  // metadata tags
+      #"<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>"#,  // word timestamps
+    ]
+
+    var cleaned = content
+    for pattern in patterns {
+      cleaned = cleaned.replacingOccurrences(
+        of: pattern,
+        with: "",
+        options: .regularExpression
+      )
+    }
+
+    // Word timestamps sit flush against their words, so removing them can
+    // leave doubled spaces mid-line.
+    return
+      cleaned
+      .split(separator: "\n", omittingEmptySubsequences: false)
+      .map {
+        $0.replacingOccurrences(of: #"[ \t]+"#, with: " ", options: .regularExpression)
+          .trimmingCharacters(in: .whitespaces)
+      }
+      .joined(separator: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// True when `content` carries LRC timing markers of any kind.
+  static func isLRCFormatted(_ content: String) -> Bool {
+    content.range(of: #"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]"#, options: .regularExpression) != nil
+  }
+
   private static func formattedTime(_ timestamp: TimeInterval) -> String {
     let minutes = Int(timestamp) / 60
     let seconds = Int(timestamp) % 60

@@ -203,6 +203,18 @@ final class PlaybackController {
     currentLyrics?.hasLyrics ?? false
   }
 
+  /// Unsynced text for the current song, used when there are no timings to
+  /// follow. Prefers the provider's own plain copy over stripping timestamps
+  /// out of the LRC, which leaves odd spacing on enhanced (word-synced) lines.
+  var currentPlainLyrics: String? {
+    if let plain = currentLyrics?.plainLyrics, !plain.isEmpty { return plain }
+    guard let raw = currentItem?.lyrics, !raw.isEmpty else { return nil }
+    // `song.lyrics` holds LRC once synced lyrics land, including inline word
+    // timings — strip them rather than showing timestamps as lyrics.
+    let sanitized = LRCParser.plainText(from: raw)
+    return sanitized.isEmpty ? nil : sanitized
+  }
+
   // MARK: - Source Tracking
 
   private(set) var currentSource: PlaySource = .library
@@ -327,6 +339,29 @@ final class PlaybackController {
       name: .AVPlayerItemDidPlayToEndTime,
       object: nil
     )
+
+    // Lyrics can be fetched or edited from outside playback (the song editor,
+    // a background pass). Without this the player keeps whatever it loaded at
+    // track start and the views fall back to showing raw text.
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleLyricsDidUpdate(_:)),
+      name: .lyricsDidUpdate,
+      object: nil
+    )
+  }
+
+  @objc private func handleLyricsDidUpdate(_ notification: Notification) {
+    Task { @MainActor in
+      guard let songId = notification.object as? UUID,
+        let current = currentItem,
+        current.id == songId
+      else { return }
+
+      currentLyrics = LyricsService.shared.getCachedLyrics(for: current)
+      updateCurrentLyric()
+      updateWidget(force: true)
+    }
   }
 
   @objc private func handleLibraryDidLoad() {
@@ -1204,23 +1239,12 @@ final class PlaybackController {
   private func loadLyrics(for song: LibrarySong) async {
     let lyricsService = LyricsService.shared
 
-    // 1. Try full fetch (respects caching + word-sync upgrade inside fetchLyrics)
+    // Collects word-synced, line-synced and plain in one pass and caches all
+    // of them; which one gets drawn is decided at render time from the
+    // word-synced preference.
     let fetched = await lyricsService.fetchLyrics(for: song)
     guard currentItem?.id == song.id else { return }
     currentLyrics = fetched ?? lyricsService.getCachedLyrics(for: song)
-
-    // 2. If word-sync is enabled but what we have is only line-synced, upgrade now.
-    if let mc = modelContext {
-      let prefs = UserPreferences.getOrCreate(in: mc)
-      let hasWordSync = currentLyrics?.lines.contains { ($0.wordOffsets?.count ?? 0) > 1 } ?? false
-      if prefs.wordSyncedLyricsEnabled && !hasWordSync
-          && NetworkMonitor.shared.isOnline && !prefs.isOfflineMode {
-        if let upgraded = await lyricsService.fetchWordSyncedLyrics(for: song) {
-          guard currentItem?.id == song.id else { return }
-          currentLyrics = upgraded
-        }
-      }
-    }
 
     lyricsClock.currentTime = currentTime
     updateCurrentLyric()

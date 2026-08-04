@@ -1501,9 +1501,9 @@ import SwiftData
     // Fetch if no synced lyrics AND we haven't already tried.
     let syncedLyricLines = LRCParser.parse(song.lyrics ?? "")
     let hasSyncedLyrics = !syncedLyricLines.isEmpty
-    let hasWordSyncedLyrics = syncedLyricLines.contains { ($0.wordOffsets?.count ?? 0) > 1 }
-    let needsLyricsFetch = !hasSyncedLyrics || (preferences.wordSyncedLyricsEnabled && !hasWordSyncedLyrics)
-    if preferences.autoFetchLyrics && needsLyricsFetch && !song.lyricsCheckAttempted && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode {
+    if preferences.autoFetchLyrics && !hasSyncedLyrics && !song.lyricsCheckAttempted
+      && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode
+    {
       print(
         "[DEBUG] SongLibrary.fetchMetadataForSong: Missing synced lyrics, calling LyricsService")
 
@@ -1515,7 +1515,13 @@ import SwiftData
       if lyricsService.modelContext == nil {
         lyricsService.setModelContext(modelContext)
       }
-      _ = await lyricsService.fetchLyrics(for: song)
+      // Word-synced providers are deliberately skipped during import: they
+      // rate-limit aggressively and a library-sized run gets us throttled.
+      // Word timings are fetched per-song on first play instead.
+      _ = await lyricsService.fetchLyrics(
+        for: song,
+        includeWordSynced: !isPartOfBatch
+      )
     }
   }
 
@@ -1684,8 +1690,43 @@ import SwiftData
     indexingStatus = .indexing("Refreshing \(artist.name)…")
     defer { indexingStatus = .complete }
 
-    // Refresh artist info
-    await metadataService.fetchMetadata(for: artist)
+    // Refresh artist info. The fetched result has to be written back — it was
+    // previously discarded, so this call quietly did nothing.
+    if let metadata = await metadataService.fetchMetadata(for: artist) {
+      if let genres = metadata.genres, !genres.isEmpty {
+        artist.genres = genres
+        artist.cachedGenres = genres
+      }
+      if let biography = metadata.biography, !biography.isEmpty {
+        artist.biography = biography
+        artist.cachedBiography = biography
+      }
+      if let origin = metadata.origin, !origin.isEmpty {
+        artist.origin = origin
+        artist.cachedOrigin = origin
+      }
+      if let activeYears = metadata.activeYears, !activeYears.isEmpty {
+        artist.activeYears = activeYears
+        artist.cachedActiveYears = activeYears
+      }
+      if artist.musicBrainzId == nil { artist.musicBrainzId = metadata.musicBrainzId }
+
+      if let artworkURL = metadata.artworkURL,
+        let path = await metadataService.downloadArtwork(from: artworkURL)
+      {
+        artist.artworkPath = path
+        artist.isDedicatedArtwork = true
+      }
+      if let fanartURL = metadata.fanartURL {
+        artist.fanartURL = fanartURL.absoluteString
+        if let path = await metadataService.downloadArtwork(from: fanartURL) {
+          artist.fanartPath = path
+        }
+      }
+
+      artist.lastUpdatedDate = Date()
+      saveContext()
+    }
 
     // Refresh all songs by this artist
     let artistSongs = getSongs(byArtist: artist.name)

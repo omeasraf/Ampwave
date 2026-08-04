@@ -1,4 +1,4 @@
-# Ampwave — What's New v1.0.0 (Build 23)
+# Ampwave — What's New v1.0.0 (Build 24)
 
 ## Latest Update
 

@@ -527,18 +527,25 @@ struct SettingsView: View {
           )
         )
 
-        Toggle(
-          "Word-synced Lyrics",
-          isOn: Binding(
-            get: { preferences.wordSyncedLyricsEnabled },
-            set: {
-              preferences.wordSyncedLyricsEnabled = $0
-              if $0 {
-                PlaybackController.shared.ensureWordSyncedLyricsForCurrentSong()
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle(
+            "Word-synced Lyrics",
+            isOn: Binding(
+              get: { preferences.wordSyncedLyricsEnabled },
+              set: {
+                preferences.wordSyncedLyricsEnabled = $0
+                if $0 {
+                  PlaybackController.shared.ensureWordSyncedLyricsForCurrentSong()
+                }
               }
-            }
+            )
           )
-        )
+          Text(
+            "Highlights each word as it's sung. Word timings are fetched when a song first plays, not during import — the providers rate-limit, so requesting a whole library at once gets throttled."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
 
         Toggle(
           "Copy Imported Music",

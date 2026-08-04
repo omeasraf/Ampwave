@@ -23,6 +23,7 @@ final class AppleMusicMetadataService {
     private var isAuthorized = false
     private var cache: [String: FetchedMetadata] = [:]
     private var artistArtworkCache: [String: URL?] = [:]
+    private var albumArtworkCache: [String: URL?] = [:]
     
     private init() {}
     
@@ -152,6 +153,53 @@ final class AppleMusicMetadataService {
             return url
         } catch {
             print("[DEBUG] AppleMusicMetadataService: Artist artwork search error: \(error)")
+            return nil
+        }
+    }
+
+    /// Apple Music's cover art for an album, if the catalog has it.
+    ///
+    /// Preferred over the Cover Art Archive: better coverage and consistently
+    /// higher resolution.
+    func fetchAlbumArtworkURL(
+        album: String,
+        artist: String?,
+        width: Int = 1000,
+        height: Int = 1000
+    ) async -> URL? {
+        let trimmedAlbum = album.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAlbum.isEmpty else { return nil }
+
+        let cacheKey = "\(artist?.lowercased() ?? "")|\(trimmedAlbum.lowercased())"
+        if let cached = albumArtworkCache[cacheKey] { return cached }
+
+        do {
+            let term = [artist, trimmedAlbum].compactMap { $0 }.joined(separator: " ")
+            var request = MusicCatalogSearchRequest(term: term, types: [MKALB.self])
+            request.limit = 10
+            let response = try await request.response()
+
+            let targetAlbum = normalizedArtistName(trimmedAlbum)
+            let targetArtist = artist.map { normalizedArtistName($0) }
+
+            // Title must match; artist only when we know it, so
+            // "Greatest Hits" doesn't pull a different act's cover.
+            let match = response.albums.first { candidate in
+                guard normalizedArtistName(candidate.title) == targetAlbum else { return false }
+                guard let targetArtist, !targetArtist.isEmpty else { return true }
+                return normalizedArtistName(candidate.artistName) == targetArtist
+            }
+
+            guard let match else {
+                print("[DEBUG] AppleMusicMetadataService: No album artwork match for \(term)")
+                return nil
+            }
+
+            let url = match.artwork?.url(width: width, height: height)
+            albumArtworkCache[cacheKey] = url
+            return url
+        } catch {
+            print("[DEBUG] AppleMusicMetadataService: Album artwork search error: \(error)")
             return nil
         }
     }

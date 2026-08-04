@@ -68,8 +68,17 @@ struct OpenTabView: View {
         systemImage: AppTab.library.icon,
         value: AppTab.library
       ) {
-        NavigationStack {
+        @Bindable var navigator = AppNavigator.shared
+        NavigationStack(path: $navigator.libraryPath) {
           LibraryView()
+            // Lets the player hand navigation over to this stack after it
+            // collapses, instead of pushing inside its own cover.
+            .navigationDestination(for: AppNavigator.Destination.self) { destination in
+              switch destination {
+              case .artist(let artist): ArtistView(artist: artist)
+              case .album(let album): AlbumView(album: album)
+              }
+            }
         }
         .background(themeManager.backgroundColor)
         .id(libraryResetID)
@@ -176,12 +185,19 @@ struct OpenTabView: View {
         print("[DEBUG] Service initialization complete")
       }
     }
+    // The player pushes onto the Library stack, so follow it there.
+    .onChange(of: AppNavigator.shared.libraryPath) { oldPath, newPath in
+      if newPath.count > oldPath.count { selectedTab = .library }
+    }
     .onReceive(NotificationCenter.default.publisher(for: .libraryDidReset)) { _ in
       // 1. Tear down every tab's NavigationStack and jump to Home.
       //    Incrementing the ID forces SwiftUI to recreate all tab content views,
       //    clearing navigation stacks and flushing any stale @State referencing old data.
       libraryResetID += 1
       selectedTab = .home
+      // The path holds references to deleted models; recreating the tab isn't
+      // enough because the navigator outlives it.
+      AppNavigator.shared.reset()
 
       // 2. Show onboarding after a short delay so the tab recreation animation
       //    completes first. Presenting it here (on the stable OpenTabView) is

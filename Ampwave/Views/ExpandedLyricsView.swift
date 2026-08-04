@@ -110,7 +110,7 @@ struct ExpandedLyricsView: View {
                 }
               }
             }
-          } else if let plainLyrics = playback.currentItem?.lyrics,
+          } else if let plainLyrics = playback.currentPlainLyrics,
             !plainLyrics.isEmpty
           {
             ScrollView(.vertical, showsIndicators: false) {
@@ -222,21 +222,13 @@ struct ExpandedLyricsView: View {
 extension String {
   /// Returns true if the string looks like an LRC lyrics file (has timestamp tags like [00:00.00]).
   fileprivate var isLRCFormatted: Bool {
-    let lrcPattern = #/^\[\d{2}:\d{2}[.:]\d{2,3}\]/#
-    return self.split(separator: "\n").prefix(10).contains { line in
-      line.trimmingCharacters(in: .whitespaces).firstMatch(of: lrcPattern) != nil
-    }
+    LRCParser.isLRCFormatted(self)
   }
 
-  /// Removes LRC tags from the string.
+  /// Removes LRC tags from the string — line timestamps, metadata tags and the
+  /// inline word timestamps used by word-synced lyrics.
   fileprivate var cleanedLRC: String {
-    let pattern = #"\[\d{2}:\d{2}[.:]\d{2,3}\]"#
-    return self.replacingOccurrences(
-      of: pattern,
-      with: "",
-      options: .regularExpression
-    )
-    .trimmingCharacters(in: .whitespacesAndNewlines)
+    LRCParser.plainText(from: self)
   }
 }
 
@@ -336,7 +328,7 @@ struct CompactLyricsView: View {
         }
         .onAppear { isVisible = true }
         .onDisappear { isVisible = false }
-      } else if let plainLyrics = playback.currentItem?.lyrics,
+      } else if let plainLyrics = playback.currentPlainLyrics,
         !plainLyrics.isEmpty
       {
         // Plain text fallback
