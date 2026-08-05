@@ -31,10 +31,91 @@ final class LyricsService {
     "https://lyrics-plus-backend.vercel.app",
   ]
 
+  /// Provider requests use a much shorter timeout than the 60s default.
+  /// Lyrics are fetched while a song is already playing and several providers
+  /// are tried in sequence, so one unresponsive host must not stall the chain
+  /// for minutes.
+  private let providerSession: URLSession = {
+    let configuration = URLSessionConfiguration.default
+    configuration.timeoutIntervalForRequest = 8
+    configuration.timeoutIntervalForResource = 15
+    // Failing fast is better than queuing: another provider may well answer.
+    configuration.waitsForConnectivity = false
+    return URLSession(configuration: configuration)
+  }()
+
+  /// Hosts that recently failed to connect, and when they may be tried again.
+  ///
+  /// Some of the community lyrics mirrors go away permanently (or redirect to
+  /// a host that no longer resolves). Without this, every song re-attempts a
+  /// dead endpoint and pays the timeout each time.
+  private var providerCooldowns: [String: Date] = [:]
+  private let providerCooldownInterval: TimeInterval = 10 * 60
+
   private init() {}
 
   func setModelContext(_ context: ModelContext) {
     self.modelContext = context
+  }
+
+  // MARK: - Provider transport
+
+  /// Performs a provider request, honouring the per-host cooldown.
+  ///
+  /// Returns nil when the host is cooling down or the request failed at the
+  /// connection level; throwing is reserved for nothing here because every
+  /// caller wants to simply move on to the next provider.
+  private func providerData(from url: URL) async -> (data: Data, response: HTTPURLResponse)? {
+    guard let host = url.host else { return nil }
+
+    if let retryAfter = providerCooldowns[host] {
+      if Date() < retryAfter { return nil }
+      providerCooldowns[host] = nil
+    }
+
+    do {
+      let (data, response) = try await providerSession.data(from: url)
+      guard let httpResponse = response as? HTTPURLResponse else { return nil }
+
+      // Some failures arrive as a perfectly valid HTTP response: 429 when a
+      // mirror rate-limits us, 402 when a hosted instance runs out of quota,
+      // 5xx when it's broken. Hammering those on every song is what gets us
+      // throttled harder, so they earn a cooldown too — unlike 404, which
+      // just means this provider doesn't know the song.
+      switch httpResponse.statusCode {
+      case 429:
+        // Honour Retry-After when the server tells us how long to wait.
+        let retryAfter =
+          (httpResponse.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init))
+          ?? providerCooldownInterval
+        providerCooldowns[host] = Date().addingTimeInterval(min(retryAfter, 60 * 60))
+        print("[DEBUG] LyricsService: \(host) rate-limited, backing off \(Int(retryAfter))s")
+        return nil
+      case 402, 500...599:
+        providerCooldowns[host] = Date().addingTimeInterval(providerCooldownInterval)
+        print("[DEBUG] LyricsService: \(host) returned \(httpResponse.statusCode), backing off")
+        return nil
+      default:
+        break
+      }
+
+      return (data, httpResponse)
+    } catch let error as URLError {
+      // Only connection-level failures earn a cooldown. A 404 is a normal
+      // "this provider doesn't have that song" and must not sideline the host.
+      switch error.code {
+      case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .timedOut,
+        .networkConnectionLost, .notConnectedToInternet, .secureConnectionFailed:
+        providerCooldowns[host] = Date().addingTimeInterval(providerCooldownInterval)
+        print("[DEBUG] LyricsService: \(host) unreachable (\(error.code.rawValue)), backing off")
+      default:
+        print("[DEBUG] LyricsService: \(host) request failed: \(error.code.rawValue)")
+      }
+      return nil
+    } catch {
+      print("[DEBUG] LyricsService: \(host) request failed: \(error)")
+      return nil
+    }
   }
 
   /// Collects every lyric representation available for `song` — word-synced,
@@ -289,28 +370,27 @@ final class LyricsService {
     }
 
     for queryURL in queryURLs {
-      do {
-        let (data, response) = try await URLSession.shared.data(from: queryURL)
-        guard (response as? HTTPURLResponse)?.statusCode != 404 else { continue }
-        guard
-          let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let results = object["results"] as? [[String: Any]],
-          let firstResult = results.first,
-          let lyricsURLString = firstResult["lyricsUrl"] as? String,
-          let lyricsURL = URL(string: lyricsURLString)
-        else { continue }
+      guard let result = await providerData(from: queryURL),
+        result.response.statusCode != 404
+      else { continue }
 
-        let (ttmlData, ttmlResponse) = try await URLSession.shared.data(from: lyricsURL)
-        guard (ttmlResponse as? HTTPURLResponse)?.statusCode != 404 else { continue }
-        guard let ttml = String(data: ttmlData, encoding: .utf8) else { continue }
+      guard
+        let object = try? JSONSerialization.jsonObject(with: result.data) as? [String: Any],
+        let results = object["results"] as? [[String: Any]],
+        let firstResult = results.first,
+        let lyricsURLString = firstResult["lyricsUrl"] as? String,
+        let lyricsURL = URL(string: lyricsURLString)
+      else { continue }
 
-        let lines = TTMLLyricParser.parse(ttml)
-        guard !lines.isEmpty else { continue }
+      guard let ttmlResult = await providerData(from: lyricsURL),
+        ttmlResult.response.statusCode != 404,
+        let ttml = String(data: ttmlResult.data, encoding: .utf8)
+      else { continue }
 
-        return SyncedLyric(songId: song.id, lines: lines, source: .biniLyrics, language: nil)
-      } catch {
-        print("Failed to fetch lyrics from BiniLyrics: \(error)")
-      }
+      let lines = TTMLLyricParser.parse(ttml)
+      guard !lines.isEmpty else { continue }
+
+      return SyncedLyric(songId: song.id, lines: lines, source: .biniLyrics, language: nil)
     }
 
     return nil
@@ -341,22 +421,17 @@ final class LyricsService {
       components.queryItems = queryItems
       guard let url = components.url else { continue }
 
-      do {
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-          continue
-        }
-
-        guard
-          let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let lines = LyricsPlusParser.parse(payload),
-          !lines.isEmpty
-        else { continue }
-
-        return SyncedLyric(songId: song.id, lines: lines, source: .lyricsPlus, language: nil)
-      } catch {
-        print("Failed to fetch lyrics from LyricsPlus: \(error)")
+      guard let result = await providerData(from: url), result.response.statusCode == 200 else {
+        continue
       }
+
+      guard
+        let payload = try? JSONSerialization.jsonObject(with: result.data) as? [String: Any],
+        let lines = LyricsPlusParser.parse(payload),
+        !lines.isEmpty
+      else { continue }
+
+      return SyncedLyric(songId: song.id, lines: lines, source: .lyricsPlus, language: nil)
     }
 
     return nil
@@ -380,37 +455,33 @@ final class LyricsService {
 
     guard let url = components.url else { return (nil, nil) }
 
-    do {
-      let (data, response) = try await URLSession.shared.data(from: url)
-
-      if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 404 {
-        return (nil, nil)
-      }
-
-      let lrclibResponse = try JSONDecoder().decode(LRCLIBResponse.self, from: data)
-
-      // The response carries both forms; keep whichever are present rather
-      // than treating them as alternatives.
-      let plain = lrclibResponse.plainLyrics.flatMap { $0.isEmpty ? nil : $0 }
-
-      if let syncedLyrics = lrclibResponse.syncedLyrics, !syncedLyrics.isEmpty {
-        let lines = LRCParser.parse(syncedLyrics)
-        if !lines.isEmpty {
-          let synced = SyncedLyric(
-            songId: song.id,
-            lines: lines,
-            source: .lrclib,
-            language: lrclibResponse.language
-          )
-          return (synced, plain)
-        }
-      }
-
-      return (nil, plain)
-    } catch {
-      print("Failed to fetch lyrics: \(error)")
+    guard let result = await providerData(from: url), result.response.statusCode != 404 else {
       return (nil, nil)
     }
+
+    guard let lrclibResponse = try? JSONDecoder().decode(LRCLIBResponse.self, from: result.data)
+    else {
+      return (nil, nil)
+    }
+
+    // The response carries both forms; keep whichever are present rather
+    // than treating them as alternatives.
+    let plain = lrclibResponse.plainLyrics.flatMap { $0.isEmpty ? nil : $0 }
+
+    if let syncedLyrics = lrclibResponse.syncedLyrics, !syncedLyrics.isEmpty {
+      let lines = LRCParser.parse(syncedLyrics)
+      if !lines.isEmpty {
+        let synced = SyncedLyric(
+          songId: song.id,
+          lines: lines,
+          source: .lrclib,
+          language: lrclibResponse.language
+        )
+        return (synced, plain)
+      }
+    }
+
+    return (nil, plain)
   }
 
   private func fetchFromLyricsOVH(song: LibrarySong) async -> String? {
@@ -422,24 +493,18 @@ final class LyricsService {
       return nil
     }
 
-    do {
-      let (data, response) = try await URLSession.shared.data(from: url)
-
-      if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 404 {
-        return nil
-      }
-
-      let lyricsOVHResponse = try JSONDecoder().decode(LyricsOVHResponse.self, from: data)
-
-      guard let lyricsText = lyricsOVHResponse.lyrics, !lyricsText.isEmpty else {
-        return nil
-      }
-
-      return lyricsText
-    } catch {
-      print("Failed to fetch lyrics from lyrics.ovh: \(error)")
+    guard let result = await providerData(from: url), result.response.statusCode != 404 else {
       return nil
     }
+
+    guard let lyricsOVHResponse = try? JSONDecoder().decode(LyricsOVHResponse.self, from: result.data),
+      let lyricsText = lyricsOVHResponse.lyrics,
+      !lyricsText.isEmpty
+    else {
+      return nil
+    }
+
+    return lyricsText
   }
 
   private struct LyricsOVHResponse: Codable {

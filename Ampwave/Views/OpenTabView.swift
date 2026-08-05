@@ -155,6 +155,8 @@ struct OpenTabView: View {
         self.lyricsService.setModelContext(self.modelContext)
         self.metadataService.setModelContext(self.modelContext)
         self.recommendationEngine.setModelContext(self.modelContext)
+        // Also drains any scrobbles queued while offline or before a restart.
+        LastFMScrobbler.shared.setModelContext(self.modelContext)
         #if os(iOS)
           WatchSyncService.shared.setModelContext(self.modelContext)
         #endif

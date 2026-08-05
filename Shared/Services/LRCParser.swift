@@ -195,7 +195,7 @@ enum LRCParser {
   /// word timestamps `toLRC` writes for word-synced lyrics (`<00:12.340>`).
   /// Missing that last form is why raw timings showed up in the plain-text
   /// view.
-  static func plainText(from content: String) -> String {
+  nonisolated static func plainText(from content: String) -> String {
     let patterns = [
       #"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]"#,  // line timestamps
       #"\[[a-zA-Z#]+:[^\]]*\]"#,  // metadata tags

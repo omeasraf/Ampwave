@@ -11,9 +11,6 @@ struct VocalSlider: View {
   @Binding var value: Float
   @State private var isDragging = false
 
-  // Apple Music Sing uses a range, but typically it doesn't go to zero
-  private let minVocal: Float = 0.05
-
   var body: some View {
     VStack(spacing: 12) {
       GeometryReader { geometry in
@@ -44,7 +41,7 @@ struct VocalSlider: View {
               isDragging = true
               let height = geometry.size.height
               let rawValue = 1.0 - Float(gesture.location.y / height)
-              value = min(max(rawValue, minVocal), 1.0)
+              value = min(max(rawValue, 0.0), 1.0)
             }
             .onEnded { _ in
               isDragging = false
@@ -52,6 +49,19 @@ struct VocalSlider: View {
         )
       }
       .frame(width: 44, height: 200)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Song vocals")
+      .accessibilityValue("\(Int((value * 100).rounded())) percent")
+      .accessibilityAdjustableAction { direction in
+        switch direction {
+        case .increment:
+          value = min(1, value + 0.05)
+        case .decrement:
+          value = max(0, value - 0.05)
+        @unknown default:
+          break
+        }
+      }
     }
     .padding(10)
     .background(.ultraThickMaterial)

@@ -287,6 +287,7 @@
 		B4E1644E2FB3CC5D00FB94CE /* Exceptions for "Ampwave" folder in "Ampwave Watch App" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Services/LastFM/PendingScrobble.swift,
 				Services/NetworkMonitor.swift,
 			);
 			target = B452661B2F8B190D007FDE40 /* Ampwave Watch App */;
@@ -916,7 +917,7 @@
 				CODE_SIGN_ENTITLEMENTS = Ampwave/Ampwave.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = S8YT4LAQ84;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readonly;
@@ -980,7 +981,7 @@
 				CODE_SIGN_ENTITLEMENTS = Ampwave/Ampwave.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = S8YT4LAQ84;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readonly;

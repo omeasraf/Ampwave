@@ -47,9 +47,12 @@ struct ExpandedLyricsView: View {
                   Color.clear
                     .frame(height: 200)
 
+                  // Keyed by position, not timestamp — two lines can share a
+                  // timestamp, and a duplicate ID makes SwiftUI's diffing
+                  // undefined. Matches the `.id(index)` used for scrolling.
                   ForEach(
                     Array(lyrics.lines.enumerated()),
-                    id: \.element.timestamp
+                    id: \.offset
                   ) { index, line in
                     LyricLineView(
                       line: line,
@@ -117,7 +120,13 @@ struct ExpandedLyricsView: View {
               VStack(spacing: 30) {
                 Color.clear.frame(height: 200)
 
-                ForEach(plainLyrics.cleanedLRC.components(separatedBy: "\n"), id: \.self) { line in
+                // Indexed, not `id: \.self` — lyrics repeat lines constantly
+                // (choruses), and duplicate IDs make SwiftUI's diffing
+                // undefined.
+                ForEach(
+                  Array(plainLyrics.cleanedLRC.components(separatedBy: "\n").enumerated()),
+                  id: \.offset
+                ) { _, line in
                   Text(line)
                     .font(.system(size: 24, weight: .medium))
                     .foregroundStyle(.white)
@@ -252,9 +261,11 @@ struct CompactLyricsView: View {
               Color.clear
                 .frame(height: 60)
 
+              // Keyed by position for the same reason as the expanded view:
+              // duplicate timestamps would collide.
               ForEach(
                 Array(lyrics.lines.enumerated()),
-                id: \.element.timestamp
+                id: \.offset
               ) { index, line in
                 // currentTime is NOT read here — only inside KaraokeLineView,
                 // for the current line. So this ForEach re-renders when

@@ -255,6 +255,10 @@ final class PlaylistManager {
       historyTracker.setLiked(false, for: song)
     }
 
+    // Every favourite path funnels through here, so this is the one place
+    // that has to mirror to Last.fm's loved tracks.
+    LastFMScrobbler.shared.setLoved(isLiked, song: song)
+
     save()
   }
 

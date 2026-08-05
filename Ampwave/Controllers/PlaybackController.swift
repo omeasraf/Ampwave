@@ -136,8 +136,9 @@ final class PlaybackController {
   var vocalLevel: Float {
     get { currentVocalLevel }
     set {
-      currentVocalLevel = newValue
-      VocalIsolator.shared.vocalLevel = newValue
+      let clamped = min(max(newValue, 0), 1)
+      currentVocalLevel = clamped
+      VocalIsolator.shared.vocalLevel = clamped
 
       if isVocalSliderVisible {
         resetVocalSliderTimer()
@@ -695,6 +696,12 @@ final class PlaybackController {
       Task { @MainActor in
         if item.status == .readyToPlay {
           print("[VALIDATION] PlaybackController: AVPlayerItem status .readyToPlay")
+          // Only the item actually playing may set the duration. Gapless
+          // preloads the *next* track while this one is still going, and it
+          // becomes ready mid-playback — without this guard it overwrote the
+          // current track's duration with the next one's, so the scrubber hit
+          // the end early and playback appeared to run past it.
+          guard self?.player?.currentItem === item else { return }
           let itemDuration = CMTimeGetSeconds(item.duration)
           if itemDuration.isFinite, itemDuration > 0 {
             self?.duration = itemDuration
@@ -881,8 +888,12 @@ final class PlaybackController {
 
   func seek(to time: TimeInterval) {
     guard time.isFinite, time >= 0 else { return }
-    self.currentTime = time
-    self.lyricsClock.currentTime = time
+    // Never target past the end: a stale or mis-read duration would otherwise
+    // strand playback beyond the last sample.
+    let target = duration > 0 ? min(time, duration) : time
+
+    self.currentTime = target
+    self.lyricsClock.currentTime = target
 
     if isScrubbing {
       debouncedUpdateLyric()
@@ -892,36 +903,39 @@ final class PlaybackController {
     isSeeking = true
     let token = UUID()
     seekToken = token
-    let cmTime = CMTime(seconds: time, preferredTimescale: 600)
+    let cmTime = CMTime(seconds: target, preferredTimescale: 600)
 
-    // AVPlayer's seek completion handler can be dropped entirely if the
-    // player item gets swapped out mid-seek (gapless auto-advance /
-    // crossfade). Without a fallback, `isSeeking` would stay true forever,
-    // which permanently freezes lyric sync: both periodic time observers
-    // refuse to run while it's set, and the karaoke clock keeps
-    // extrapolating from its last (now stale) anchor with nothing to ever
-    // re-anchor it.
+    // Watchdog for a seek completion that never arrives — AVPlayer drops it
+    // when the item is swapped mid-seek (gapless hand-off, crossfade), and
+    // `isSeeking` staying true would freeze lyric sync permanently: both time
+    // observers refuse to run while it's set.
+    //
+    // Deliberately generous, and deliberately does NOT read the player's
+    // clock. Sample-accurate seeking on lossless formats regularly takes over
+    // a second, so a short fuse fired mid-seek and wrote back the player's
+    // *pre-seek* position — which snapped the progress bar backwards and then
+    // let the time observer hold it there.
     Task { @MainActor [weak self] in
-      try? await Task.sleep(for: .seconds(1.5))
+      try? await Task.sleep(for: .seconds(5))
       guard let self, self.seekToken == token, self.isSeeking else { return }
+      print("[DEBUG] PlaybackController: seek watchdog fired at \(Int(target))s")
       self.isSeeking = false
-      let playerSeconds = self.player?.currentTime().seconds
-      let resolvedTime = (playerSeconds?.isFinite == true) ? playerSeconds! : time
-      self.currentTime = resolvedTime
-      self.lyricsClock.currentTime = resolvedTime
-      self.updateCurrentLyric(at: resolvedTime)
+      self.currentTime = target
+      self.lyricsClock.currentTime = target
+      self.updateCurrentLyric(at: target)
       self.updateNowPlaying()
     }
 
     player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) {
       [weak self] finished in
       Task { @MainActor in
+        // A newer seek has superseded this one; its own handler owns the state.
         guard let self, self.seekToken == token else { return }
         self.isSeeking = false
         if finished {
-          self.currentTime = time
-          self.lyricsClock.currentTime = time
-          self.updateCurrentLyric(at: time)
+          self.currentTime = target
+          self.lyricsClock.currentTime = target
+          self.updateCurrentLyric(at: target)
           self.updateNowPlaying()
           self.saveState()
         }
@@ -1689,6 +1703,18 @@ final class PlaybackController {
       MainActor.assumeIsolated {
         guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
         self.currentTime = time.seconds
+
+        // Keep duration tied to whatever is actually playing. A gapless
+        // hand-off reuses an item that became ready while it was still
+        // queued, so its status observer never fires again — and stored tag
+        // durations are unreliable on some formats.
+        if let itemDuration = self.player?.currentItem?.duration.seconds,
+          itemDuration.isFinite, itemDuration > 0,
+          abs(itemDuration - self.duration) > 0.5
+        {
+          self.duration = itemDuration
+          self.updateNowPlaying()
+        }
 
         // Crossfade tick
         if let prefs = self.preferences, prefs.crossfadeEnabled,

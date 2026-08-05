@@ -85,6 +85,7 @@ struct SettingsView: View {
 
       themingSection.listRowBackground(themeManager.cardBackgroundColor)
       layoutSection.listRowBackground(themeManager.cardBackgroundColor)
+      scrobblingSection.listRowBackground(themeManager.cardBackgroundColor)
       onlineFeaturesSection.listRowBackground(themeManager.cardBackgroundColor)
       webDAVSection.listRowBackground(themeManager.cardBackgroundColor)
       dataManagementSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -569,6 +570,39 @@ struct SettingsView: View {
       Text(
         "Turn off 'Copy Imported Music' to keep files in their original location; the app will reference them instead."
       )
+    }
+  }
+
+  /// Account-level scrobbling, kept apart from the general online-features
+  /// toggles since it owns a sign-in and a profile.
+  private var scrobblingSection: some View {
+    Section {
+      NavigationLink {
+        LastFMSettingsView()
+      } label: {
+        HStack {
+          Label("Last.fm", systemImage: "waveform.badge.magnifyingglass")
+          Spacer()
+          Text(lastFMStatusText)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+      }
+    } header: {
+      Text("Scrobbling")
+    }
+  }
+
+  private var lastFMStatusText: String {
+    let scrobbler = LastFMScrobbler.shared
+    guard scrobbler.isConfigured else { return "Unavailable" }
+    switch scrobbler.state {
+    case .signedIn(let username):
+      return scrobbler.isScrobblingEnabled ? username : "Paused"
+    case .awaitingAuthorization:
+      return "Signing in…"
+    case .signedOut:
+      return "Not signed in"
     }
   }
 

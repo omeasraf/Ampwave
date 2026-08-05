@@ -58,6 +58,7 @@ struct AmpwaveApp: App {
       AppSettings.self,
       UserPreferences.self,
       PlaybackState.self,
+      PendingScrobble.self,
     ])
 
     // Configure storage in App Group for sharing with extensions

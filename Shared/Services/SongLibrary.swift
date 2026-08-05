@@ -36,6 +36,15 @@ import SwiftData
     /// song order) don't linear-scan `songs` once per id.
     private var songIndex: [UUID: LibrarySong] = [:]
 
+    /// song id → resolved audio-file URL.
+    ///
+    /// Resolving a security-scoped bookmark is expensive, and worse when it
+    /// fails and has to fall back to the stored path. The gapless hand-off KVO
+    /// asks for the URL of every song in the queue on each track change, which
+    /// made switching songs take seconds on referenced (non-copied) libraries.
+    @ObservationIgnored
+    private var resolvedURLCache: [UUID: URL] = [:]
+
     func song(id: UUID) -> LibrarySong? { songIndex[id] }
 
     /// Resolves ids to songs in the order given, skipping any that are gone.
@@ -488,6 +497,8 @@ import SwiftData
       print("[DEBUG] SongLibrary.loadSongs: Error - No modelContext")
       return
     }
+    // Paths may have changed since the last load.
+    invalidateResolvedURLCache()
 
     do {
       let descriptor = FetchDescriptor<LibrarySong>(
@@ -1497,8 +1508,13 @@ import SwiftData
       }
     }
 
-    // 2. Synced Lyrics
-    // Fetch if no synced lyrics AND we haven't already tried.
+    // 2. Lyrics
+    //
+    // Plain lyrics are fetched at import time on purpose: the fuzzy search
+    // index is built from them, so a library imported without lyrics can't be
+    // searched by lyric text. Only the *word-synced* providers are deferred to
+    // first play (they rate-limit); LRCLIB still supplies line-synced and
+    // plain text here.
     let syncedLyricLines = LRCParser.parse(song.lyrics ?? "")
     let hasSyncedLyrics = !syncedLyricLines.isEmpty
     if preferences.autoFetchLyrics && !hasSyncedLyrics && !song.lyricsCheckAttempted
@@ -2127,6 +2143,23 @@ import SwiftData
   }
 
   func getFileURL(for song: LibrarySong) -> URL {
+    if let cached = resolvedURLCache[song.id] { return cached }
+    let url = resolveFileURL(for: song)
+    resolvedURLCache[song.id] = url
+    return url
+  }
+
+  /// Drops cached URL resolutions. Call whenever a song's stored path or
+  /// bookmark changes, or the library is rescanned.
+  func invalidateResolvedURLCache(for songId: UUID? = nil) {
+    if let songId {
+      resolvedURLCache[songId] = nil
+    } else {
+      resolvedURLCache.removeAll()
+    }
+  }
+
+  private func resolveFileURL(for song: LibrarySong) -> URL {
     // A bookmark that still *resolves* isn't necessarily usable — its sandbox
     // extension can be stale (the "sandbox_extension_consume failed: 22" case),
     // which used to shadow a perfectly good stored path and make the track
@@ -2175,6 +2208,7 @@ import SwiftData
     let relativePath = PathManager.relativePath(from: url.standardizedFileURL.path)
     guard song.filePath != relativePath else { return false }
     song.filePath = relativePath
+    invalidateResolvedURLCache(for: song.id)
     return true
   }
 
@@ -2260,6 +2294,7 @@ import SwiftData
     songs   = []
     albums  = []
     artists = []
+    invalidateResolvedURLCache()
     isLoaded  = false
     isIndexing = false          // let indexOnStartup run again on next launch
     pendingMetadataFetches = 0

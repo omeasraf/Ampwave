@@ -107,7 +107,11 @@ final class LibrarySong: Identifiable, Hashable {
   var processingChain: String?
 
   // MARK: - Search Indexing
-  var searchIndex: String? = ""
+  /// Bumped whenever searchable text changes, so the in-memory search index
+  /// can tell which entries need rebuilding. Replaces a persisted copy of the
+  /// normalized text, which cost a multi-kilobyte write per song per update
+  /// and was only ever read to be re-normalized anyway.
+  var searchContentVersion: Int = 0
 
   // MARK: - Fetching status
   var metadataCheckAttempted: Bool = false
@@ -233,41 +237,15 @@ final class LibrarySong: Identifiable, Hashable {
 
   // MARK: - Search Indexing
 
+  /// Marks the song's searchable text as changed.
+  ///
+  /// The normalized text itself is no longer persisted — `SearchManager` keeps
+  /// it in memory and rebuilds only the entries whose fingerprint changed. This
+  /// bumps that fingerprint, which is all a persisted column was ever really
+  /// providing, without rewriting a multi-kilobyte string to SwiftData on
+  /// every metadata or lyrics update.
   func updateSearchIndex() {
-    let components = [
-      title,
-      artist,
-      album ?? "",
-      albumArtist ?? "",
-      genre ?? "",
-      cleanLyrics(),
-    ]
-
-    self.searchIndex =
-      components
-      .filter { !$0.isEmpty }
-      .joined(separator: " ")
-      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-      .replacingOccurrences(of: "[''\"\"“”]", with: "", options: .regularExpression)
-      .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)
-      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .lowercased()
-  }
-
-  private func cleanLyrics() -> String {
-    guard let lyrics = lyrics, !lyrics.isEmpty else { return "" }
-
-    // Remove LRC timestamps like [00:12.34] or [00:12:34]
-    let timestampPattern = #"\[\d{2}:\d{2}[\.:]\d{2,3}\]"#
-    let cleaned = lyrics.replacingOccurrences(
-      of: timestampPattern,
-      with: "",
-      options: .regularExpression
-    )
-
-    // Limit indexing to first 5000 characters to allow better lyric searching for long songs
-    return String(cleaned.prefix(5000))
+    searchContentVersion &+= 1
   }
 
   // MARK: - Album Track Ordering

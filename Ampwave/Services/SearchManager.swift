@@ -17,6 +17,8 @@ final class SearchManager {
   private(set) var isIndexing = false
   private var currentIndex: SearchLibraryIndex?
   private var lastLibrarySignature: String = ""
+  /// Normalized per-song text carried across rebuilds; see `getOrBuildIndex`.
+  private var normalizedTextCache: [UUID: NormalizedSongText] = [:]
 
   private init() {}
 
@@ -29,10 +31,12 @@ final class SearchManager {
     // Ensure index is ready
     let index = await getOrBuildIndex()
 
-    // Perform search on a background thread
-    return await Task.detached(priority: .userInitiated) {
-      return index.buildResults(for: trimmed, filter: filter)
-    }.value
+    // Scoring runs here rather than on a detached task: it walks precomputed
+    // tokens and reads `LibrarySong` properties for the final ranking, and
+    // PersistentModels aren't Sendable. The costly half — normalizing and
+    // tokenizing every song's lyrics — already happens off the main actor in
+    // `getOrBuildIndex`, and is reused across rebuilds.
+    return index.buildResults(for: trimmed, filter: filter)
   }
 
   private func getOrBuildIndex() async -> SearchLibraryIndex {
@@ -45,20 +49,48 @@ final class SearchManager {
     isIndexing = true
     defer { isIndexing = false }
 
-    let songs = SongLibrary.shared.songs
     let albums = SongLibrary.shared.albums
     let artists = SongLibrary.shared.artists
     let playlists = PlaylistManager.shared.playlists
+    let songs = SongLibrary.shared.songs
 
-    // Indexing is heavy, do it off-main
-    let newIndex = await Task.detached(priority: .utility) {
-      return SearchLibraryIndex(
-        songs: songs,
-        albums: albums,
-        artists: artists,
-        playlists: playlists
-      )
+    // Snapshot the text on the main actor. `LibrarySong` is a SwiftData
+    // PersistentModel and is not Sendable, so reading its properties from a
+    // detached task is a genuine data race — only these plain value copies
+    // cross over.
+    let snapshots = songs.map { SongTextSnapshot(song: $0) }
+    let reusable = normalizedTextCache
+
+    // Normalizing and tokenizing lyrics dominates indexing cost, and a library
+    // change usually touches a single song — so entries whose fingerprint is
+    // unchanged are carried over untouched rather than recomputed.
+    let normalized = await Task.detached(priority: .utility) {
+      var result: [UUID: NormalizedSongText] = [:]
+      result.reserveCapacity(snapshots.count)
+      for snapshot in snapshots {
+        if let cached = reusable[snapshot.id], cached.fingerprint == snapshot.fingerprint {
+          result[snapshot.id] = cached
+        } else {
+          result[snapshot.id] = NormalizedSongText(snapshot: snapshot)
+        }
+      }
+      return result
     }.value
+
+    normalizedTextCache = normalized
+
+    // Re-attach model references on the main actor; this is just struct
+    // assembly, no string work.
+    let entries = songs.compactMap { song in
+      normalized[song.id].map { SearchLibraryIndex.SongEntry(song: song, text: $0) }
+    }
+
+    let newIndex = SearchLibraryIndex(
+      songEntries: entries,
+      albums: albums,
+      artists: artists,
+      playlists: playlists
+    )
 
     currentIndex = newIndex
     lastLibrarySignature = signature
@@ -93,14 +125,96 @@ private struct Ranked<Item> {
   let score: Double
 }
 
+/// Identity of a song's searchable text. Equal fingerprints normalize to the
+/// same result, so a cached entry can be reused instead of recomputed.
+nonisolated struct SongEntryFingerprint: Equatable, Sendable {
+  let contentVersion: Int
+  let title: String
+  let artist: String
+  let album: String
+  let genre: String
+  let lyricsLength: Int
+}
+
+/// Plain text copied off a `LibrarySong` on the main actor.
+///
+/// PersistentModels aren't Sendable, so this is what travels to the background
+/// normalizer — never the model itself.
+nonisolated struct SongTextSnapshot: Sendable {
+  let id: UUID
+  let fingerprint: SongEntryFingerprint
+  let title: String
+  let artist: String
+  let album: String
+  let genre: String
+  let lyrics: String
+
+  @MainActor
+  init(song: LibrarySong) {
+    self.id = song.id
+    self.title = song.title
+    self.artist = song.artist
+    self.album = song.album ?? ""
+    self.genre = song.genre ?? ""
+    self.lyrics = song.lyrics ?? ""
+    self.fingerprint = SongEntryFingerprint(
+      contentVersion: song.searchContentVersion,
+      title: title,
+      artist: artist,
+      album: album,
+      genre: genre,
+      lyricsLength: lyrics.count
+    )
+  }
+}
+
+/// The expensive part of indexing: normalized strings and their tokens.
+nonisolated struct NormalizedSongText: Sendable {
+  let fingerprint: SongEntryFingerprint
+  let title: String
+  let artist: String
+  let album: String
+  let genre: String
+  let lyrics: String
+  let titleTokens: [String]
+  let artistTokens: [String]
+  let albumTokens: [String]
+  let genreTokens: [String]
+  let lyricsTokens: [String]
+
+  init(snapshot: SongTextSnapshot) {
+    self.fingerprint = snapshot.fingerprint
+    self.title = SearchFuzzyEngine.normalize(snapshot.title)
+    self.artist = SearchFuzzyEngine.normalize(snapshot.artist)
+    self.album = SearchFuzzyEngine.normalize(snapshot.album)
+    self.genre = SearchFuzzyEngine.normalize(snapshot.genre)
+
+    // Timestamps are stripped so LRC markers don't enter the index as stray
+    // digits, and the text is capped so a long track can't dominate indexing.
+    let plain = LRCParser.plainText(from: snapshot.lyrics)
+    self.lyrics = SearchFuzzyEngine.normalize(String(plain.prefix(5000)))
+
+    self.titleTokens = SearchFuzzyEngine.tokens(from: title)
+    self.artistTokens = SearchFuzzyEngine.tokens(from: artist)
+    self.albumTokens = SearchFuzzyEngine.tokens(from: album)
+    self.genreTokens = SearchFuzzyEngine.tokens(from: genre)
+    self.lyricsTokens = SearchFuzzyEngine.tokens(from: lyrics)
+  }
+}
+
 private struct SearchLibraryIndex {
   let songs: [SongEntry]
   let albums: [AlbumEntry]
   let artists: [ArtistEntry]
   let playlists: [PlaylistEntry]
 
-  init(songs: [LibrarySong], albums: [Album], artists: [Artist], playlists: [Playlist]) {
-    self.songs = songs.map { SongEntry(song: $0) }
+  init(
+    songEntries: [SongEntry],
+    albums: [Album],
+    artists: [Artist],
+    playlists: [Playlist]
+  ) {
+    self.songs = songEntries
     self.albums = albums.map { AlbumEntry(album: $0) }
     self.artists = artists.map { ArtistEntry(artist: $0) }
     self.playlists = playlists.map { PlaylistEntry(playlist: $0) }
@@ -259,6 +373,7 @@ private struct SearchLibraryIndex {
 
   struct SongEntry {
     let song: LibrarySong
+    let fingerprint: SongEntryFingerprint
     let normalizedTitle: String
     let normalizedArtist: String
     let normalizedAlbum: String
@@ -270,30 +385,25 @@ private struct SearchLibraryIndex {
     let genreTokens: [String]
     let lyricsTokens: [String]
 
-    init(song: LibrarySong) {
+    /// Pairs a model reference with text normalized off the main actor.
+    ///
+    /// Lyrics come from the song's own text — an earlier version fed in the
+    /// combined `searchIndex` blob (title + artist + album + genre + lyrics),
+    /// so a plain title match also scored as a full-strength lyrics hit worth
+    /// up to 4.5 points and badly skewed ranking.
+    init(song: LibrarySong, text: NormalizedSongText) {
       self.song = song
-
-      // Use pre-calculated search index if available, otherwise fallback to live normalization
-      if let index = song.searchIndex, !index.isEmpty {
-        // We still need individual fields for weighted scoring
-        self.normalizedTitle = SearchFuzzyEngine.normalize(song.title)
-        self.normalizedArtist = SearchFuzzyEngine.normalize(song.artist)
-        self.normalizedAlbum = SearchFuzzyEngine.normalize(song.album ?? "")
-        self.normalizedGenre = SearchFuzzyEngine.normalize(song.genre ?? "")
-        self.normalizedLyrics = index  // The index already contains normalized lyrics and metadata
-      } else {
-        self.normalizedTitle = SearchFuzzyEngine.normalize(song.title)
-        self.normalizedArtist = SearchFuzzyEngine.normalize(song.artist)
-        self.normalizedAlbum = SearchFuzzyEngine.normalize(song.album ?? "")
-        self.normalizedGenre = SearchFuzzyEngine.normalize(song.genre ?? "")
-        self.normalizedLyrics = SearchFuzzyEngine.normalize(song.lyrics ?? "")
-      }
-
-      self.titleTokens = SearchFuzzyEngine.tokens(from: normalizedTitle)
-      self.artistTokens = SearchFuzzyEngine.tokens(from: normalizedArtist)
-      self.albumTokens = SearchFuzzyEngine.tokens(from: normalizedAlbum)
-      self.genreTokens = SearchFuzzyEngine.tokens(from: normalizedGenre)
-      self.lyricsTokens = SearchFuzzyEngine.tokens(from: normalizedLyrics)
+      self.fingerprint = text.fingerprint
+      self.normalizedTitle = text.title
+      self.normalizedArtist = text.artist
+      self.normalizedAlbum = text.album
+      self.normalizedGenre = text.genre
+      self.normalizedLyrics = text.lyrics
+      self.titleTokens = text.titleTokens
+      self.artistTokens = text.artistTokens
+      self.albumTokens = text.albumTokens
+      self.genreTokens = text.genreTokens
+      self.lyricsTokens = text.lyricsTokens
     }
   }
 
@@ -338,7 +448,10 @@ private struct SearchLibraryIndex {
   }
 }
 
-private enum SearchFuzzyEngine {
+/// Pure string scoring — no state, so it runs wherever the caller is. Marked
+/// `nonisolated` because the project defaults to MainActor isolation and the
+/// index is normalized on a background task.
+private nonisolated enum SearchFuzzyEngine {
   static func normalize(_ value: String) -> String {
     value
       .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
