@@ -4,6 +4,8 @@
 
 Ampwave is a beautiful, modern music player for iOS that puts your music library first. Built with SwiftUI and designed with iOS 26's Liquid Glass aesthetic in mind, Ampwave delivers a premium listening experience while keeping your data private and local.
 
+![Marketing image](https://raw.githubusercontent.com/omeasraf/Ampwave/refs/heads/main/Marketing/AppStore%20Snapshot.png)
+
 ## Features
 
 - **Beautiful iOS 26 Design** — Liquid Glass floating tab bar and modern UI components
