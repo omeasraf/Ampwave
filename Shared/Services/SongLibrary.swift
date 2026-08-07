@@ -711,7 +711,12 @@ extension Notification.Name {
     // Batch delete
     if !deletedSongs.isEmpty {
       print("[DEBUG] indexOnStartup: Deleting \(deletedSongs.count) missing songs")
-      removeSongsFromMemory(ids: Set(deletedSongs.map(\.id)))
+      let deletedIDs = Set(deletedSongs.map(\.id))
+      removeSongsFromMemory(ids: deletedIDs)
+      // Same cleanup the explicit delete paths do: evicts these from playback
+      // before SwiftData invalidates them, and drops their history/stats/lyrics
+      // rows, which are keyed by bare UUID and so never cascade.
+      purgeSongReferences(ids: deletedIDs)
       for song in deletedSongs {
         modelContext.delete(song)
       }
@@ -2395,13 +2400,24 @@ extension Notification.Name {
       albums.removeAll { $0.id == album.id }
     }
 
-    if let artistName,
+    // Artist rows are keyed by the *parsed primary* name (see
+    // getOrCreateArtist), so "A & B" is filed under "A". Matching on the raw
+    // field missed those entirely, which left the artist behind after its last
+    // song was deleted.
+    let primaryName = artistName.flatMap {
+      ArtistParser.parseArtists(from: $0).first ?? $0
+    }
+
+    if let primaryName,
       let artist = artists.first(where: {
-        $0.name.caseInsensitiveCompare(artistName) == .orderedSame
+        $0.name.caseInsensitiveCompare(primaryName) == .orderedSame
       })
     {
-      let remaining = songs.filter {
-        ($0.albumArtist ?? $0.artist).caseInsensitiveCompare(artist.name) == .orderedSame
+      let remaining = songs.filter { song in
+        let songPrimary =
+          ArtistParser.parseArtists(from: song.albumArtist ?? song.artist).first
+          ?? (song.albumArtist ?? song.artist)
+        return songPrimary.caseInsensitiveCompare(artist.name) == .orderedSame
       }
       if remaining.isEmpty {
         modelContext.delete(artist)

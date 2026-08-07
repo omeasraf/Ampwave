@@ -88,3 +88,20 @@ connection.
   from musical structure, rhythm, energy, and instrument activity.
 - [ ] **Listening Safety** — Estimate exposure, offer an optional safe-volume
   ceiling, and prevent unexpected loudness jumps.
+
+## Interface and Customization
+
+- [ ] **Customizable Library Tabs** — Let listeners choose which sections appear
+  in the Library picker and in what order, so a library browsed by album and
+  artist isn't fronted by sections its owner never opens.
+  - [ ] Persist the chosen set and order.
+  - [ ] Provide an edit sheet with reordering and per-section visibility.
+  - [ ] Keep at least one section enabled, and fall back gracefully when the
+    remembered section has since been hidden.
+  - [ ] Decide whether the root tab bar (Home, Library, Playlists, Settings,
+    Search) should be customizable too.
+- [ ] **Consistent Artist Artwork Shape** — Show artists as circles everywhere
+  and albums as squares, so the two are distinguishable at a glance.
+  - [ ] Audit every surface that renders an artist image — search results,
+    context menus, Home shelves, and CarPlay — since the Library grid is
+    already circular but other surfaces may not be.

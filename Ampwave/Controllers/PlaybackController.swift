@@ -361,6 +361,15 @@ final class PlaybackController {
       object: nil
     )
 
+    // Must run *before* the model is deleted, so this uses the selector form
+    // (synchronous on the posting thread) rather than a block on a queue.
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleSongsDeleted(_:)),
+      name: .songsWereDeleted,
+      object: nil
+    )
+
     // Lyrics can be fetched or edited from outside playback (the song editor,
     // a background pass). Without this the player keeps whatever it loaded at
     // track start and the views fall back to showing raw text.
@@ -370,6 +379,65 @@ final class PlaybackController {
       name: .lyricsDidUpdate,
       object: nil
     )
+  }
+
+  @objc private func handleSongsDeleted(_ notification: Notification) {
+    guard let ids = notification.object as? Set<UUID> else { return }
+    MainActor.assumeIsolated { evictDeletedSongs(ids) }
+  }
+
+  /// Drops deleted songs from playback before SwiftData invalidates them.
+  ///
+  /// Holding a deleted `LibrarySong` in `currentItem` or the queue crashes the
+  /// moment anything reads a property off it — which is instant, because the
+  /// now-playing UI observes it. When the deleted song is the one playing, we
+  /// skip to the next survivor rather than just stopping.
+  private func evictDeletedSongs(_ ids: Set<UUID>) {
+    guard !ids.isEmpty else { return }
+
+    let currentWasDeleted = currentItem.map { ids.contains($0.id) } ?? false
+
+    // Pick the successor while the queue still has its original ordering.
+    var successor: LibrarySong?
+    if currentWasDeleted, currentQueueIndex < queue.count {
+      successor = queue[(currentQueueIndex + 1)...].first { !ids.contains($0.id) }
+      if successor == nil {
+        successor = queue[..<currentQueueIndex].last { !ids.contains($0.id) }
+      }
+    }
+
+    queue.removeAll { ids.contains($0.id) }
+    originalQueue.removeAll { ids.contains($0.id) }
+
+    guard currentWasDeleted else {
+      // Keep the index pointing at the same song after the queue shrank.
+      if let currentItem, let index = queue.firstIndex(where: { $0.id == currentItem.id }) {
+        currentQueueIndex = index
+      }
+      return
+    }
+
+    // Release every reference to the dying model first. `songEnded` would try
+    // to write a play for it, so the history tracker gets the discard path.
+    historyTracker.discardCurrentSong()
+    currentItem = nil
+    currentLyrics = nil
+    currentLyricIndex = nil
+
+    if let successor, let index = queue.firstIndex(where: { $0.id == successor.id }) {
+      currentQueueIndex = index
+      play(successor, from: currentSource, playlistId: currentPlaylistId)
+    } else {
+      // Nothing left to play.
+      cleanupPlayer()
+      isPlaying = false
+      currentTime = 0
+      duration = 0
+      currentQueueIndex = 0
+      lyricsClock.currentTime = 0
+      updateNowPlaying()
+      saveState()
+    }
   }
 
   @objc private func handleLyricsDidUpdate(_ notification: Notification) {
