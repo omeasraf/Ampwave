@@ -23,7 +23,16 @@ final class ListeningHistoryTracker {
   /// every time the user pauses.
   private var currentTrackStartedAt: Date?
 
-  private init() {}
+  private init() {
+    // Deleting a song removes its statistics rows behind this cache's back.
+    NotificationCenter.default.addObserver(
+      forName: .songsWereDeleted,
+      object: nil,
+      queue: .main
+    ) { _ in
+      MainActor.assumeIsolated { ListeningHistoryTracker.shared.invalidateStatisticsIndex() }
+    }
+  }
 
   func setModelContext(_ context: ModelContext) {
     self.modelContext = context
@@ -110,6 +119,19 @@ final class ListeningHistoryTracker {
     currentPlayDuration = 0
     currentSourceRaw = nil
     currentPlaylistId = nil
+  }
+
+  /// Drops model references without writing a play. Used before the entire
+  /// library is deleted, when retaining the current song would leave a
+  /// detached SwiftData model in this long-lived singleton.
+  func discardCurrentSong() {
+    currentSong = nil
+    currentPlayStartTime = nil
+    currentTrackStartedAt = nil
+    currentPlayDuration = 0
+    currentSourceRaw = nil
+    currentPlaylistId = nil
+    LastFMScrobbler.shared.cancelCurrentTracking()
   }
 
   private func scrobblePlay(_ song: LibrarySong, playedDuration: TimeInterval) {

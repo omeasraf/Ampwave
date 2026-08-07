@@ -66,6 +66,7 @@ final class LyricsService {
   /// connection level; throwing is reserved for nothing here because every
   /// caller wants to simply move on to the next provider.
   private func providerData(from url: URL) async -> (data: Data, response: HTTPURLResponse)? {
+    guard UserPreferences.networkAllowed else { return nil }
     guard let host = url.host else { return nil }
 
     if let retryAfter = providerCooldowns[host] {

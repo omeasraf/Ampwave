@@ -10,6 +10,19 @@ import MusicKit
 import Observation
 import CoreGraphics
 
+struct AppleMusicArtistProfile {
+    let id: String
+    let biography: String?
+    let genres: [String]
+    let artworkURL: URL?
+}
+
+struct AppleMusicAlbumProfile {
+    let id: String
+    let description: String?
+    let artworkURL: URL?
+}
+
 @MainActor
 @Observable
 final class AppleMusicMetadataService {
@@ -25,6 +38,17 @@ final class AppleMusicMetadataService {
     private var artistArtworkCache: [String: URL?] = [:]
     private var albumArtworkCache: [String: URL?] = [:]
     
+    /// MusicKit does its own networking, so it never passes through
+    /// `MetadataService.performRequest` where Offline Mode is enforced for
+    /// every other provider. Each public entry point checks here instead.
+    private var networkAllowed: Bool {
+        guard UserPreferences.networkAllowed else {
+            print("[DEBUG] AppleMusicMetadataService: Offline Mode on — skipping request")
+            return false
+        }
+        return true
+    }
+
     private init() {}
     
     /// Requests authorization for MusicKit if needed.
@@ -36,6 +60,7 @@ final class AppleMusicMetadataService {
     
     /// Searches Apple Music for a song and returns the best match with full metadata.
     func fetchMetadata(title: String, artist: String, duration: TimeInterval? = nil) async -> FetchedMetadata? {
+        guard networkAllowed else { return nil }
         let cacheKey = "\(artist.lowercased())|\(title.lowercased())"
         if let cached = cache[cacheKey] {
             return cached
@@ -78,26 +103,40 @@ final class AppleMusicMetadataService {
             
             var albumDescription: String?
             var artistBio: String?
+            var albumAppleMusicId: String?
+            var artistAppleMusicId: String?
             
             if let album = song.albums?.first {
                 print("[DEBUG] AppleMusicMetadataService: Found album via relationship: \(album.title) (ID: \(album.id.rawValue))")
+                albumAppleMusicId = album.id.rawValue
                 albumDescription = try? await fetchAlbumEditorialNotes(album)
             } else {
                 print("[DEBUG] AppleMusicMetadataService: No album relationship found, attempting fallback search for \(song.albumTitle ?? "unknown album")")
                 if let albumTitle = song.albumTitle {
-                    albumDescription = try? await fetchAlbumEditorialNotesByTitle(albumTitle)
+                    let profile = await fetchAlbumProfile(album: albumTitle, artist: song.artistName)
+                    albumAppleMusicId = profile?.id
+                    albumDescription = profile?.description
                 }
             }
             
             if let artist = song.artists?.first {
                 print("[DEBUG] AppleMusicMetadataService: Found primary artist via relationship: \(artist.name) (ID: \(artist.id.rawValue))")
+                artistAppleMusicId = artist.id.rawValue
                 artistBio = try? await fetchArtistEditorialNotes(artist)
             } else {
                 print("[DEBUG] AppleMusicMetadataService: No artist relationship found, attempting fallback search for \(song.artistName)")
-                artistBio = try? await fetchArtistEditorialNotesByName(song.artistName)
+                let profile = await fetchArtistProfile(name: song.artistName)
+                artistAppleMusicId = profile?.id
+                artistBio = profile?.biography
             }
             
-            let metadata = mapSongToMetadata(song, albumDescription: albumDescription, artistBio: artistBio)
+            let metadata = mapSongToMetadata(
+                song,
+                albumDescription: albumDescription,
+                artistBio: artistBio,
+                albumAppleMusicId: albumAppleMusicId,
+                artistAppleMusicId: artistAppleMusicId
+            )
             cache[cacheKey] = metadata
             return metadata
         } catch {
@@ -107,6 +146,7 @@ final class AppleMusicMetadataService {
     }
 
     private func fetchAlbumEditorialNotes(_ album: MKALB) async throws -> String? {
+        guard networkAllowed else { return nil }
         if album.id.rawValue.isEmpty {
             return try await fetchAlbumEditorialNotesByTitle(album.title)
         }
@@ -118,6 +158,7 @@ final class AppleMusicMetadataService {
     }
 
     private func fetchAlbumEditorialNotesByTitle(_ title: String) async throws -> String? {
+        guard networkAllowed else { return nil }
         print("[DEBUG] AppleMusicMetadataService: Searching album editorial notes by title: \(title)")
         var searchRequest = MusicCatalogSearchRequest(term: title, types: [MKALB.self])
         searchRequest.limit = 1
@@ -131,6 +172,7 @@ final class AppleMusicMetadataService {
     /// Artist metadata otherwise comes from MusicBrainz/TheAudioDB, which have
     /// patchy image coverage — Apple Music has a proper photo for most artists.
     func fetchArtistArtworkURL(name: String, width: Int = 800, height: Int = 800) async -> URL? {
+        guard networkAllowed else { return nil }
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         if let cached = artistArtworkCache[name.lowercased()] { return cached }
 
@@ -157,6 +199,42 @@ final class AppleMusicMetadataService {
         }
     }
 
+    /// A strictly matched Apple Music artist, including its editorial profile.
+    func fetchArtistProfile(
+        name: String,
+        width: Int = 800,
+        height: Int = 800
+    ) async -> AppleMusicArtistProfile? {
+        guard networkAllowed else { return nil }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return nil }
+        if !isAuthorized, !(await requestAuthorization()) { return nil }
+
+        do {
+            var search = MusicCatalogSearchRequest(term: trimmedName, types: [MKART.self])
+            search.limit = 5
+            let response = try await search.response()
+            let target = normalizedArtistName(trimmedName)
+            guard let match = response.artists.first(where: {
+                normalizedArtistName($0.name) == target
+            }) else { return nil }
+
+            let request = MusicCatalogResourceRequest<MKART>(matching: \.id, equalTo: match.id)
+            let detailed = try await request.response().items.first ?? match
+            return AppleMusicArtistProfile(
+                id: detailed.id.rawValue,
+                biography: cleanEditorialNotes(
+                    detailed.editorialNotes?.standard ?? detailed.editorialNotes?.short
+                ),
+                genres: (detailed.genreNames ?? []).filter { $0 != "Music" },
+                artworkURL: detailed.artwork?.url(width: width, height: height)
+            )
+        } catch {
+            print("[DEBUG] AppleMusicMetadataService: Artist profile search error: \(error)")
+            return nil
+        }
+    }
+
     /// Apple Music's cover art for an album, if the catalog has it.
     ///
     /// Preferred over the Cover Art Archive: better coverage and consistently
@@ -167,6 +245,7 @@ final class AppleMusicMetadataService {
         width: Int = 1000,
         height: Int = 1000
     ) async -> URL? {
+        guard networkAllowed else { return nil }
         let trimmedAlbum = album.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedAlbum.isEmpty else { return nil }
 
@@ -204,12 +283,53 @@ final class AppleMusicMetadataService {
         }
     }
 
+    /// A strictly matched Apple Music album, including its editorial profile.
+    func fetchAlbumProfile(
+        album: String,
+        artist: String?,
+        width: Int = 1000,
+        height: Int = 1000
+    ) async -> AppleMusicAlbumProfile? {
+        guard networkAllowed else { return nil }
+        let trimmedAlbum = album.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAlbum.isEmpty else { return nil }
+        if !isAuthorized, !(await requestAuthorization()) { return nil }
+
+        do {
+            let term = [artist, trimmedAlbum].compactMap { $0 }.joined(separator: " ")
+            var search = MusicCatalogSearchRequest(term: term, types: [MKALB.self])
+            search.limit = 10
+            let response = try await search.response()
+            let targetAlbum = normalizedArtistName(trimmedAlbum)
+            let targetArtist = artist.map(normalizedArtistName)
+            guard let match = response.albums.first(where: { candidate in
+                guard normalizedArtistName(candidate.title) == targetAlbum else { return false }
+                guard let targetArtist, !targetArtist.isEmpty else { return true }
+                return normalizedArtistName(candidate.artistName) == targetArtist
+            }) else { return nil }
+
+            let request = MusicCatalogResourceRequest<MKALB>(matching: \.id, equalTo: match.id)
+            let detailed = try await request.response().items.first ?? match
+            return AppleMusicAlbumProfile(
+                id: detailed.id.rawValue,
+                description: cleanEditorialNotes(
+                    detailed.editorialNotes?.standard ?? detailed.editorialNotes?.short
+                ),
+                artworkURL: detailed.artwork?.url(width: width, height: height)
+            )
+        } catch {
+            print("[DEBUG] AppleMusicMetadataService: Album profile search error: \(error)")
+            return nil
+        }
+    }
+
     private func normalizedArtistName(_ name: String) -> String {
         name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
     }
 
     private func fetchArtistEditorialNotes(_ artist: MKART) async throws -> String? {
+        guard networkAllowed else { return nil }
         if artist.id.rawValue.isEmpty {
             return try await fetchArtistEditorialNotesByName(artist.name)
         }
@@ -221,6 +341,7 @@ final class AppleMusicMetadataService {
     }
 
     private func fetchArtistEditorialNotesByName(_ name: String) async throws -> String? {
+        guard networkAllowed else { return nil }
         print("[DEBUG] AppleMusicMetadataService: Searching artist editorial notes by name: \(name)")
         var searchRequest = MusicCatalogSearchRequest(term: name, types: [MKART.self])
         searchRequest.limit = 1
@@ -241,7 +362,13 @@ final class AppleMusicMetadataService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
-    private func mapSongToMetadata(_ song: MKSONG, albumDescription: String? = nil, artistBio: String? = nil) -> FetchedMetadata {
+    private func mapSongToMetadata(
+        _ song: MKSONG,
+        albumDescription: String? = nil,
+        artistBio: String? = nil,
+        albumAppleMusicId: String? = nil,
+        artistAppleMusicId: String? = nil
+    ) -> FetchedMetadata {
         let composers = song.composers?.compactMap { $0.name }.joined(separator: " / ")
         let genres = song.genreNames.filter { $0 != "Music" }.joined(separator: " / ")
 
@@ -269,6 +396,8 @@ final class AppleMusicMetadataService {
             discNumber: song.discNumber,
             duration: song.duration,
             appleMusicId: song.id.rawValue,
+            albumAppleMusicId: albumAppleMusicId,
+            artistAppleMusicId: artistAppleMusicId,
             artworkURL: song.artwork?.url(width: 1000, height: 1000),
             albumArtist: albumArtist,
             composer: composers ?? song.composerName,

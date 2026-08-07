@@ -26,6 +26,7 @@ struct ArtistView: View {
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  private var library: SongLibrary { SongLibrary.shared }
 
   var body: some View {
     ScrollView {
@@ -50,6 +51,13 @@ struct ArtistView: View {
     }
     .task {
       await viewModel.loadData()
+    }
+    // `libraryVersion` bumps on any add/delete. Without this the cached song
+    // and album arrays go stale — deleting an album from here left it on
+    // screen until the user navigated away and back.
+    .task(id: library.libraryVersion) {
+      guard !viewModel.isLoading else { return }
+      await viewModel.reloadLocalContent()
     }
   }
 
@@ -426,10 +434,14 @@ class ArtistDetailViewModel {
     self.metadataService = metadataService
   }
 
-  func loadData() async {
-    isLoading = true
-    defer { isLoading = false }
-
+  /// Re-reads this artist's content from the library.
+  ///
+  /// Split out from `loadData()` so the view can refresh cheaply whenever the
+  /// library changes — deleting an album used to leave it on screen until the
+  /// user navigated away and back, because these arrays are snapshots and
+  /// nothing re-took them. Deliberately does no network work, so re-running it
+  /// on every library change can't trigger repeated metadata fetches.
+  func reloadLocalContent() async {
     // Get all songs by this artist (including featured)
     songs = library.getSongs(byArtist: artist.name)
       .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
@@ -453,6 +465,13 @@ class ArtistDetailViewModel {
 
     // Find related artists based on genre similarity
     await findRelatedArtists()
+  }
+
+  func loadData() async {
+    isLoading = true
+    defer { isLoading = false }
+
+    await reloadLocalContent()
 
     // Fetch when genres are missing, or when the artist still has no photo of
     // their own — `artworkPath` may just be borrowed album art, which leaves
@@ -470,18 +489,19 @@ class ArtistDetailViewModel {
     defer { isRefreshing = false }
 
     if let metadata = await metadataService.fetchMetadata(for: artist) {
-      artist.genres = metadata.genres
-      artist.biography = metadata.biography
-      artist.origin = metadata.origin
-      artist.activeYears = metadata.activeYears
-      artist.fanartURL = metadata.fanartURL?.absoluteString
-      artist.musicBrainzId = metadata.musicBrainzId
+      if let genres = metadata.genres, !genres.isEmpty { artist.genres = genres }
+      if let biography = metadata.biography, !biography.isEmpty { artist.biography = biography }
+      if let origin = metadata.origin, !origin.isEmpty { artist.origin = origin }
+      if let activeYears = metadata.activeYears, !activeYears.isEmpty { artist.activeYears = activeYears }
+      if let fanartURL = metadata.fanartURL { artist.fanartURL = fanartURL.absoluteString }
+      if let musicBrainzId = metadata.musicBrainzId { artist.musicBrainzId = musicBrainzId }
+      if let appleMusicId = metadata.appleMusicId { artist.appleMusicId = appleMusicId }
 
       // Cache text data
-      artist.cachedBiography = metadata.biography
-      artist.cachedOrigin = metadata.origin
-      artist.cachedActiveYears = metadata.activeYears
-      artist.cachedGenres = metadata.genres
+      if let biography = metadata.biography, !biography.isEmpty { artist.cachedBiography = biography }
+      if let origin = metadata.origin, !origin.isEmpty { artist.cachedOrigin = origin }
+      if let activeYears = metadata.activeYears, !activeYears.isEmpty { artist.cachedActiveYears = activeYears }
+      if let genres = metadata.genres, !genres.isEmpty { artist.cachedGenres = genres }
 
       if let artworkURL = metadata.artworkURL {
         if let path = await metadataService.downloadArtwork(from: artworkURL) {

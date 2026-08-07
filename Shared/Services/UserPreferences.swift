@@ -331,7 +331,7 @@ final class UserPreferences: Identifiable {
 
   var showNowPlayingOnLaunch: Bool
   var expandPlayerAutomatically: Bool
-  var showLyricsByDefault: Bool
+  var showLyricsByDefault: Bool = false
   var artworkQualityRaw: String
 
   var autoFetchMetadata: Bool
@@ -339,8 +339,23 @@ final class UserPreferences: Identifiable {
   var wordSyncedLyricsEnabled: Bool = false
   var copyMusicToStorage: Bool = true
   var preferOnlineArtwork: Bool
-  var preferEmbeddedArtwork: Bool = true
   var organizeByAlbum: Bool
+
+  /// True when the app may make network requests: online, and the user hasn't
+  /// turned on Offline Mode. Checked at the network choke points rather than at
+  /// each feature, so a new caller can't silently bypass it.
+  @MainActor
+  static var networkAllowed: Bool {
+    guard NetworkMonitor.shared.isOnline else { return false }
+    guard let context = sharedContextForNetworkCheck else { return true }
+    return !getOrCreate(in: context).isOfflineMode
+  }
+
+  /// Set once at launch so `networkAllowed` can be read without plumbing a
+  /// context through every service.
+  @MainActor
+  @ObservationIgnored
+  static var sharedContextForNetworkCheck: ModelContext?
 
   var isOfflineMode: Bool
   var lastSyncDate: Date?
@@ -576,14 +591,13 @@ final class UserPreferences: Identifiable {
     self.defaultRepeatModeRaw = RepeatMode.off.rawValue
     self.showNowPlayingOnLaunch = false
     self.expandPlayerAutomatically = false
-    self.showLyricsByDefault = true
+    self.showLyricsByDefault = false
     self.artworkQualityRaw = ArtworkQuality.high.rawValue
     self.autoFetchMetadata = onboardingBool("com.ampwave.onboarding.autoFetchMetadata", default: true)
     self.autoFetchLyrics = onboardingBool("com.ampwave.onboarding.autoFetchLyrics", default: true)
     self.wordSyncedLyricsEnabled = true
     self.copyMusicToStorage = onboardingBool("com.ampwave.onboarding.copyToStorage", default: true)
     self.preferOnlineArtwork = true
-    self.preferEmbeddedArtwork = true
     self.organizeByAlbum = true
     self.isOfflineMode = false
     self.showPlaybackNotifications = true

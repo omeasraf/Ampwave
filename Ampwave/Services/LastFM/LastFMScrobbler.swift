@@ -214,6 +214,12 @@ final class LastFMScrobbler {
     scheduleThresholdScrobble()
   }
 
+  /// Releases the current persistent model without submitting a scrobble.
+  /// Library reset calls this before SwiftData deletes every song.
+  func cancelCurrentTracking() {
+    endTracking()
+  }
+
   private func submitScrobble(_ song: LibrarySong, playedDuration: TimeInterval, startedAt: Date) {
     guard shouldScrobble else { return }
 

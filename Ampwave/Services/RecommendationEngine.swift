@@ -37,6 +37,18 @@ final class RecommendationEngine {
   // MARK: - Generate All Recommendations
 
   func generateAllRecommendations(forceRefresh: Bool = false) async {
+    // "Enable Recommendations" in Settings was written but never read, so
+    // turning it off changed nothing. Honour it here — the single choke point
+    // every recommendation shelf goes through — and clear anything already
+    // generated so the Home screen doesn't keep showing stale suggestions.
+    if let modelContext, !UserPreferences.getOrCreate(in: modelContext).enableRecommendations {
+      forYouRecommendations = []
+      similarSongs = []
+      genreRecommendations = []
+      discoveryRecommendations = []
+      return
+    }
+
     // Check if cache is still valid
     if !forceRefresh,
       let lastTime = lastGenerationTime,

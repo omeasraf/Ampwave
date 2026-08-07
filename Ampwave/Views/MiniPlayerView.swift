@@ -17,9 +17,6 @@ struct MiniPlayerView: View {
 
   var body: some View {
     let isFloating = userPreferences?.miniPlayerFloating ?? true
-    let duration = playback.duration
-    let progress = duration > 0 ? min(max(playback.currentTime / duration, 0), 1) : 0.0
-
     HStack(spacing: 12) {
       // Artwork thumbnail
       FixedArtworkThumbnail(
@@ -83,6 +80,9 @@ struct MiniPlayerView: View {
     .padding(.vertical, 10)
     .padding(.horizontal, isFloating ? 12 : 0)
     .padding(.bottom, isFloating ? 8 : 0)
+    // Without this the stack is only hittable where it actually draws, so the
+    // gap between the track title and the buttons swallowed taps.
+    .contentShape(Rectangle())
     .onTapGesture {
       if playback.currentItem != nil {
         withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
@@ -90,5 +90,22 @@ struct MiniPlayerView: View {
         }
       }
     }
+    // Horizontal swipe changes track, matching the gesture people expect from
+    // every other music app. `minimumDistance` keeps it from competing with
+    // the tap, and the vertical check stops a scroll from skipping a song.
+    .simultaneousGesture(
+      DragGesture(minimumDistance: 24)
+        .onEnded { value in
+          guard playback.currentItem != nil else { return }
+          let horizontal = value.translation.width
+          guard abs(horizontal) > abs(value.translation.height) else { return }
+          if horizontal < 0 {
+            playback.playNext()
+          } else {
+            playback.playPrevious()
+          }
+          HapticManager.shared.select()
+        }
+    )
   }
 }

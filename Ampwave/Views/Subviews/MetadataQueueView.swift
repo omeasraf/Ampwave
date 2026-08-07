@@ -78,21 +78,15 @@ struct MetadataQueueView: View {
 
   private func refreshQueue() {
     isLoading = true
-    Task {
-      let songs = await Task.detached {
-        return SongLibrary.shared.songs.filter { song in
-          let isGeneric = song.album == "Unknown Album" || song.artist == "Unknown Artist"
-          let isMissingInfo =
-            song.artworkPath == nil || song.genre == nil || song.year == nil || song.year == 0
-          return isGeneric || isMissingInfo
-        }
-      }.value
-
-      await MainActor.run {
-        self.incompleteSongs = songs
-        self.isLoading = false
-      }
+    // Filtering reads SwiftData properties, so it must remain on the context's
+    // actor rather than sending LibrarySong models through a detached task.
+    incompleteSongs = library.songs.filter { song in
+      let isGeneric = song.album == "Unknown Album" || song.artist == "Unknown Artist"
+      let isMissingInfo =
+        song.artworkPath == nil || song.genre == nil || song.year == nil || song.year == 0
+      return isGeneric || isMissingInfo
     }
+    isLoading = false
   }
 }
 

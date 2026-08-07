@@ -290,6 +290,21 @@ final class VocalIsolator {
             else { return }
 
             soundIsolationUnit = unit
+
+            // AUSoundIsolation is a neural separator with fixed internal rate
+            // expectations. Handing it a rate it doesn't support makes it throw
+            // a C++ exception from UpdateSliceDuration while building its
+            // processing graph — that surfaces as std::terminate/SIGABRT and
+            // cannot be caught from Swift, so it has to be prevented here.
+            // High-resolution FLAC (88.2 kHz and above) is the usual trigger.
+            guard Self.isSampleRateSupported(rate: incomingFormat.mSampleRate) else {
+                print(
+                    "[DEBUG] VocalIsolator: \(incomingFormat.mSampleRate) Hz unsupported by "
+                        + "AUSoundIsolation, using mid/side fallback")
+                tearDownNativeVoiceIsolation()
+                return
+            }
+
             var format = incomingFormat
             let formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
             guard
@@ -349,6 +364,15 @@ final class VocalIsolator {
                 return
             }
 
+            // Initialize before touching parameters. A parameter write kicks off
+            // the AU's *deferred* processing-graph build; doing that while the
+            // unit is still uninitialized is precisely the path that ends in
+            // UpdateSliceDuration throwing.
+            guard AudioUnitInitialize(unit) == noErr else {
+                tearDownNativeVoiceIsolation()
+                return
+            }
+
             guard
                 AudioUnitSetParameter(
                     unit,
@@ -365,8 +389,7 @@ final class VocalIsolator {
                     0,
                     Float(kAUSoundIsolationSoundType_HighQualityVoice),
                     0
-                ) == noErr,
-                AudioUnitInitialize(unit) == noErr
+                ) == noErr
             else {
                 tearDownNativeVoiceIsolation()
                 return
@@ -422,6 +445,24 @@ final class VocalIsolator {
             nativeReady = true
             resetNativeStream()
             #endif
+        }
+
+        /// Rates the neural isolator is allowed to run at.
+        ///
+        /// There is no AudioUnit property that reports this — an AU advertises
+        /// nothing about which rates its internal model accepts, and setting an
+        /// unsupported stream format still returns `noErr`. The failure only
+        /// shows up later, as an uncatchable C++ throw while the AU builds its
+        /// processing graph. So the allowlist is deliberate rather than
+        /// discovered: these are the rates the separator is built around, and
+        /// anything else (notably high-resolution FLAC at 88.2 kHz and up)
+        /// takes the mid/side path instead.
+        private static let supportedIsolationSampleRates: Set<Double> = [44_100, 48_000]
+
+        private static func isSampleRateSupported(rate: Double) -> Bool {
+            // Rates arrive as Double from the stream description, so compare
+            // with a tolerance rather than relying on exact equality.
+            supportedIsolationSampleRates.contains { abs($0 - rate) < 1 }
         }
 
         func tearDownNativeVoiceIsolation() {

@@ -91,8 +91,28 @@ final class PlaybackController {
   private var effectiveOutputVolume: Float {
     let preamp = Float(UserDefaults.standard.double(forKey: "com.ampwave.audioPreamp"))
     let gain = (preamp > 0.25 && preamp < 4.0) ? preamp : 1.0
-    let soundCheck: Float = (preferences?.normalizeVolume ?? false) ? 0.94 : 1.0
-    return min(1, volume * gain * soundCheck)
+    return min(1, volume * gain * normalizationGain)
+  }
+
+  /// Per-track attenuation that levels loudness across the library.
+  ///
+  /// Replaces a flat 0.94 multiplier that was applied to every track equally —
+  /// which only made everything quieter and left the *relative* loudness
+  /// between tracks exactly as it was, so the setting did nothing.
+  ///
+  /// `player.volume` can only attenuate (it clamps at 1.0), so this normalizes
+  /// downward: loud tracks are pulled toward the reference level and quiet
+  /// tracks are left alone. Files with no ReplayGain tag are untouched rather
+  /// than guessed at.
+  private var normalizationGain: Float {
+    guard preferences?.normalizeVolume ?? false else { return 1.0 }
+    guard let gainDB = currentItem?.replayGainDB else { return 1.0 }
+    // A positive tag gain means the track is quieter than reference and wants
+    // boosting, which we can't do — leave it at unity.
+    guard gainDB < 0 else { return 1.0 }
+    // Floor at -12 dB so a badly tagged file can't render playback inaudible.
+    let clamped = max(gainDB, -12)
+    return powf(10, Float(clamped) / 20)
   }
 
   func refreshAudioEnhancementsFromSettings() {
@@ -492,6 +512,9 @@ final class PlaybackController {
     print("[DEBUG] PlaybackController: Auto-advanced to \(song.title) at index \(index)")
     self.currentQueueIndex = index
     self.currentItem = song
+    // Gapless hand-off doesn't go through play(), so the per-track
+    // normalization gain has to be re-applied here too.
+    self.applyPlayerOutputVolume()
     self.updateUIForNewItem()
     self.historyTracker.songStarted(
       song, source: self.currentSource, playlistId: self.currentPlaylistId)
@@ -622,8 +645,11 @@ final class PlaybackController {
         }
         if self.player == nil {
           self.player = AVQueuePlayer(items: [item])
+          // Local files are already on disk, so letting the player hold back
+          // to build a buffer only inserts a delay at each track transition —
+          // which is exactly the gap gapless playback is meant to avoid.
+          self.player?.automaticallyWaitsToMinimizeStalling = false
           self.applyEQPresetForPlayback()
-          self.applyPlayerOutputVolume()
           self.addTimeObserver()
           self.observePlayerItemChange()
         } else {
@@ -636,6 +662,11 @@ final class PlaybackController {
         self.duration = song.duration > 0 ? song.duration : 0
         self.currentTime = 0
         self.lyricsClock.currentTime = 0
+
+        // After `currentItem` is set: the normalization gain is per-track, so
+        // applying it earlier used the *previous* song's tag. The reuse branch
+        // above never applied it at all.
+        self.applyPlayerOutputVolume()
 
         self.player?.play()
         self.isPlaying = true
@@ -967,6 +998,9 @@ final class PlaybackController {
   func playPrevious() {
     if currentTime > 3 {
       seek(to: 0)
+      // Same reasoning as skipping forward: pressing Previous while paused
+      // should play, not silently rewind.
+      if !isPlaying { play() }
       return
     }
 
@@ -1031,6 +1065,11 @@ final class PlaybackController {
         asset.url == library.getFileURL(for: nextSong)
       {
         player.advanceToNextItem()
+        // Skipping is an explicit request to hear the next track, so start it
+        // even if playback was paused. advanceToNextItem() on its own inherits
+        // the paused state and looked like the button had done nothing.
+        player.play()
+        isPlaying = true
         // currentItem and UI will be updated by KVO (observePlayerItemChange)
         return
       }
@@ -1159,6 +1198,23 @@ final class PlaybackController {
     currentQueueIndex = 0
     cleanupPlayer()
     saveState()
+  }
+
+  /// Clears every retained song reference before a destructive library reset.
+  /// Unlike `clearQueue`, this intentionally does not persist playback state,
+  /// because that state is about to be deleted as part of the same operation.
+  func prepareForLibraryReset() {
+    cleanupPlayer()
+    isPlaying = false
+    queue.removeAll()
+    originalQueue.removeAll()
+    currentItem = nil
+    currentQueueIndex = 0
+    currentTime = 0
+    lyricsClock.currentTime = 0
+    currentLyricIndex = 0
+    historyTracker.discardCurrentSong()
+    updateNowPlaying()
   }
 
   func moveSong(from sourceIndex: Int, to destinationIndex: Int) {
@@ -1531,6 +1587,7 @@ final class PlaybackController {
           // Prepare player but don't play
           let item = await createPlayerItem(for: song)
           self.player = AVQueuePlayer(items: [item])
+          self.player?.automaticallyWaitsToMinimizeStalling = false
           self.applyEQPresetForPlayback()
           self.applyPlayerOutputVolume()
           item.seek(
@@ -1630,6 +1687,7 @@ final class PlaybackController {
     cleanupPlayer()
 
     let newPlayer = AVQueuePlayer(items: [cfItem])
+    newPlayer.automaticallyWaitsToMinimizeStalling = false
     newPlayer.volume = effectiveOutputVolume
     self.player = newPlayer
     self.addTimeObserver()

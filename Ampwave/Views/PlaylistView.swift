@@ -16,6 +16,7 @@ struct PlaylistView: View {
   @State private var showingAddSongsSheet = false
   @State private var showingDeleteConfirmation = false
   @State private var showingRulesSheet = false
+  @State private var showingCreateCapsuleSheet = false
   @State private var playlistJSONShareURL: URL?
   @State private var playlistM3UShareURL: URL?
   @Environment(ThemeManager.self) private var themeManager
@@ -67,6 +68,9 @@ struct PlaylistView: View {
     }
     .sheet(isPresented: $showingRulesSheet) {
       SmartPlaylistRulesSheet(playlist: playlist)
+    }
+    .sheet(isPresented: $showingCreateCapsuleSheet) {
+      CreateCapsuleSheet(playlist: playlist)
     }
     .alert("Delete Playlist?", isPresented: $showingDeleteConfirmation) {
       Button("Cancel", role: .cancel) {}
@@ -185,6 +189,16 @@ struct PlaylistView: View {
     }
 
     shareLinks
+
+    if !playlist.orderedSongs.isEmpty {
+      Button { showingCreateCapsuleSheet = true } label: {
+        Label {
+          Text("Create Capsule")
+        } icon: {
+          Image("ampwave.capsule")
+        }
+      }
+    }
 
     if !isSmartPlaylist {
       Button {

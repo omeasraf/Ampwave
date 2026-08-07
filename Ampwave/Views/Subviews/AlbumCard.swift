@@ -40,6 +40,16 @@ struct AlbumCard: View {
 
   // MARK: - Card layout
 
+  /// Caption scales with the cell so a 3-up grid stays legible and a 1-up cell
+  /// doesn't leave tiny text stranded under huge artwork.
+  private var titleFontSize: CGFloat {
+    switch artworkSize {
+    case ..<120: return 12
+    case ..<240: return 14
+    default: return 17
+    }
+  }
+
   private var cardContent: some View {
     VStack(alignment: .leading, spacing: 0) {
       // Square artwork. Fixed to artworkSize so the card has a stable, predictable
@@ -48,21 +58,23 @@ struct AlbumCard: View {
       AlbumArtworkView(
         artworkPath: album.artworkPath,
         size: artworkSize,
-        cornerRadius: isFullBleed ? 0 : max(8, artworkSize * 0.08)
+        // Clamped: a pure percentage radius balloons past the app's 16–20 pt
+        // corner language once a cell fills the screen width.
+        cornerRadius: isFullBleed ? 0 : min(20, max(8, artworkSize * 0.08))
       )
       .accessibilityHidden(true)
 
       // Text — single line with ellipsis so every card stays the same height.
       VStack(alignment: .leading, spacing: 3) {
         Text(album.name)
-          .font(.system(size: 13, weight: .semibold, design: .rounded))
+          .font(.system(size: titleFontSize, weight: .semibold, design: .rounded))
           .lineLimit(1)
           .truncationMode(.tail)
           .foregroundStyle(.primary)
 
         if let artist = album.artist {
           Text(artist)
-            .font(.system(size: 11, weight: .medium))
+            .font(.system(size: titleFontSize - 2, weight: .medium))
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.tail)

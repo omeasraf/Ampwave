@@ -200,6 +200,11 @@ actor LastFMClient {
     httpMethod: String
   ) async throws -> [String: Any] {
     guard LastFMSecrets.isConfigured else { throw LastFMError.notConfigured }
+    // Offline Mode applies to scrobbling too. Throwing (rather than silently
+    // succeeding) keeps queued scrobbles queued for a later flush.
+    guard await UserPreferences.networkAllowed else {
+      throw LastFMError.transport(URLError(.notConnectedToInternet))
+    }
 
     var allParams = params
     allParams["method"] = method

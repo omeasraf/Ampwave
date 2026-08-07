@@ -12,6 +12,7 @@ struct PlaylistsListView: View {
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
+  @Query private var capsules: [AmpwaveCapsule]
   @State private var showingCreateSheet = false
   @State private var showingCreateSmartSheet = false
   @State private var showUnpinAlert = false
@@ -79,6 +80,32 @@ struct PlaylistsListView: View {
 
   var body: some View {
     List {
+      NavigationLink {
+        CapsulesListView()
+      } label: {
+        HStack(spacing: 12) {
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(themeManager.cardBackgroundColor)
+            .frame(width: 60, height: 60)
+            .overlay {
+              Image("ampwave.capsule")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 31, height: 31)
+                .foregroundStyle(themeManager.accentColor)
+            }
+
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Capsules")
+              .font(.system(size: 16, weight: .semibold))
+            Text("\(capsules.count) personal mixtape\(capsules.count == 1 ? "" : "s")")
+              .font(.system(size: 13))
+              .foregroundStyle(.secondary)
+          }
+        }
+      }
+      .listRowBackground(themeManager.backgroundColor)
+
       Menu {
         Button {
           showingCreateSheet = true

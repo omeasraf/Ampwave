@@ -40,6 +40,12 @@ final class MetadataService {
   // MARK: - Internal Request Helper
 
   func performRequest(url: URL, retries: Int = 3) async -> Data? {
+    // Every MusicBrainz / Cover Art / fanart request funnels through here, so
+    // this is where Offline Mode is enforced rather than at each caller.
+    guard UserPreferences.networkAllowed else {
+      print("[DEBUG] MetadataService: Offline Mode on — skipping request")
+      return nil
+    }
     var attempt = 0
     var backoffDelay: TimeInterval = 1.5
 
@@ -241,16 +247,18 @@ final class MetadataService {
     // Apple Music covers albums MusicBrainz misses, so ask it regardless of
     // whether a release match turns up — bailing early used to mean no artwork
     // at all for anything MusicBrainz didn't know.
-    let appleArtworkURL = await AppleMusicMetadataService.shared.fetchAlbumArtworkURL(
+    let appleProfile = await AppleMusicMetadataService.shared.fetchAlbumProfile(
       album: album.name,
       artist: album.artist
     )
 
     guard let release = await searchRelease(album: album) else {
-      guard let appleArtworkURL else { return nil }
+      guard let appleProfile else { return nil }
       return FetchedMetadata(
         album: album.name,
-        artworkURL: appleArtworkURL
+        albumAppleMusicId: appleProfile.id,
+        artworkURL: appleProfile.artworkURL,
+        albumDescription: appleProfile.description
       )
     }
 
@@ -267,11 +275,13 @@ final class MetadataService {
       discNumber: nil,
       duration: nil,
       musicBrainzId: release.id,
-      artworkURL: nil
+      albumAppleMusicId: appleProfile?.id,
+      artworkURL: nil,
+      albumDescription: appleProfile?.description
     )
 
     // Prefer Apple Music's cover; fall back to the Cover Art Archive.
-    if let appleArtworkURL {
+    if let appleArtworkURL = appleProfile?.artworkURL {
       metadata.artworkURL = appleArtworkURL
     } else {
       metadata.artworkURL = await fetchArtworkURL(forRelease: release.id)
@@ -288,7 +298,7 @@ final class MetadataService {
     let theAudioDBInfo = await searchTheAudioDBArtist(artist: artist)
     // Apple Music has artist photos for far more artists than TheAudioDB, so
     // prefer it and fall back to the TheAudioDB thumbnail.
-    let appleArtworkURL = await AppleMusicMetadataService.shared.fetchArtistArtworkURL(
+    let appleProfile = await AppleMusicMetadataService.shared.fetchArtistProfile(
       name: artist.name
     )
 
@@ -303,6 +313,9 @@ final class MetadataService {
     if let tdbStyle = theAudioDBInfo?.strStyle, !tdbStyle.isEmpty {
       genres.insert(tdbStyle)
     }
+    for genre in appleProfile?.genres ?? [] {
+      genres.insert(genre)
+    }
 
     return ArtistMetadata(
       name: artistInfo?.name ?? theAudioDBInfo?.strArtist ?? artist.name,
@@ -312,9 +325,10 @@ final class MetadataService {
       origin: theAudioDBInfo?.strCountry,
       activeYears: calculateActiveYears(tdb: theAudioDBInfo),
       genres: Array(genres).sorted(),
-      biography: theAudioDBInfo?.strBiography,
+      biography: appleProfile?.biography ?? theAudioDBInfo?.strBiography,
       musicBrainzId: artistInfo?.id ?? theAudioDBInfo?.strMusicBrainzID,
-      artworkURL: appleArtworkURL ?? theAudioDBInfo?.strArtistThumb.flatMap { URL(string: $0) },
+      appleMusicId: appleProfile?.id,
+      artworkURL: appleProfile?.artworkURL ?? theAudioDBInfo?.strArtistThumb.flatMap { URL(string: $0) },
       fanartURL: theAudioDBInfo?.strArtistFanart.flatMap { URL(string: $0) }
     )
   }
@@ -828,7 +842,7 @@ final class MetadataService {
             albumRef.albumDescription = desc
         }
         if albumRef.appleMusicId == nil {
-            albumRef.appleMusicId = metadata.appleMusicId
+            albumRef.appleMusicId = metadata.albumAppleMusicId
         }
         if let explicit = metadata.isExplicit {
             albumRef.isExplicit = explicit
@@ -839,11 +853,12 @@ final class MetadataService {
     if let primaryArtist = artistNames.first {
         let artist = SongLibrary.shared.getArtist(named: primaryArtist)
         if let artist = artist {
-            if let bio = metadata.artistBio, (artist.biography == nil || artist.biography?.isEmpty == true) {
+            if let bio = metadata.artistBio, !bio.isEmpty {
                 artist.biography = bio
+                artist.cachedBiography = bio
             }
             if artist.appleMusicId == nil {
-                artist.appleMusicId = metadata.appleMusicId // Note: this might be song ID, not artist ID. Need to fix in service if so.
+                artist.appleMusicId = metadata.artistAppleMusicId
             }
         }
     }
@@ -860,11 +875,13 @@ final class MetadataService {
       let isUserSelected = song.artworkSource == .user
       let hasEmbeddedArt = song.embeddedArtworkPath != nil
 
-      // If preferEmbeddedArtwork is true and we have embedded art, don't replace
-      let shouldRespectEmbedded = prefs.preferEmbeddedArtwork && hasEmbeddedArt
+      // One rule, not two: "prefer online" now actually wins when it's on.
+      // Previously a second `preferEmbeddedArtwork` flag (also defaulting
+      // to true) vetoed it for any song with embedded art — i.e. exactly
+      // the songs the setting existed to affect.
 
       if song.artworkPath == nil
-        || (prefs.preferOnlineArtwork && !isUserSelected && !shouldRespectEmbedded)
+        || (prefs.preferOnlineArtwork && !isUserSelected)
       {
         if let artworkPath = await downloadArtwork(from: artworkURL) {
           song.artworkPath = artworkPath
@@ -891,6 +908,12 @@ final class MetadataService {
     }
     if let year = metadata.year {
       album.year = year
+    }
+    if let description = metadata.albumDescription, !description.isEmpty {
+      album.albumDescription = description
+    }
+    if let albumAppleMusicId = metadata.albumAppleMusicId {
+      album.appleMusicId = albumAppleMusicId
     }
 
     // Save artwork colors

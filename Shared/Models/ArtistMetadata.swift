@@ -15,6 +15,7 @@ struct ArtistMetadata {
   var genres: [String]?
   var biography: String?
   var musicBrainzId: String?
+  var appleMusicId: String?
   var artworkURL: URL?
   var fanartURL: URL?
 
@@ -28,6 +29,7 @@ struct ArtistMetadata {
     genres: [String]? = nil,
     biography: String? = nil,
     musicBrainzId: String? = nil,
+    appleMusicId: String? = nil,
     artworkURL: URL? = nil,
     fanartURL: URL? = nil
   ) {
@@ -40,6 +42,7 @@ struct ArtistMetadata {
     self.genres = genres
     self.biography = biography
     self.musicBrainzId = musicBrainzId
+    self.appleMusicId = appleMusicId
     self.artworkURL = artworkURL
     self.fanartURL = fanartURL
   }

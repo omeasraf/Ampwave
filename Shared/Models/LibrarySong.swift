@@ -42,7 +42,10 @@ final class LibrarySong: Identifiable, Hashable {
   // MARK: - Core display
   var title: String
   var artist: String
-  @Attribute(.externalStorage) var artists: [String]  // All artists (parsed from artist field)
+  // Artist lists are tiny and are read throughout navigation, search, and
+  // cleanup. Keeping them inline prevents an external-storage fault from
+  // being resolved after SwiftData has detached a deleted model.
+  var artists: [String]  // All artists (parsed from artist field)
   var duration: TimeInterval
 
   // MARK: - Extended metadata (optional)
@@ -78,6 +81,9 @@ final class LibrarySong: Identifiable, Hashable {
   var isLive: Bool = false
   var isMedley: Bool = false
   var isExplicit: Bool = false
+  /// ReplayGain track gain in dB from the file's tags, used by volume
+  /// normalization. Nil when the file carries no ReplayGain tag.
+  var replayGainDB: Double?
 
   @Relationship(inverse: \Album.songs)
   var albumReference: Album?
@@ -171,7 +177,8 @@ final class LibrarySong: Identifiable, Hashable {
     metadataSourceAlbum: String? = nil,
     isLive: Bool = false,
     isMedley: Bool = false,
-    isExplicit: Bool = false
+    isExplicit: Bool = false,
+    replayGainDB: Double? = nil
   ) {
     self.id = UUID()
     self.title = title
@@ -225,6 +232,7 @@ final class LibrarySong: Identifiable, Hashable {
     self.isLive = isLive
     self.isMedley = isMedley
     self.isExplicit = isExplicit
+    self.replayGainDB = replayGainDB
   }
 
   static func == (lhs: LibrarySong, rhs: LibrarySong) -> Bool {
