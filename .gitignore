@@ -338,3 +338,4 @@ xcuserdata
 !*.xcworkspace/contents.xcworkspacedata
 /*.gcno
 **/xcshareddata/WorkspaceSettings.xcsettings
+Ampwave/Services/LastFM/LastFMSecrets.swift
