@@ -19,6 +19,9 @@ struct OpenPlayerView: View {
   @Environment(SleepTimerService.self) private var sleepTimer
   @State private var showingQueue = false
   @State private var isLyricsExpanded = false
+  /// One-shot latch for "Show Lyrics by Default". The view is recreated each
+  /// time the player is presented, so this resets naturally per open.
+  @State private var hasAutoOpenedLyrics = false
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
   @State private var showingTechnicalInfo = false
@@ -211,6 +214,20 @@ struct OpenPlayerView: View {
             dismiss()
           }
       )
+      .task(id: playback.currentItem?.id) {
+        // "Show Lyrics by Default" applies to *opening the player*, not to
+        // every track change. Keyed on the song so it can still catch lyrics
+        // that finish loading a moment after the view appears, but latched so
+        // skipping tracks with the player already open doesn't keep throwing
+        // the lyrics sheet back up over the controls.
+        guard !hasAutoOpenedLyrics,
+          userPreferences?.showLyricsByDefault ?? false,
+          !isLyricsExpanded,
+          playback.hasLyrics || playback.currentPlainLyrics != nil
+        else { return }
+        hasAutoOpenedLyrics = true
+        isLyricsExpanded = true
+      }
       .navigationTitle("Now Playing")
       #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

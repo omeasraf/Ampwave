@@ -70,8 +70,11 @@ struct DuplicateManagementView: View {
                 // Whatever the user left unchecked is the copy being kept.
                 let deletedIds = Set(songsToDelete.map(\.id))
                 let keeper = group.songs.first { !deletedIds.contains($0.id) }
-                deleteSongs(songsToDelete, keeping: keeper)
+                // Dismiss and remove cards before deletion so SwiftUI cannot
+                // render a detached model during the next update pass.
                 selectedGroupForManual = nil
+                discardGroups(containing: deletedIds)
+                deleteSongs(songsToDelete, keeping: keeper)
                 refreshDuplicates()
             }
         }
@@ -111,6 +114,7 @@ struct DuplicateManagementView: View {
             }
 
             let toDelete = Array(sorted.dropFirst())
+            discardGroups(containing: Set(toDelete.map(\.id)))
             deleteSongs(toDelete, keeping: sorted.first)
 
             await MainActor.run {
@@ -123,7 +127,8 @@ struct DuplicateManagementView: View {
     private func autoMergeAll() {
         isMerging = true
         Task {
-            for group in duplicateGroups {
+            let groups = duplicateGroups
+            for group in groups {
                 let sorted = group.songs.sorted { s1, s2 in
                     library.calculateQualityScore(for: s1)
                         > library.calculateQualityScore(for: s2)
@@ -143,6 +148,9 @@ struct DuplicateManagementView: View {
     /// playlist memberships into `keeper` first so a merge never costs play
     /// counts or quietly shrinks a playlist.
     private func deleteSongs(_ songsToDelete: [LibrarySong], keeping keeper: LibrarySong?) {
+        let deletedIDs = Set(songsToDelete.map(\.id))
+
+        // Transfer everything while the models are still attached.
         for song in songsToDelete {
             if let keeper {
                 LibraryMaintenanceService.transferState(
@@ -160,9 +168,18 @@ struct DuplicateManagementView: View {
             {
                 try? FileManager.default.removeItem(at: url)
             }
-            modelContext.delete(song)
         }
+
+        // Remove every published reference before deleting the backing rows.
+        library.removeSongsFromMemory(ids: deletedIDs)
+        for song in songsToDelete { modelContext.delete(song) }
         try? modelContext.save()
+    }
+
+    private func discardGroups(containing songIDs: Set<UUID>) {
+        duplicateGroups.removeAll { group in
+            group.songs.contains { songIDs.contains($0.id) }
+        }
     }
 }
 

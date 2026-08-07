@@ -9,6 +9,14 @@ import CryptoKit
 import Foundation
 import SwiftData
 
+extension Notification.Name {
+  /// Posted after songs are deleted, carrying a `Set<UUID>` of their ids.
+  /// Lets app-target services drop cached state keyed by song id — this file
+  /// also builds into the watch app and Lyrics extension, so it can't call
+  /// them directly.
+  static let songsWereDeleted = Notification.Name("com.ampwave.songsWereDeleted")
+}
+
 @Observable
   @MainActor
   final class SongLibrary {
@@ -36,10 +44,29 @@ import SwiftData
     /// song order) don't linear-scan `songs` once per id.
     private var songIndex: [UUID: LibrarySong] = [:]
 
+    /// song id → resolved audio-file URL.
+    ///
+    /// Resolving a security-scoped bookmark is expensive, and worse when it
+    /// fails and has to fall back to the stored path. The gapless hand-off KVO
+    /// asks for the URL of every song in the queue on each track change, which
+    /// made switching songs take seconds on referenced (non-copied) libraries.
+    @ObservationIgnored
+    private var resolvedURLCache: [UUID: URL] = [:]
+
     func song(id: UUID) -> LibrarySong? { songIndex[id] }
 
     /// Resolves ids to songs in the order given, skipping any that are gone.
-    func songs(ids: [UUID]) -> [LibrarySong] { ids.compactMap { songIndex[$0] } }
+  func songs(ids: [UUID]) -> [LibrarySong] { ids.compactMap { songIndex[$0] } }
+
+  /// Removes models from observable in-memory state before SwiftData deletes
+  /// their backing rows. Views must never get a render pass with detached
+  /// `LibrarySong` instances still present in `songs`.
+  func removeSongsFromMemory(ids: Set<UUID>) {
+    guard !ids.isEmpty else { return }
+    songs.removeAll { ids.contains($0.id) }
+    resolvedURLCache = resolvedURLCache.filter { !ids.contains($0.key) }
+    notifyLibraryChange()
+  }
   
     private var isLoaded = false
   nonisolated let songsDirectory: URL
@@ -120,17 +147,7 @@ import SwiftData
   }
 
   /// Finds potential duplicate songs in the library.
-  nonisolated func findDuplicates() -> [DuplicateGroup] {
-    // We need to run this on a background context or ensure we're not blocking MainActor
-    // for long periods, but since it's nonisolated, we must fetch the data ourselves.
-
-    // For safety and simplicity, let's keep it isolated to the actor that owns the data
-    // but ensure we're using it correctly.
-
-    // Re-evaluating: If I make it nonisolated, I can't access `self.songs`.
-    // The crash happened because of cross-thread access to external storage.
-    // The safest way is to run it on MainActor (where songs live) but keep it efficient.
-    return MainActor.assumeIsolated {
+  func findDuplicates() -> [DuplicateGroup] {
       var groups: [DuplicateGroup] = []
 
       // 1. Group by file hash (100% confidence)
@@ -189,7 +206,6 @@ import SwiftData
       }
 
       return groups
-    }
   }
 
   private func refineByDuration(_ songs: [LibrarySong], tolerance: TimeInterval) -> [[LibrarySong]]
@@ -300,6 +316,7 @@ import SwiftData
           }
         }
 
+        removeSongsFromMemory(ids: [duplicate.id])
         modelContext.delete(duplicate)
         deletedCount += 1
       }
@@ -488,6 +505,8 @@ import SwiftData
       print("[DEBUG] SongLibrary.loadSongs: Error - No modelContext")
       return
     }
+    // Paths may have changed since the last load.
+    invalidateResolvedURLCache()
 
     do {
       let descriptor = FetchDescriptor<LibrarySong>(
@@ -531,10 +550,16 @@ import SwiftData
       albums = try modelContext.fetch(descriptor)
       print("[DEBUG] SongLibrary.loadAlbums: Fetched \(albums.count) albums")
 
-      // Always merge duplicate albums to fix any historical splits caused by
-      // track-artist variations (e.g. "NF; mgk" vs "NF").
-      print("[DEBUG] SongLibrary.loadAlbums: Merging duplicate albums")
-      await mergeAlbumDuplicates(in: modelContext)
+      // Merges albums split by track-artist variations (e.g. "NF; mgk" vs
+      // "NF"). Now honours the Settings toggle, which was previously written
+      // but never read — the merge ran unconditionally either way.
+      let settings = AppSettings.getOrCreate(in: modelContext)
+      if settings.mergeAlbumDuplicates {
+        print("[DEBUG] SongLibrary.loadAlbums: Merging duplicate albums")
+        await mergeAlbumDuplicates(in: modelContext)
+      } else {
+        print("[DEBUG] SongLibrary.loadAlbums: Album merging disabled in settings")
+      }
     } catch {
       print("[DEBUG] SongLibrary.loadAlbums: Error fetching albums: \(error)")
       albums = []
@@ -686,6 +711,7 @@ import SwiftData
     // Batch delete
     if !deletedSongs.isEmpty {
       print("[DEBUG] indexOnStartup: Deleting \(deletedSongs.count) missing songs")
+      removeSongsFromMemory(ids: Set(deletedSongs.map(\.id)))
       for song in deletedSongs {
         modelContext.delete(song)
       }
@@ -716,7 +742,9 @@ import SwiftData
     saveContext()
     await pruneEmptyAlbums()
     await reindexMissingTechnicalMetadata()
-    await loadSongs()
+    // Cleanup may have deleted rows from models already published to the UI.
+    // Always replace the array with fresh, attached instances.
+    await loadSongs(force: true)
 
     indexingStatus = .complete
     isIndexing = false
@@ -1158,7 +1186,8 @@ import SwiftData
       metadataSourceAlbum: metadata.metadataSourceAlbum,
       isLive: metadata.isLive,
       isMedley: metadata.isMedley,
-      isExplicit: metadata.isExplicit ?? false
+      isExplicit: metadata.isExplicit ?? false,
+      replayGainDB: metadata.replayGainDB
     )
 
     // Set initial artwork source
@@ -1291,7 +1320,8 @@ import SwiftData
       metadataSourceAlbum: metadata.metadataSourceAlbum,
       isLive: metadata.isLive,
       isMedley: metadata.isMedley,
-      isExplicit: metadata.isExplicit ?? false
+      isExplicit: metadata.isExplicit ?? false,
+      replayGainDB: metadata.replayGainDB
     )
 
     // Set initial artwork source
@@ -1497,8 +1527,13 @@ import SwiftData
       }
     }
 
-    // 2. Synced Lyrics
-    // Fetch if no synced lyrics AND we haven't already tried.
+    // 2. Lyrics
+    //
+    // Plain lyrics are fetched at import time on purpose: the fuzzy search
+    // index is built from them, so a library imported without lyrics can't be
+    // searched by lyric text. Only the *word-synced* providers are deferred to
+    // first play (they rate-limit); LRCLIB still supplies line-synced and
+    // plain text here.
     let syncedLyricLines = LRCParser.parse(song.lyrics ?? "")
     let hasSyncedLyrics = !syncedLyricLines.isEmpty
     if preferences.autoFetchLyrics && !hasSyncedLyrics && !song.lyricsCheckAttempted
@@ -1710,6 +1745,7 @@ import SwiftData
         artist.cachedActiveYears = activeYears
       }
       if artist.musicBrainzId == nil { artist.musicBrainzId = metadata.musicBrainzId }
+      if let appleMusicId = metadata.appleMusicId { artist.appleMusicId = appleMusicId }
 
       if let artworkURL = metadata.artworkURL,
         let path = await metadataService.downloadArtwork(from: artworkURL)
@@ -1835,7 +1871,7 @@ import SwiftData
             albumRef.albumDescription = desc
         }
         if albumRef.appleMusicId == nil {
-            albumRef.appleMusicId = metadata.appleMusicId
+            albumRef.appleMusicId = metadata.albumAppleMusicId
         }
     }
     
@@ -1843,11 +1879,12 @@ import SwiftData
     if let primaryArtist = artistNames.first {
         let artist = getArtist(named: primaryArtist)
         if let artist = artist {
-            if let bio = metadata.artistBio, (artist.biography == nil || artist.biography?.isEmpty == true) {
+            if let bio = metadata.artistBio, !bio.isEmpty {
                 artist.biography = bio
+                artist.cachedBiography = bio
             }
             if artist.appleMusicId == nil {
-                artist.appleMusicId = metadata.appleMusicId
+                artist.appleMusicId = metadata.artistAppleMusicId
             }
         }
     }
@@ -1863,11 +1900,13 @@ import SwiftData
       let isUserSelected = song.artworkSource == .user
       let hasEmbeddedArt = song.embeddedArtworkPath != nil
 
-      // If preferEmbeddedArtwork is true and we have embedded art, don't replace
-      let shouldRespectEmbedded = preferences.preferEmbeddedArtwork && hasEmbeddedArt
+      // One rule, not two: "prefer online" now actually wins when it's on.
+      // Previously a second `preferEmbeddedArtwork` flag (also defaulting
+      // to true) vetoed it for any song with embedded art — i.e. exactly
+      // the songs the setting existed to affect.
 
       if song.artworkPath == nil
-        || (preferences.preferOnlineArtwork && !isUserSelected && !shouldRespectEmbedded)
+        || (preferences.preferOnlineArtwork && !isUserSelected)
       {
         if let artworkPath = await MetadataService.shared.downloadArtwork(from: artworkURL) {
           song.artworkPath = artworkPath
@@ -2127,6 +2166,23 @@ import SwiftData
   }
 
   func getFileURL(for song: LibrarySong) -> URL {
+    if let cached = resolvedURLCache[song.id] { return cached }
+    let url = resolveFileURL(for: song)
+    resolvedURLCache[song.id] = url
+    return url
+  }
+
+  /// Drops cached URL resolutions. Call whenever a song's stored path or
+  /// bookmark changes, or the library is rescanned.
+  func invalidateResolvedURLCache(for songId: UUID? = nil) {
+    if let songId {
+      resolvedURLCache[songId] = nil
+    } else {
+      resolvedURLCache.removeAll()
+    }
+  }
+
+  private func resolveFileURL(for song: LibrarySong) -> URL {
     // A bookmark that still *resolves* isn't necessarily usable — its sandbox
     // extension can be stale (the "sandbox_extension_consume failed: 22" case),
     // which used to shadow a perfectly good stored path and make the track
@@ -2175,6 +2231,7 @@ import SwiftData
     let relativePath = PathManager.relativePath(from: url.standardizedFileURL.path)
     guard song.filePath != relativePath else { return false }
     song.filePath = relativePath
+    invalidateResolvedURLCache(for: song.id)
     return true
   }
 
@@ -2260,6 +2317,7 @@ import SwiftData
     songs   = []
     albums  = []
     artists = []
+    invalidateResolvedURLCache()
     isLoaded  = false
     isIndexing = false          // let indexOnStartup run again on next launch
     pendingMetadataFetches = 0
@@ -2282,18 +2340,87 @@ import SwiftData
       print("[DEBUG] SongLibrary.deleteSong: Skipping file deletion for referenced song")
     }
 
-    // 2. Remove from database
+    // 2. Remove from observable state before detaching its SwiftData backing.
+    removeSongsFromMemory(ids: Set([song.id]))
+
+    // 3. Drop rows that reference the song by loose UUID. These have no
+    // SwiftData relationship, so nothing cascades — without this they linger
+    // forever and the deleted track keeps appearing in history and most-played.
+    let albumRef = song.albumReference
+    let artistName = song.albumArtist ?? song.artist
+    purgeSongReferences(ids: Set([song.id]))
+
+    // 4. Remove from database
     modelContext.delete(song)
     saveContext()
 
-    // 3. Update local state
-    if let index = songs.firstIndex(where: { $0.id == song.id }) {
-      songs.remove(at: index)
+    // 5. Tidy up whatever the song was the last of.
+    pruneEmptyContainers(album: albumRef, artistName: artistName)
+  }
+
+  /// Deletes rows keyed to `ids` that SwiftData won't cascade, because they
+  /// store a bare `songId` rather than a relationship.
+  private func purgeSongReferences(ids: Set<UUID>) {
+    guard let modelContext = modelContext, !ids.isEmpty else { return }
+
+    if let history = try? modelContext.fetch(FetchDescriptor<ListeningHistory>()) {
+      for entry in history where ids.contains(entry.songId) {
+        modelContext.delete(entry)
+      }
     }
+    if let stats = try? modelContext.fetch(FetchDescriptor<SongPlayStatistics>()) {
+      for entry in stats where ids.contains(entry.songId) {
+        modelContext.delete(entry)
+      }
+    }
+    if let lyrics = try? modelContext.fetch(FetchDescriptor<SyncedLyric>()) {
+      for entry in lyrics where ids.contains(entry.songId) {
+        modelContext.delete(entry)
+      }
+    }
+
+    // The history tracker caches statistics by song id and lives in the app
+    // target, which this file can't reference (it also compiles into the watch
+    // app and the Lyrics extension). Tell it to drop its cache instead.
+    NotificationCenter.default.post(name: .songsWereDeleted, object: ids)
+  }
+
+  /// Removes an album or artist that the deletion just emptied, and refreshes
+  /// the counts shown alongside whatever survives.
+  private func pruneEmptyContainers(album: Album?, artistName: String?) {
+    guard let modelContext = modelContext else { return }
+
+    if let album, album.songs.isEmpty {
+      modelContext.delete(album)
+      albums.removeAll { $0.id == album.id }
+    }
+
+    if let artistName,
+      let artist = artists.first(where: {
+        $0.name.caseInsensitiveCompare(artistName) == .orderedSame
+      })
+    {
+      let remaining = songs.filter {
+        ($0.albumArtist ?? $0.artist).caseInsensitiveCompare(artist.name) == .orderedSame
+      }
+      if remaining.isEmpty {
+        modelContext.delete(artist)
+        artists.removeAll { $0.id == artist.id }
+      } else {
+        // Counts are stored, not derived, so they go stale unless updated here.
+        artist.songCount = remaining.count
+        artist.albumCount = Set(remaining.compactMap { $0.album }).count
+      }
+    }
+
+    saveContext()
+    notifyLibraryChange()
   }
 
   func deleteAlbum(_ album: Album) {
     guard let modelContext = modelContext else { return }
+
+    let deletedSongIDs = Set(album.songs.map(\.id))
 
     // 1. Delete all song files in the album only if they were copied
     for song in album.songs {
@@ -2305,9 +2432,17 @@ import SwiftData
       }
     }
 
-    // 2. Remove album from database (songs will cascade delete in DB)
+    // 2. Remove cascaded songs from observable state before SwiftData detaches
+    // them, then remove the album from the database.
+    let artistName = album.artist
+    removeSongsFromMemory(ids: deletedSongIDs)
+    // The album's songs cascade, but their history/stats/lyrics rows are keyed
+    // by bare UUID and would otherwise survive the album.
+    purgeSongReferences(ids: deletedSongIDs)
     modelContext.delete(album)
     saveContext()
+
+    pruneEmptyContainers(album: nil, artistName: artistName)
 
     // 3. Update local state
     if let index = albums.firstIndex(where: { $0.id == album.id }) {
@@ -2316,7 +2451,7 @@ import SwiftData
 
     // Reload songs to reflect deletions
     Task {
-      await loadSongs()
+      await loadSongs(force: true)
     }
   }
 

@@ -85,6 +85,7 @@ struct SettingsView: View {
 
       themingSection.listRowBackground(themeManager.cardBackgroundColor)
       layoutSection.listRowBackground(themeManager.cardBackgroundColor)
+      scrobblingSection.listRowBackground(themeManager.cardBackgroundColor)
       onlineFeaturesSection.listRowBackground(themeManager.cardBackgroundColor)
       webDAVSection.listRowBackground(themeManager.cardBackgroundColor)
       dataManagementSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -310,7 +311,12 @@ struct SettingsView: View {
       NavigationLink {
         WebDAVBrowserView()
       } label: {
+        // A NavigationLink renders its label in the primary text colour, while
+        // the Buttons above it pick up the accent tint — so this row read as a
+        // different kind of control than its neighbours. Tinted to match; the
+        // chevron still marks it as navigation.
         Label("Import from WebDAV", systemImage: "externaldrive.badge.icloud")
+          .foregroundStyle(themeManager.accentColor)
       }
       .disabled(isImporting)
 
@@ -495,16 +501,31 @@ struct SettingsView: View {
   private var librarySettingsSection: some View {
     Section {
       if let settings = settings {
-        Toggle(
-          "Group by Album",
-          isOn: Binding(
-            get: { settings.groupSongsByAlbum },
-            set: { newValue in
-              settings.groupSongsByAlbum = newValue
-              saveSettings()
-            }
+        let isCopying = userPreferences?.copyMusicToStorage ?? true
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle(
+            "Group by Album",
+            isOn: Binding(
+              get: { settings.groupSongsByAlbum },
+              set: { newValue in
+                settings.groupSongsByAlbum = newValue
+                saveSettings()
+              }
+            )
           )
-        )
+          // This only decides the folder layout that imported files are copied
+          // *into*. With copying off nothing is written, so the setting has no
+          // effect at all — disabling it beats silently doing nothing.
+          .disabled(!isCopying)
+
+          Text(
+            isCopying
+              ? "Files copied into Ampwave are filed under Artist/Album folders."
+              : "Only applies when Copy Imported Music is on — your files are left where they are."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
 
         Toggle(
           "Merge Duplicate Albums",
@@ -572,6 +593,39 @@ struct SettingsView: View {
     }
   }
 
+  /// Account-level scrobbling, kept apart from the general online-features
+  /// toggles since it owns a sign-in and a profile.
+  private var scrobblingSection: some View {
+    Section {
+      NavigationLink {
+        LastFMSettingsView()
+      } label: {
+        HStack {
+          Label("Last.fm", systemImage: "waveform.badge.magnifyingglass")
+          Spacer()
+          Text(lastFMStatusText)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+      }
+    } header: {
+      Text("Scrobbling")
+    }
+  }
+
+  private var lastFMStatusText: String {
+    let scrobbler = LastFMScrobbler.shared
+    guard scrobbler.isConfigured else { return "Unavailable" }
+    switch scrobbler.state {
+    case .signedIn(let username):
+      return scrobbler.isScrobblingEnabled ? username : "Paused"
+    case .awaitingAuthorization:
+      return "Signing in…"
+    case .signedOut:
+      return "Not signed in"
+    }
+  }
+
   private var onlineFeaturesSection: some View {
     Section {
       if let preferences = userPreferences {
@@ -591,21 +645,40 @@ struct SettingsView: View {
           )
         )
 
-        Toggle(
-          "Prefer Online Artwork",
-          isOn: Binding(
-            get: { preferences.preferOnlineArtwork },
-            set: { preferences.preferOnlineArtwork = $0 }
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle(
+            "Prefer Online Artwork",
+            isOn: Binding(
+              get: { preferences.preferOnlineArtwork },
+              set: { preferences.preferOnlineArtwork = $0 }
+            )
           )
-        )
+          // Replaces a contradictory pair: a second "Prefer Embedded Artwork"
+          // toggle (also on by default) vetoed this one for any song that had
+          // embedded art — precisely the songs it was meant to govern.
+          Text(
+            preferences.preferOnlineArtwork
+              ? "Higher-resolution art from Apple Music replaces the art embedded in your files."
+              : "Art embedded in your files is kept. Online art is only used when a song has none."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
 
-        Toggle(
-          "Prefer Embedded Artwork",
-          isOn: Binding(
-            get: { preferences.preferEmbeddedArtwork },
-            set: { preferences.preferEmbeddedArtwork = $0 }
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle(
+            "Offline Mode",
+            isOn: Binding(
+              get: { preferences.isOfflineMode },
+              set: { preferences.isOfflineMode = $0 }
+            )
           )
-        )
+          Text(
+            "Stops all network requests — metadata, artwork, lyrics and scrobbling. Scrobbles are queued and sent once you turn this off."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
 
         Toggle(
           "Enable Recommendations",
@@ -1061,6 +1134,12 @@ struct SettingsView: View {
     print("[DEBUG] SettingsView.resetLibrary: Starting full reset")
 
     Task {
+      // Release every long-lived reference before SwiftData detaches the rows.
+      // Clearing after save is too late: SwiftUI or the player can resolve an
+      // outstanding attribute fault during that gap and crash.
+      PlaybackController.shared.prepareForLibraryReset()
+      library.resetInMemoryState()
+
       // ── 1. Delete SwiftData records ───────────────────────────────────────
       // We fetch-and-delete each type individually rather than using the batch
       // `delete(model:)` API, which can throw silently due to relationship
@@ -1093,15 +1172,11 @@ struct SettingsView: View {
         print("[DEBUG] SettingsView.resetLibrary: SwiftData save error — \(error)")
       }
 
-      // ── 3. Clear in-memory library state ──────────────────────────────────
-      // Must happen before loadSongs() so the isLoaded guard doesn't skip the fetch.
-      library.resetInMemoryState()
-
-      // ── 4. Delete physical files & artwork cache ───────────────────────────
+      // ── 3. Delete physical files & artwork cache ───────────────────────────
       clearCache()
       library.deleteAllFiles()
 
-      // ── 5. Clear UserDefaults keys that would skip the next startup scan ──
+      // ── 4. Clear UserDefaults keys that would skip the next startup scan ──
       // lastDiskScanTime makes indexOnStartup skip if the directory looks unchanged.
       // Clearing it forces a full scan on next launch so no ghost data re-appears.
       let ud = UserDefaults.standard
@@ -1111,11 +1186,11 @@ struct SettingsView: View {
       // Also reset the indexing guard in SongLibrary so indexOnStartup runs cleanly
       ud.synchronize()
 
-      // ── 6. Reload from (now empty) SwiftData ──────────────────────────────
+      // ── 5. Reload from (now empty) SwiftData ──────────────────────────────
       await library.loadSongs(force: true)
       await playlistManager.loadPlaylists()
 
-      // ── 7. Reset onboarding + notify tab view ─────────────────────────────
+      // ── 6. Reset onboarding + notify tab view ─────────────────────────────
       // OpenTabView's .libraryDidReset handler increments libraryResetID (tears
       // down all NavigationStacks), switches to Home, and after a short delay
       // presents OnboardingView — all from the stable, long-lived OpenTabView.

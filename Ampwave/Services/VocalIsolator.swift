@@ -163,6 +163,37 @@ final class VocalIsolator {
         /// low-pass, which would silently defeat vocal removal entirely.
         var bassReady = false
 
+        // Apple ships a neural voice-isolation Audio Unit on iOS 16/macOS 13
+        // and later. Unlike mid/side cancellation, it can identify vocals that
+        // are doubled, reverberant, or spread across the stereo field.
+        //
+        // The unit has look-ahead latency. MTAudioProcessingTap requires the
+        // caller to absorb that latency, so source audio is read ahead and the
+        // dry signal is kept in this ring until the matching isolated-vocal
+        // frames are available. The returned audio therefore stays aligned to
+        // the asset timeline and to the synced lyrics.
+        #if !os(visionOS)
+        var soundIsolationUnit: AudioUnit?
+        var isolatedVoiceBuffer: AVAudioPCMBuffer?
+        var processedOutputBuffer: AVAudioPCMBuffer?
+        var sourceBuffer: AVAudioPCMBuffer?
+        var silenceBuffer: AVAudioPCMBuffer?
+        var currentNativeInput: UnsafeMutablePointer<AudioBufferList>?
+        var nativeLatencyFrames = 0
+        var nativePrimingFrames = 0
+        var nativeSampleTime: Float64 = 0
+        var nativeReady = false
+        var nativeStreamActivated = false
+        #endif
+
+        var dryLeft: [Float] = []
+        var dryRight: [Float] = []
+        var dryReadIndex = 0
+        var dryWriteIndex = 0
+        var dryFrameCount = 0
+        var sourceEnded = false
+        var outputStartPending = true
+
         var frameCounter: Int64 = 0
 
         init(
@@ -191,6 +222,10 @@ final class VocalIsolator {
             self.lastGains = Array(repeating: 0, count: n)
         }
 
+        deinit {
+            tearDownNativeVoiceIsolation()
+        }
+
         func recomputeCoeffsIfNeeded() {
             var changed = false
             for i in 0..<bandFreqs.count {
@@ -210,6 +245,627 @@ final class VocalIsolator {
             for i in 0..<eqCoeffs.count {
                 left  = eqState[i][0].process(left,  eqCoeffs[i])
                 right = eqState[i][1].process(right, eqCoeffs[i])
+            }
+        }
+
+        func resetFilterState() {
+            for band in eqState.indices {
+                for channel in eqState[band].indices {
+                    eqState[band][channel] = BiquadState()
+                }
+            }
+            bassState = BiquadState()
+        }
+
+        // MARK: Native voice separation
+
+        func prepareNativeVoiceIsolation(
+            maxFrames: CMItemCount,
+            processingFormat: UnsafePointer<AudioStreamBasicDescription>
+        ) {
+            tearDownNativeVoiceIsolation()
+
+            #if !os(visionOS)
+            guard maxFrames > 0 else { return }
+
+            let incomingFormat = processingFormat.pointee
+            guard incomingFormat.mFormatID == kAudioFormatLinearPCM,
+                  incomingFormat.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+                  incomingFormat.mBitsPerChannel == 32,
+                  incomingFormat.mChannelsPerFrame == 2
+            else { return }
+
+            var description = AudioComponentDescription(
+                componentType: kAudioUnitType_Effect,
+                componentSubType: kAudioUnitSubType_AUSoundIsolation,
+                componentManufacturer: kAudioUnitManufacturer_Apple,
+                componentFlags: 0,
+                componentFlagsMask: 0
+            )
+            guard let component = AudioComponentFindNext(nil, &description) else { return }
+
+            var newUnit: AudioUnit?
+            guard AudioComponentInstanceNew(component, &newUnit) == noErr,
+                  let unit = newUnit
+            else { return }
+
+            soundIsolationUnit = unit
+
+            // AUSoundIsolation is a neural separator with fixed internal rate
+            // expectations. Handing it a rate it doesn't support makes it throw
+            // a C++ exception from UpdateSliceDuration while building its
+            // processing graph — that surfaces as std::terminate/SIGABRT and
+            // cannot be caught from Swift, so it has to be prevented here.
+            // High-resolution FLAC (88.2 kHz and above) is the usual trigger.
+            guard Self.isSampleRateSupported(rate: incomingFormat.mSampleRate) else {
+                print(
+                    "[DEBUG] VocalIsolator: \(incomingFormat.mSampleRate) Hz unsupported by "
+                        + "AUSoundIsolation, using mid/side fallback")
+                tearDownNativeVoiceIsolation()
+                return
+            }
+
+            var format = incomingFormat
+            let formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+            guard
+                AudioUnitSetProperty(
+                    unit,
+                    kAudioUnitProperty_StreamFormat,
+                    kAudioUnitScope_Input,
+                    0,
+                    &format,
+                    formatSize
+                ) == noErr,
+                AudioUnitSetProperty(
+                    unit,
+                    kAudioUnitProperty_StreamFormat,
+                    kAudioUnitScope_Output,
+                    0,
+                    &format,
+                    formatSize
+                ) == noErr
+            else {
+                tearDownNativeVoiceIsolation()
+                return
+            }
+
+            var maximumFrames = UInt32(maxFrames)
+            guard AudioUnitSetProperty(
+                unit,
+                kAudioUnitProperty_MaximumFramesPerSlice,
+                kAudioUnitScope_Global,
+                0,
+                &maximumFrames,
+                UInt32(MemoryLayout<UInt32>.size)
+            ) == noErr else {
+                tearDownNativeVoiceIsolation()
+                return
+            }
+
+            var inputCallback = AURenderCallbackStruct(
+                inputProc: { refCon, _, _, _, frameCount, ioData in
+                    guard let ioData else { return kAudio_ParamError }
+                    let storage = Unmanaged<TapStorage>
+                        .fromOpaque(refCon)
+                        .takeUnretainedValue()
+                    return storage.supplyNativeInput(frameCount: frameCount, ioData: ioData)
+                },
+                inputProcRefCon: Unmanaged.passUnretained(self).toOpaque()
+            )
+            guard AudioUnitSetProperty(
+                unit,
+                kAudioUnitProperty_SetRenderCallback,
+                kAudioUnitScope_Input,
+                0,
+                &inputCallback,
+                UInt32(MemoryLayout<AURenderCallbackStruct>.size)
+            ) == noErr else {
+                tearDownNativeVoiceIsolation()
+                return
+            }
+
+            // Initialize before touching parameters. A parameter write kicks off
+            // the AU's *deferred* processing-graph build; doing that while the
+            // unit is still uninitialized is precisely the path that ends in
+            // UpdateSliceDuration throwing.
+            guard AudioUnitInitialize(unit) == noErr else {
+                tearDownNativeVoiceIsolation()
+                return
+            }
+
+            guard
+                AudioUnitSetParameter(
+                    unit,
+                    kAUSoundIsolationParam_WetDryMixPercent,
+                    kAudioUnitScope_Global,
+                    0,
+                    100,
+                    0
+                ) == noErr,
+                AudioUnitSetParameter(
+                    unit,
+                    kAUSoundIsolationParam_SoundToIsolate,
+                    kAudioUnitScope_Global,
+                    0,
+                    Float(kAUSoundIsolationSoundType_HighQualityVoice),
+                    0
+                ) == noErr
+            else {
+                tearDownNativeVoiceIsolation()
+                return
+            }
+
+            guard let audioFormat = AVAudioFormat(streamDescription: &format),
+                  let isolated = AVAudioPCMBuffer(
+                    pcmFormat: audioFormat,
+                    frameCapacity: AVAudioFrameCount(maximumFrames)
+                  ),
+                  let processedOutput = AVAudioPCMBuffer(
+                    pcmFormat: audioFormat,
+                    frameCapacity: AVAudioFrameCount(maximumFrames)
+                  ),
+                  let source = AVAudioPCMBuffer(
+                    pcmFormat: audioFormat,
+                    frameCapacity: AVAudioFrameCount(maximumFrames)
+                  ),
+                  let silence = AVAudioPCMBuffer(
+                    pcmFormat: audioFormat,
+                    frameCapacity: AVAudioFrameCount(maximumFrames)
+                  )
+            else {
+                tearDownNativeVoiceIsolation()
+                return
+            }
+
+            var latency: Float64 = 0
+            var latencySize = UInt32(MemoryLayout<Float64>.size)
+            guard AudioUnitGetProperty(
+                unit,
+                kAudioUnitProperty_Latency,
+                kAudioUnitScope_Global,
+                0,
+                &latency,
+                &latencySize
+            ) == noErr else {
+                tearDownNativeVoiceIsolation()
+                return
+            }
+
+            isolatedVoiceBuffer = isolated
+            processedOutputBuffer = processedOutput
+            sourceBuffer = source
+            silenceBuffer = silence
+            nativeLatencyFrames = max(0, Int((latency * format.mSampleRate).rounded()))
+
+            // The ring can temporarily contain the entire look-ahead plus one
+            // render slice while the Audio Unit is being primed.
+            let ringCapacity = max(1, nativeLatencyFrames + Int(maximumFrames) + 1)
+            dryLeft = Array(repeating: 0, count: ringCapacity)
+            dryRight = Array(repeating: 0, count: ringCapacity)
+            nativeReady = true
+            resetNativeStream()
+            #endif
+        }
+
+        /// Rates the neural isolator is allowed to run at.
+        ///
+        /// There is no AudioUnit property that reports this — an AU advertises
+        /// nothing about which rates its internal model accepts, and setting an
+        /// unsupported stream format still returns `noErr`. The failure only
+        /// shows up later, as an uncatchable C++ throw while the AU builds its
+        /// processing graph. So the allowlist is deliberate rather than
+        /// discovered: these are the rates the separator is built around, and
+        /// anything else (notably high-resolution FLAC at 88.2 kHz and up)
+        /// takes the mid/side path instead.
+        private static let supportedIsolationSampleRates: Set<Double> = [44_100, 48_000]
+
+        private static func isSampleRateSupported(rate: Double) -> Bool {
+            // Rates arrive as Double from the stream description, so compare
+            // with a tolerance rather than relying on exact equality.
+            supportedIsolationSampleRates.contains { abs($0 - rate) < 1 }
+        }
+
+        func tearDownNativeVoiceIsolation() {
+            #if !os(visionOS)
+            if let unit = soundIsolationUnit {
+                AudioUnitUninitialize(unit)
+                AudioComponentInstanceDispose(unit)
+            }
+            soundIsolationUnit = nil
+            isolatedVoiceBuffer = nil
+            processedOutputBuffer = nil
+            sourceBuffer = nil
+            silenceBuffer = nil
+            currentNativeInput = nil
+            nativeLatencyFrames = 0
+            nativePrimingFrames = 0
+            nativeSampleTime = 0
+            nativeReady = false
+            nativeStreamActivated = false
+            #endif
+
+            dryLeft.removeAll(keepingCapacity: false)
+            dryRight.removeAll(keepingCapacity: false)
+            dryReadIndex = 0
+            dryWriteIndex = 0
+            dryFrameCount = 0
+            sourceEnded = false
+            outputStartPending = true
+        }
+
+        func resetNativeStream() {
+            #if !os(visionOS)
+            guard nativeReady, let unit = soundIsolationUnit else { return }
+            AudioUnitReset(unit, kAudioUnitScope_Global, 0)
+            nativePrimingFrames = nativeLatencyFrames
+            nativeSampleTime = 0
+            #else
+            return
+            #endif
+
+            dryReadIndex = 0
+            dryWriteIndex = 0
+            dryFrameCount = 0
+            sourceEnded = false
+            outputStartPending = true
+            resetFilterState()
+        }
+
+        #if !os(visionOS)
+        func supplyNativeInput(
+            frameCount: UInt32,
+            ioData: UnsafeMutablePointer<AudioBufferList>
+        ) -> OSStatus {
+            guard let input = currentNativeInput else {
+                return kAudioUnitErr_NoConnection
+            }
+
+            let source = UnsafeMutableAudioBufferListPointer(input)
+            let destination = UnsafeMutableAudioBufferListPointer(ioData)
+            guard source.count == destination.count else {
+                return kAudioUnitErr_FormatNotSupported
+            }
+
+            for index in 0..<source.count {
+                let sourceBuffer = source[index]
+                let byteCount = min(
+                    sourceBuffer.mDataByteSize,
+                    destination[index].mDataByteSize
+                )
+                destination[index].mNumberChannels = sourceBuffer.mNumberChannels
+                destination[index].mDataByteSize = byteCount
+
+                if let destinationData = destination[index].mData,
+                   let sourceData = sourceBuffer.mData
+                {
+                    memcpy(destinationData, sourceData, Int(byteCount))
+                } else {
+                    destination[index].mData = sourceBuffer.mData
+                    destination[index].mDataByteSize = sourceBuffer.mDataByteSize
+                }
+            }
+            return noErr
+        }
+        #endif
+
+        func pushDryAudio(from bufferList: UnsafeMutablePointer<AudioBufferList>, frameCount: Int) {
+            guard frameCount > 0, !dryLeft.isEmpty else { return }
+            let buffers = UnsafeMutableAudioBufferListPointer(bufferList)
+
+            if buffers.count == 1,
+               buffers[0].mNumberChannels == 2,
+               let data = buffers[0].mData?.assumingMemoryBound(to: Float.self)
+            {
+                for frame in 0..<frameCount {
+                    dryLeft[dryWriteIndex] = data[frame * 2]
+                    dryRight[dryWriteIndex] = data[frame * 2 + 1]
+                    advanceDryWriteIndex()
+                }
+            } else if buffers.count >= 2,
+                      let left = buffers[0].mData?.assumingMemoryBound(to: Float.self),
+                      let right = buffers[1].mData?.assumingMemoryBound(to: Float.self)
+            {
+                for frame in 0..<frameCount {
+                    dryLeft[dryWriteIndex] = left[frame]
+                    dryRight[dryWriteIndex] = right[frame]
+                    advanceDryWriteIndex()
+                }
+            }
+        }
+
+        private func advanceDryWriteIndex() {
+            dryWriteIndex += 1
+            if dryWriteIndex == dryLeft.count { dryWriteIndex = 0 }
+            if dryFrameCount < dryLeft.count {
+                dryFrameCount += 1
+            } else {
+                // Defensive only: the ring is sized so normal look-ahead can
+                // never overwrite unread frames.
+                dryReadIndex = dryWriteIndex
+            }
+        }
+
+        private func popDryAudio() -> (Float, Float)? {
+            guard dryFrameCount > 0 else { return nil }
+            let result = (dryLeft[dryReadIndex], dryRight[dryReadIndex])
+            dryReadIndex += 1
+            if dryReadIndex == dryLeft.count { dryReadIndex = 0 }
+            dryFrameCount -= 1
+            return result
+        }
+
+        func renderNativeVoice(
+            input: UnsafeMutablePointer<AudioBufferList>,
+            frameCount: UInt32,
+            outputBuffer: AVAudioPCMBuffer,
+            outputOffset: inout Int,
+            outputLimit: Int
+        ) -> Bool {
+            #if os(visionOS)
+            return false
+            #else
+            guard nativeReady,
+                  let unit = soundIsolationUnit,
+                  let isolatedVoiceBuffer
+            else { return false }
+
+            isolatedVoiceBuffer.frameLength = frameCount
+            currentNativeInput = input
+
+            var timestamp = AudioTimeStamp()
+            timestamp.mSampleTime = nativeSampleTime
+            timestamp.mFlags = .sampleTimeValid
+            var actionFlags: AudioUnitRenderActionFlags = []
+            let status = AudioUnitRender(
+                unit,
+                &actionFlags,
+                &timestamp,
+                0,
+                frameCount,
+                isolatedVoiceBuffer.mutableAudioBufferList
+            )
+            currentNativeInput = nil
+            guard status == noErr else { return false }
+
+            nativeSampleTime += Float64(frameCount)
+            let isolatedBuffers = UnsafeMutableAudioBufferListPointer(
+                isolatedVoiceBuffer.mutableAudioBufferList
+            )
+            let destination = UnsafeMutableAudioBufferListPointer(
+                outputBuffer.mutableAudioBufferList
+            )
+
+            let skipCount = min(nativePrimingFrames, Int(frameCount))
+            nativePrimingFrames -= skipCount
+            guard skipCount < Int(frameCount) else { return true }
+
+            for frame in skipCount..<Int(frameCount) {
+                guard outputOffset < outputLimit, let dry = popDryAudio() else { break }
+
+                let isolated: (Float, Float)
+                if isolatedBuffers.count == 1,
+                   isolatedBuffers[0].mNumberChannels == 2,
+                   let data = isolatedBuffers[0].mData?.assumingMemoryBound(to: Float.self)
+                {
+                    isolated = (data[frame * 2], data[frame * 2 + 1])
+                } else if isolatedBuffers.count >= 2,
+                          let left = isolatedBuffers[0].mData?.assumingMemoryBound(to: Float.self),
+                          let right = isolatedBuffers[1].mData?.assumingMemoryBound(to: Float.self)
+                {
+                    isolated = (left[frame], right[frame])
+                } else {
+                    return false
+                }
+
+                var left = dry.0
+                var right = dry.1
+                applyNativeVocalLevel(
+                    left: &left,
+                    right: &right,
+                    isolatedLeft: isolated.0,
+                    isolatedRight: isolated.1
+                )
+                if eqEnabled.pointee { applyEQ(left: &left, right: &right) }
+
+                if destination.count == 1,
+                   destination[0].mNumberChannels == 2,
+                   let data = destination[0].mData?.assumingMemoryBound(to: Float.self)
+                {
+                    data[outputOffset * 2] = left
+                    data[outputOffset * 2 + 1] = right
+                } else if destination.count >= 2,
+                          let leftData = destination[0].mData?.assumingMemoryBound(to: Float.self),
+                          let rightData = destination[1].mData?.assumingMemoryBound(to: Float.self)
+                {
+                    leftData[outputOffset] = left
+                    rightData[outputOffset] = right
+                } else {
+                    return false
+                }
+                outputOffset += 1
+            }
+            return true
+            #endif
+        }
+
+        private func applyNativeVocalLevel(
+            left: inout Float,
+            right: inout Float,
+            isolatedLeft: Float,
+            isolatedRight: Float
+        ) {
+            let target = targetLevel.pointee
+            var current = currentLevel.pointee
+            current += (target - current) * 0.015
+
+            // Equal-power-ish curve, matching the feel of Apple Music Sing:
+            // the top of the control is subtle while the bottom has enough
+            // travel to let the listener take the lead.
+            let vocalGain = pow(sin(min(max(current, 0), 1) * .pi * 0.5), 1.35)
+            let removalAmount = 1 - vocalGain
+            left -= isolatedLeft * removalAmount
+            right -= isolatedRight * removalAmount
+            currentLevel.pointee = current
+        }
+
+        func processWithNativeVoiceIsolation(
+            tap: MTAudioProcessingTap,
+            requestedFrames: CMItemCount,
+            inputFlags: MTAudioProcessingTapFlags,
+            outputList: UnsafeMutablePointer<AudioBufferList>,
+            framesOut: UnsafeMutablePointer<CMItemCount>?,
+            flagsOut: UnsafeMutablePointer<MTAudioProcessingTapFlags>?
+        ) -> Bool {
+            #if os(visionOS)
+            return false
+            #else
+            guard nativeReady,
+                  let sourceBuffer,
+                  let silenceBuffer,
+                  let processedOutputBuffer,
+                  requestedFrames > 0
+            else { return false }
+
+            // Avoid running the neural model for ordinary playback. Once the
+            // listener lowers the vocal level we keep it active for the rest
+            // of the stream because it has already read ahead by its latency.
+            let wantsVocalAdjustment =
+                targetLevel.pointee < 0.999 || currentLevel.pointee < 0.999
+            guard nativeStreamActivated || wantsVocalAdjustment else { return false }
+            if !nativeStreamActivated {
+                resetNativeStream()
+                nativeStreamActivated = true
+                // Turning the control on mid-song is not a source
+                // discontinuity and must not reset AVPlayer's timeline.
+                outputStartPending = false
+            }
+
+            if inputFlags & kMTAudioProcessingTapFlag_StartOfStream != 0 {
+                resetNativeStream()
+            }
+            if eqEnabled.pointee { recomputeCoeffsIfNeeded() }
+
+            let requested = Int(requestedFrames)
+            processedOutputBuffer.frameLength = AVAudioFrameCount(requested)
+            var produced = 0
+            var outputFlags: MTAudioProcessingTapFlags = 0
+
+            while produced < requested {
+                if !sourceEnded {
+                    let framesNeeded = nativePrimingFrames + (requested - produced)
+                    let fetchCount = min(Int(sourceBuffer.frameCapacity), max(1, framesNeeded))
+                    sourceBuffer.frameLength = AVAudioFrameCount(fetchCount)
+
+                    var sourceFlags: MTAudioProcessingTapFlags = 0
+                    var fetched: CMItemCount = 0
+                    let status = MTAudioProcessingTapGetSourceAudio(
+                        tap,
+                        CMItemCount(fetchCount),
+                        sourceBuffer.mutableAudioBufferList,
+                        &sourceFlags,
+                        nil,
+                        &fetched
+                    )
+                    guard status == noErr else { return false }
+
+                    if sourceFlags & kMTAudioProcessingTapFlag_StartOfStream != 0,
+                       !outputStartPending
+                    {
+                        resetNativeStream()
+                    }
+                    if sourceFlags & kMTAudioProcessingTapFlag_StartOfStream != 0 {
+                        outputStartPending = true
+                    }
+
+                    if fetched > 0 {
+                        sourceBuffer.frameLength = AVAudioFrameCount(fetched)
+                        pushDryAudio(
+                            from: sourceBuffer.mutableAudioBufferList,
+                            frameCount: Int(fetched)
+                        )
+                        guard renderNativeVoice(
+                            input: sourceBuffer.mutableAudioBufferList,
+                            frameCount: UInt32(fetched),
+                            outputBuffer: processedOutputBuffer,
+                            outputOffset: &produced,
+                            outputLimit: requested
+                        ) else { return false }
+                    }
+
+                    if sourceFlags & kMTAudioProcessingTapFlag_EndOfStream != 0
+                        || fetched < CMItemCount(fetchCount)
+                    {
+                        sourceEnded = true
+                    }
+                    if fetched == 0 && !sourceEnded {
+                        sourceEnded = true
+                    }
+                } else if dryFrameCount > 0 {
+                    // Flush the Audio Unit's look-ahead with silence. These
+                    // frames are never added to the dry queue, so output ends
+                    // at exactly the original asset length.
+                    let flushCount = min(
+                        Int(silenceBuffer.frameCapacity),
+                        max(1, nativePrimingFrames + (requested - produced))
+                    )
+                    silenceBuffer.frameLength = AVAudioFrameCount(flushCount)
+                    let silenceList = UnsafeMutableAudioBufferListPointer(
+                        silenceBuffer.mutableAudioBufferList
+                    )
+                    for buffer in silenceList {
+                        if let data = buffer.mData {
+                            memset(data, 0, Int(buffer.mDataByteSize))
+                        }
+                    }
+                    guard renderNativeVoice(
+                        input: silenceBuffer.mutableAudioBufferList,
+                        frameCount: UInt32(flushCount),
+                        outputBuffer: processedOutputBuffer,
+                        outputOffset: &produced,
+                        outputLimit: requested
+                    ) else { return false }
+                } else {
+                    break
+                }
+            }
+
+            processedOutputBuffer.frameLength = AVAudioFrameCount(produced)
+            copyAudio(
+                from: processedOutputBuffer.mutableAudioBufferList,
+                to: outputList
+            )
+            framesOut?.pointee = CMItemCount(produced)
+
+            if outputStartPending {
+                outputFlags |= kMTAudioProcessingTapFlag_StartOfStream
+                outputStartPending = false
+            }
+            if sourceEnded && dryFrameCount == 0 {
+                outputFlags |= kMTAudioProcessingTapFlag_EndOfStream
+            }
+            flagsOut?.pointee = outputFlags
+            return true
+            #endif
+        }
+
+        private func copyAudio(
+            from sourceList: UnsafeMutablePointer<AudioBufferList>,
+            to destinationList: UnsafeMutablePointer<AudioBufferList>
+        ) {
+            let source = UnsafeMutableAudioBufferListPointer(sourceList)
+            let destination = UnsafeMutableAudioBufferListPointer(destinationList)
+            guard source.count == destination.count else { return }
+
+            for index in 0..<source.count {
+                destination[index].mNumberChannels = source[index].mNumberChannels
+                destination[index].mDataByteSize = source[index].mDataByteSize
+                if let destinationData = destination[index].mData,
+                   let sourceData = source[index].mData
+                {
+                    memcpy(destinationData, sourceData, Int(source[index].mDataByteSize))
+                } else {
+                    destination[index].mData = source[index].mData
+                }
             }
         }
     }
@@ -264,18 +920,46 @@ final class VocalIsolator {
                     sampleRate: storage.sampleRate
                 )
                 storage.bassReady = true
+                storage.prepareNativeVoiceIsolation(
+                    maxFrames: maxFrames,
+                    processingFormat: processingFormat
+                )
             },
 
-            unprepare: nil,
-
-            process: { tap, numberFrames, _, bufferListInOut, numberFramesOut, _ in
-                let status = MTAudioProcessingTapGetSourceAudio(
-                    tap, numberFrames, bufferListInOut, nil, nil, numberFramesOut)
-                guard status == noErr else { return }
-
+            unprepare: { tap in
                 let storage = Unmanaged<TapStorage>
                     .fromOpaque(MTAudioProcessingTapGetStorage(tap))
                     .takeUnretainedValue()
+                storage.tearDownNativeVoiceIsolation()
+            },
+
+            process: { tap, numberFrames, flags, bufferListInOut, numberFramesOut, flagsOut in
+                let storage = Unmanaged<TapStorage>
+                    .fromOpaque(MTAudioProcessingTapGetStorage(tap))
+                    .takeUnretainedValue()
+
+                // Prefer Apple's neural voice separator. It is what makes the
+                // control work on modern stereo mixes where the vocal isn't a
+                // single center-panned signal. Vision Pro and any unexpected
+                // unsupported format keep the deterministic mid/side path.
+                if storage.processWithNativeVoiceIsolation(
+                    tap: tap,
+                    requestedFrames: numberFrames,
+                    inputFlags: flags,
+                    outputList: bufferListInOut,
+                    framesOut: numberFramesOut,
+                    flagsOut: flagsOut
+                ) {
+                    return
+                }
+
+                let status = MTAudioProcessingTapGetSourceAudio(
+                    tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut)
+                guard status == noErr else { return }
+
+                if flags & kMTAudioProcessingTapFlag_StartOfStream != 0 {
+                    storage.resetFilterState()
+                }
 
                 let target = storage.targetLevel.pointee
                 var current = storage.currentLevel.pointee

@@ -12,6 +12,8 @@ internal import SwiftUI
 extension Notification.Name {
   /// Posted after the user resets their library so tabs can clear their navigation stacks.
   static let libraryDidReset = Notification.Name("com.ampwave.libraryDidReset")
+  static let capsuleDidImport = Notification.Name("com.ampwave.capsuleDidImport")
+  static let capsuleImportFailed = Notification.Name("com.ampwave.capsuleImportFailed")
 }
 
 /// Applies tint and color scheme from `ThemeManager` in the environment (observation-safe; avoids @State + singleton issues).
@@ -58,6 +60,8 @@ struct AmpwaveApp: App {
       AppSettings.self,
       UserPreferences.self,
       PlaybackState.self,
+      PendingScrobble.self,
+      AmpwaveCapsule.self,
     ])
 
     // Configure storage in App Group for sharing with extensions
@@ -122,7 +126,7 @@ struct AmpwaveApp: App {
       }
       .environment(ThemeManager.shared)
       .environment(SleepTimerService.shared)
-      .onOpenURL { AmpwaveURLRouter.handle($0) }
+      .onOpenURL { handleOpenURL($0) }
       #if os(iOS)
         .onChange(of: scenePhase) { _, phase in
           // Leaving the app: ask for a later window so anything the
@@ -150,5 +154,30 @@ struct AmpwaveApp: App {
       .windowResizability(.automatic)
       .defaultSize(width: 400, height: 600)
     #endif
+  }
+
+  private func handleOpenURL(_ url: URL) {
+    guard url.pathExtension.lowercased() == CapsulePackage.fileExtension else {
+      AmpwaveURLRouter.handle(url)
+      return
+    }
+
+    Task { @MainActor in
+      let secured = url.startAccessingSecurityScopedResource()
+      defer { if secured { url.stopAccessingSecurityScopedResource() } }
+      do {
+        let capsule = try await CapsulePackage.importCapsule(
+          from: url,
+          into: modelContainer.mainContext,
+          library: SongLibrary.shared
+        )
+        NotificationCenter.default.post(name: .capsuleDidImport, object: capsule.id)
+      } catch {
+        NotificationCenter.default.post(
+          name: .capsuleImportFailed,
+          object: error.localizedDescription
+        )
+      }
+    }
   }
 }

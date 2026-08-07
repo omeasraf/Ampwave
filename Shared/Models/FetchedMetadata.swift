@@ -24,6 +24,8 @@ struct FetchedMetadata {
   var duration: TimeInterval?
   var musicBrainzId: String?
   var appleMusicId: String?
+  var albumAppleMusicId: String?
+  var artistAppleMusicId: String?
   var artworkURL: URL?
   var songDescription: String?
   var albumArtist: String?
@@ -53,6 +55,8 @@ struct FetchedMetadata {
     duration: TimeInterval? = nil,
     musicBrainzId: String? = nil,
     appleMusicId: String? = nil,
+    albumAppleMusicId: String? = nil,
+    artistAppleMusicId: String? = nil,
     artworkURL: URL? = nil,
     songDescription: String? = nil,
     albumArtist: String? = nil,
@@ -81,6 +85,8 @@ struct FetchedMetadata {
     self.duration = duration
     self.musicBrainzId = musicBrainzId
     self.appleMusicId = appleMusicId
+    self.albumAppleMusicId = albumAppleMusicId
+    self.artistAppleMusicId = artistAppleMusicId
     self.artworkURL = artworkURL
     self.songDescription = songDescription
     self.albumArtist = albumArtist

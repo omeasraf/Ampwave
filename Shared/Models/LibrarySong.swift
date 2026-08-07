@@ -42,7 +42,10 @@ final class LibrarySong: Identifiable, Hashable {
   // MARK: - Core display
   var title: String
   var artist: String
-  @Attribute(.externalStorage) var artists: [String]  // All artists (parsed from artist field)
+  // Artist lists are tiny and are read throughout navigation, search, and
+  // cleanup. Keeping them inline prevents an external-storage fault from
+  // being resolved after SwiftData has detached a deleted model.
+  var artists: [String]  // All artists (parsed from artist field)
   var duration: TimeInterval
 
   // MARK: - Extended metadata (optional)
@@ -78,6 +81,9 @@ final class LibrarySong: Identifiable, Hashable {
   var isLive: Bool = false
   var isMedley: Bool = false
   var isExplicit: Bool = false
+  /// ReplayGain track gain in dB from the file's tags, used by volume
+  /// normalization. Nil when the file carries no ReplayGain tag.
+  var replayGainDB: Double?
 
   @Relationship(inverse: \Album.songs)
   var albumReference: Album?
@@ -107,7 +113,11 @@ final class LibrarySong: Identifiable, Hashable {
   var processingChain: String?
 
   // MARK: - Search Indexing
-  var searchIndex: String? = ""
+  /// Bumped whenever searchable text changes, so the in-memory search index
+  /// can tell which entries need rebuilding. Replaces a persisted copy of the
+  /// normalized text, which cost a multi-kilobyte write per song per update
+  /// and was only ever read to be re-normalized anyway.
+  var searchContentVersion: Int = 0
 
   // MARK: - Fetching status
   var metadataCheckAttempted: Bool = false
@@ -167,7 +177,8 @@ final class LibrarySong: Identifiable, Hashable {
     metadataSourceAlbum: String? = nil,
     isLive: Bool = false,
     isMedley: Bool = false,
-    isExplicit: Bool = false
+    isExplicit: Bool = false,
+    replayGainDB: Double? = nil
   ) {
     self.id = UUID()
     self.title = title
@@ -221,6 +232,7 @@ final class LibrarySong: Identifiable, Hashable {
     self.isLive = isLive
     self.isMedley = isMedley
     self.isExplicit = isExplicit
+    self.replayGainDB = replayGainDB
   }
 
   static func == (lhs: LibrarySong, rhs: LibrarySong) -> Bool {
@@ -233,41 +245,15 @@ final class LibrarySong: Identifiable, Hashable {
 
   // MARK: - Search Indexing
 
+  /// Marks the song's searchable text as changed.
+  ///
+  /// The normalized text itself is no longer persisted — `SearchManager` keeps
+  /// it in memory and rebuilds only the entries whose fingerprint changed. This
+  /// bumps that fingerprint, which is all a persisted column was ever really
+  /// providing, without rewriting a multi-kilobyte string to SwiftData on
+  /// every metadata or lyrics update.
   func updateSearchIndex() {
-    let components = [
-      title,
-      artist,
-      album ?? "",
-      albumArtist ?? "",
-      genre ?? "",
-      cleanLyrics(),
-    ]
-
-    self.searchIndex =
-      components
-      .filter { !$0.isEmpty }
-      .joined(separator: " ")
-      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-      .replacingOccurrences(of: "[''\"\"“”]", with: "", options: .regularExpression)
-      .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)
-      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .lowercased()
-  }
-
-  private func cleanLyrics() -> String {
-    guard let lyrics = lyrics, !lyrics.isEmpty else { return "" }
-
-    // Remove LRC timestamps like [00:12.34] or [00:12:34]
-    let timestampPattern = #"\[\d{2}:\d{2}[\.:]\d{2,3}\]"#
-    let cleaned = lyrics.replacingOccurrences(
-      of: timestampPattern,
-      with: "",
-      options: .regularExpression
-    )
-
-    // Limit indexing to first 5000 characters to allow better lyric searching for long songs
-    return String(cleaned.prefix(5000))
+    searchContentVersion &+= 1
   }
 
   // MARK: - Album Track Ordering

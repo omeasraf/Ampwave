@@ -25,6 +25,8 @@ struct ExtractedAudioMetadata: Sendable {
   var composer: String?
   var artwork: Data?
   var isExplicit: Bool?
+  /// ReplayGain track gain in dB, when the file carries the tag.
+  var replayGainDB: Double?
 
   // Confidence & Sources
   var titleConfidence: Double = 0.0
@@ -83,11 +85,23 @@ enum AudioMetadataExtractor: Sendable {
     var artwork: Data?
     var isCompilation: Bool = false
     var isExplicit: Bool?
+    var replayGainDB: Double?
 
     for item in allMetadata {
       let value = try? await item.load(.value)
       let idRaw = item.identifier?.rawValue ?? ""
       let idLower = idRaw.lowercased()
+      // FLAC/Ogg carry ReplayGain as a Vorbis comment and MP3 as a TXXX frame;
+      // in both cases the tag name lands on `key` rather than the identifier.
+      let keyLower = ((item.key as? String) ?? "").lowercased()
+
+      if replayGainDB == nil,
+        idLower.contains("replaygain") || keyLower.contains("replaygain"),
+        keyLower.contains("track") || idLower.contains("track") || keyLower.isEmpty,
+        let gain = parseReplayGain(value)
+      {
+        replayGainDB = gain
+      }
 
       // ── Non-common-key path (format-specific identifiers) ──────────────────
       guard let key = item.commonKey else {
@@ -265,6 +279,7 @@ enum AudioMetadataExtractor: Sendable {
       composer: composer,
       artwork: artwork,
       isExplicit: isExplicit,
+      replayGainDB: replayGainDB,
       titleConfidence: titleConfidence,
       artistConfidence: artistConfidence,
       albumConfidence: albumConfidence,
@@ -333,6 +348,29 @@ enum AudioMetadataExtractor: Sendable {
   private static func parseTrackNumber(_ s: String) -> Int? {
     let part = s.split(separator: "/").first.flatMap(String.init) ?? s
     return Int(part.trimmingCharacters(in: .whitespaces))
+  }
+
+  /// Parses a ReplayGain value, which tags store as `"-6.54 dB"`, `"+3.20 dB"`
+  /// or a bare number. Returns decibels relative to the tag's reference level.
+  private static func parseReplayGain(_ value: Any?) -> Double? {
+    let raw: String
+    if let string = value as? String {
+      raw = string
+    } else if let number = value as? NSNumber {
+      raw = number.stringValue
+    } else {
+      return nil
+    }
+
+    let cleaned =
+      raw
+      .replacingOccurrences(of: "dB", with: "", options: [.caseInsensitive])
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard let gain = Double(cleaned), gain.isFinite else { return nil }
+    // Real-world tags sit within roughly ±30 dB; anything wilder is a bad tag.
+    guard gain > -30, gain < 30 else { return nil }
+    return gain
   }
 
   /// Parses year from "2024" or "2024-01-01"

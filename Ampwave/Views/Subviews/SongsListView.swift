@@ -8,7 +8,7 @@
 import SwiftData
 internal import SwiftUI
 
-// MARK: - Nonisolated sort helper (safe to call from Task.detached)
+// MARK: - Sort helper
 
 private func sortSongs(
   _ songs: [LibrarySong],
@@ -48,7 +48,7 @@ struct SongsListView: View {
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
-  /// Cached sort result — updated off the main thread via .task(id:).
+  /// Cached sort result, kept on the same actor as its SwiftData models.
   @State private var sortedSongs: [LibrarySong] = []
 
   private var library: SongLibrary { SongLibrary.shared }
@@ -70,7 +70,8 @@ struct SongsListView: View {
       .listStyle(.plain)
       .scrollContentBackground(.hidden)
       .background(themeManager.backgroundColor)
-      // Re-sort off the main thread whenever sort order or library size changes.
+      // Persistent models must stay on the model context's actor. Passing this
+      // array through Task.detached can detach unresolved SwiftData faults.
       .task(id: sortCacheKey) {
         let songs = library.songs
         let order = appSettings.songSortOrder
@@ -84,11 +85,7 @@ struct SongsListView: View {
         } else {
           ratingsDict = [:]
         }
-        // Do the actual sort on a background thread so the main thread stays responsive.
-        let result = await Task.detached(priority: .userInitiated) {
-          sortSongs(songs, order: order, ratings: ratingsDict)
-        }.value
-        sortedSongs = result
+        sortedSongs = sortSongs(songs, order: order, ratings: ratingsDict)
       }
       .overlay {
         if library.songs.isEmpty {

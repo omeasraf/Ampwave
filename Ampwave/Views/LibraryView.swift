@@ -137,6 +137,73 @@ struct GridSizePicker: View {
   }
 }
 
+// MARK: - Library grid density
+
+/// Grid density shared by the Albums and Artists tabs.
+///
+/// Both tabs previously offered different options (Albums had three sizes,
+/// Artists two, with mismatched icons), so the same control meant different
+/// things depending on the tab. One enum owns the columns, gutters and cell
+/// width for both so the tabs stay in step.
+enum LibraryGridSize: String, CaseIterable {
+  case small
+  case medium
+  case large
+
+  var columnCount: Int {
+    switch self {
+    case .small: return 3
+    case .medium: return 2
+    case .large: return 1
+    }
+  }
+
+  /// Gutter between cells. Denser grids get tighter gutters so the artwork —
+  /// not the whitespace — keeps most of the row.
+  var spacing: CGFloat {
+    switch self {
+    case .small: return 10
+    case .medium: return 16
+    case .large: return 20
+    }
+  }
+
+  var horizontalPadding: CGFloat {
+    self == .small ? 16 : 20
+  }
+
+  var icon: String {
+    switch self {
+    case .small: return "square.grid.3x3.fill"
+    case .medium: return "square.grid.2x2.fill"
+    case .large: return "rectangle.fill"
+    }
+  }
+
+  static var pickerOptions: [(id: String, icon: String)] {
+    allCases.map { (id: $0.rawValue, icon: $0.icon) }
+  }
+
+  var gridColumns: [GridItem] {
+    Array(
+      repeating: GridItem(.flexible(), spacing: spacing, alignment: .top),
+      count: columnCount
+    )
+  }
+
+  /// Row gap is slightly wider than the column gap: the caption text under each
+  /// cell already reads as vertical space, so matching gaps look cramped.
+  var rowSpacing: CGFloat { spacing + 6 }
+
+  /// Exact cell width for a container of `width`. The cards take a fixed width
+  /// rather than `maxWidth: .infinity`, so handing them the measured value is
+  /// what keeps artwork square and captions aligned with the artwork edge.
+  func cellWidth(in width: CGFloat) -> CGFloat {
+    let usable = width - horizontalPadding * 2 - spacing * CGFloat(columnCount - 1)
+    return max(60, (usable / CGFloat(columnCount)).rounded(.down))
+  }
+}
+
 // MARK: - LibrarySortMenu
 
 struct LibrarySortMenu: View {
@@ -409,38 +476,15 @@ struct AlbumsGridView: View {
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
-  @AppStorage("com.ampwave.albumGridSize") private var albumGridSizeRaw: String = "large"
-  /// Tracks the ScrollView's available width so the full-bleed large mode can pass exact column
-  /// widths to AlbumCard (avoiding a GeometryReader inside LazyVGrid which causes layout issues).
+  // Key is versioned: the stored values now mean different column counts than the
+  // pre-shared-layout build, so old selections shouldn't carry over.
+  @AppStorage("com.ampwave.albumGridSize.v2") private var albumGridSizeRaw: String = "medium"
+  /// Tracks the ScrollView's available width so exact column widths can be handed to
+  /// AlbumCard (a GeometryReader inside LazyVGrid causes layout issues).
   @State private var gridWidth: CGFloat = 400
 
-  private var isLargeMode: Bool { albumGridSizeRaw == "large" }
-  private var isSmallMode: Bool { albumGridSizeRaw == "small" }
-
-  private var artworkSize: CGFloat {
-    switch albumGridSizeRaw {
-    case "small":  return 90
-    case "medium": return 130
-    default:       return (gridWidth - 2) / 2   // large: fills half the available width
-    }
-  }
-
-  private var gridColumns: [GridItem] {
-    switch albumGridSizeRaw {
-    case "large":
-      // 2 columns, 2 pt gap — full bleed, no outer padding
-      return [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
-    case "small":
-      // 3 columns
-      return [
-        GridItem(.flexible(), spacing: 8),
-        GridItem(.flexible(), spacing: 8),
-        GridItem(.flexible(), spacing: 8),
-      ]
-    default:
-      // medium — 2 columns with breathing room
-      return [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)]
-    }
+  private var gridSize: LibraryGridSize {
+    LibraryGridSize(rawValue: albumGridSizeRaw) ?? .medium
   }
 
   private var library: SongLibrary { SongLibrary.shared }
@@ -506,16 +550,13 @@ struct AlbumsGridView: View {
         )
         .padding(.top, 100)
       } else {
-        LazyVGrid(
-          columns: gridColumns,
-          spacing: isLargeMode ? 2 : (isSmallMode ? 8 : 18)
-        ) {
+        LazyVGrid(columns: gridSize.gridColumns, spacing: gridSize.rowSpacing) {
           ForEach(filteredAlbums) { album in
-            AlbumCard(album: album, artworkSize: artworkSize, isFullBleed: isLargeMode)
+            AlbumCard(album: album, artworkSize: gridSize.cellWidth(in: gridWidth))
           }
         }
-        .padding(.horizontal, isLargeMode ? 0 : 20)
-        .padding(.top, isLargeMode ? 0 : 16)
+        .padding(.horizontal, gridSize.horizontalPadding)
+        .padding(.top, 16)
         .padding(.bottom, 24)
       }
     }
@@ -529,14 +570,7 @@ struct AlbumsGridView: View {
     .background(themeManager.backgroundColor)
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
-        GridSizePicker(
-          selection: $albumGridSizeRaw,
-          options: [
-            (id: "small",  icon: "square.grid.3x3.fill"),
-            (id: "medium", icon: "square.grid.2x2.fill"),
-            (id: "large",  icon: "rectangle.fill"),
-          ]
-        )
+        GridSizePicker(selection: $albumGridSizeRaw, options: LibraryGridSize.pickerOptions)
       }
     }
   }
@@ -549,7 +583,10 @@ struct ArtistsGridView: View {
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
   @State private var artists: [Artist] = []
-  @AppStorage("com.ampwave.artistGridSize") private var artistGridSizeRaw: String = "large"
+  @AppStorage("com.ampwave.artistGridSize.v2") private var artistGridSizeRaw: String = "medium"
+  /// Same measurement trick as AlbumsGridView — cards take a fixed width, so the
+  /// container width has to be measured outside the grid.
+  @State private var gridWidth: CGFloat = 400
 
   private var library: SongLibrary { SongLibrary.shared }
 
@@ -557,22 +594,8 @@ struct ArtistsGridView: View {
     settings.first ?? AppSettings.getOrCreate(in: modelContext)
   }
 
-  private var artistArtworkSize: CGFloat {
-    artistGridSizeRaw == "small" ? 90 : 150
-  }
-
-  private var gridColumns: [GridItem] {
-    if artistGridSizeRaw == "small" {
-      return [
-        GridItem(.flexible(), spacing: 8),
-        GridItem(.flexible(), spacing: 8),
-        GridItem(.flexible(), spacing: 8),
-      ]
-    }
-    return [
-      GridItem(.flexible(), spacing: 16),
-      GridItem(.flexible(), spacing: 16),
-    ]
+  private var gridSize: LibraryGridSize {
+    LibraryGridSize(rawValue: artistGridSizeRaw) ?? .medium
   }
 
   var filteredArtists: [Artist] {
@@ -617,14 +640,20 @@ struct ArtistsGridView: View {
         )
         .padding(.top, 100)
       } else {
-        LazyVGrid(columns: gridColumns, spacing: artistGridSizeRaw == "small" ? 8 : 18) {
+        LazyVGrid(columns: gridSize.gridColumns, spacing: gridSize.rowSpacing) {
           ForEach(filteredArtists) { artist in
-            ArtistCard(artist: artist, artworkSize: artistArtworkSize)
+            ArtistCard(artist: artist, artworkSize: gridSize.cellWidth(in: gridWidth))
           }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, gridSize.horizontalPadding)
         .padding(.top, 16)
         .padding(.bottom, 24)
+      }
+    }
+    .background {
+      GeometryReader { geo in
+        Color.clear
+          .onChange(of: geo.size.width, initial: true) { _, w in gridWidth = w }
       }
     }
     .background(themeManager.backgroundColor)
@@ -633,13 +662,7 @@ struct ArtistsGridView: View {
     }
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
-        GridSizePicker(
-          selection: $artistGridSizeRaw,
-          options: [
-            (id: "small", icon: "square.grid.3x3.fill"),
-            (id: "large", icon: "square.grid.2x2.fill"),
-          ]
-        )
+        GridSizePicker(selection: $artistGridSizeRaw, options: LibraryGridSize.pickerOptions)
       }
     }
   }

@@ -38,6 +38,40 @@ struct HomeView: View {
     Array(library.songs.prefix(10))
   }
 
+  @State private var rediscoverSongs: [LibrarySong] = []
+
+  /// Tracks the user clearly liked — played often, hearted, or rated highly —
+  /// that they haven't heard in a couple of months.
+  private func computeRediscover() -> [LibrarySong] {
+    let stats = historyTracker.statisticsBySongId()
+    let cutoff = Date().addingTimeInterval(-60 * 24 * 60 * 60)
+
+    let candidates = library.songs.compactMap { song -> (LibrarySong, Date)? in
+      guard let stat = stats[song.id], !stat.isDisliked else { return nil }
+      // Needs a last-played date: a song never played isn't "rediscovery",
+      // it belongs in a discovery shelf instead.
+      guard let lastPlayed = stat.lastPlayedAt, lastPlayed < cutoff else { return nil }
+
+      let wasLoved = stat.isLiked || (stat.userRating ?? 0) >= 4 || stat.playCount >= 5
+      guard wasLoved else { return nil }
+      return (song, lastPlayed)
+    }
+
+    // Longest-forgotten first, capped so one artist can't fill the shelf.
+    var seenArtists: [String: Int] = [:]
+    return
+      candidates
+      .sorted { $0.1 < $1.1 }
+      .filter { song, _ in
+        let count = seenArtists[song.artist, default: 0]
+        guard count < 2 else { return false }
+        seenArtists[song.artist] = count + 1
+        return true
+      }
+      .prefix(10)
+      .map(\.0)
+  }
+
   private var indexingMessage: String? {
     switch library.indexingStatus {
     case .indexing(let message):
@@ -141,8 +175,16 @@ struct HomeView: View {
           // Quick access playlists
           QuickAccessSection()
 
-          // Browse by section
-          BrowseSection()
+          // Music the user loved but hasn't returned to in a while. Every
+          // other shelf here surfaces either what's new or what's already in
+          // rotation; this is the only one that reaches back.
+          if !rediscoverSongs.isEmpty {
+            HorizontalSongSection(
+              title: "Rediscover",
+              songs: rediscoverSongs,
+              onSongPlayed: refreshHomeSections
+            )
+          }
         }
       }
       .padding(.vertical, 20)
@@ -341,6 +383,7 @@ struct HomeView: View {
     recentlyPlayedSongs = historyTracker.getRecentlyPlayed(limit: 10)
     mostPlayedSongs = historyTracker.getMostPlayed(limit: 10)
     radioMixes = RadioMixGenerator.shared.fetchOrCreateMixes()
+    rediscoverSongs = computeRediscover()
   }
 }
 
@@ -848,69 +891,6 @@ struct QuickAccessButton: View {
   }
 }
 
-// MARK: - Browse Section
-
-struct BrowseSection: View {
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Browse")
-        .font(.system(size: 24, weight: .bold, design: .rounded))
-        .padding(.horizontal, 20)
-
-      Text("Jump to albums, artists, playlists, or genres")
-        .font(.system(size: 14))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 20)
-
-      ScrollView(.horizontal, showsIndicators: false) {
-        LazyHStack(spacing: 12) {
-          BrowseCard(title: "Albums", icon: "square.stack", color: .purple) {
-            LibraryView(initialTab: .albums)
-          }
-          BrowseCard(title: "Artists", icon: "person.2", color: .pink) {
-            LibraryView(initialTab: .artists)
-          }
-          BrowseCard(title: "Playlists", icon: "list.bullet", color: .cyan) {
-            PlaylistsListView()
-          }
-          BrowseCard(title: "Genres", icon: "tag", color: .indigo) {
-            LibraryView(initialTab: .genres)
-          }
-        }
-        .padding(.horizontal, 20)
-      }
-    }
-  }
-}
-
-// MARK: - Browse Card
-
-struct BrowseCard<Destination: View>: View {
-  let title: String
-  let icon: String
-  let color: Color
-  @ViewBuilder var destination: () -> Destination
-
-  var body: some View {
-    NavigationLink(destination: destination()) {
-      VStack(spacing: 8) {
-        Image(systemName: icon)
-          .font(.system(size: 28))
-          .foregroundStyle(.white)
-          .frame(width: 52, height: 52)
-          .background(color.gradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-        Text(title)
-          .font(.system(size: 14, weight: .semibold))
-          .multilineTextAlignment(.center)
-      }
-      .frame(width: 100, height: 100)
-      .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-    }
-    .buttonStyle(.plain)
-  }
-}
-
 struct GenreSongsView: View {
   let genre: String
   @Environment(ThemeManager.self) private var themeManager
@@ -936,6 +916,15 @@ struct GenreSongsView: View {
 
   var body: some View {
     List {
+      if !songs.isEmpty {
+        Section {
+          actionButtons
+        }
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 12, trailing: 16))
+        .listRowSeparator(.hidden)
+      }
+
       ForEach(songs) { song in
         SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
           .contentShape(Rectangle())
@@ -975,6 +964,56 @@ struct GenreSongsView: View {
         )
       }
     }
+  }
+
+  /// Mirrors AlbumView's header actions so a genre behaves like any other
+  /// collection in the app.
+  private var actionButtons: some View {
+    HStack(spacing: 16) {
+      Button {
+        // Explicitly off: shuffle is sticky across sessions, so tapping "Play"
+        // after a shuffled queue would otherwise still play in random order.
+        playback.shuffleMode = .off
+        playback.playQueue(songs, startingAt: 0, from: .library)
+      } label: {
+        HStack {
+          Image(systemName: "play.fill")
+          Text("Play")
+        }
+        .font(.system(size: 16, weight: .bold))
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .background(themeManager.accentColor)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: themeManager.accentColor.opacity(0.3), radius: 5, y: 3)
+      }
+
+      Button {
+        playback.shuffleMode = .on
+        playback.playQueue(
+          songs,
+          startingAt: Int.random(in: 0..<songs.count),
+          from: .library
+        )
+      } label: {
+        HStack {
+          Image(systemName: "shuffle")
+          Text("Shuffle")
+        }
+        .font(.system(size: 16, weight: .bold))
+        .foregroundStyle(.primary)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .background(themeManager.cardBackgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+          RoundedRectangle(cornerRadius: 12)
+            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+      }
+    }
+    .buttonStyle(.borderless)
   }
 }
 

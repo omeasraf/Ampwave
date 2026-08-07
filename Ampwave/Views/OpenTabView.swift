@@ -16,6 +16,7 @@ struct OpenTabView: View {
   @State private var selectedTab: AppTab = .home
   @State private var servicesInitialized = false
   @State private var showOnboarding = OnboardingState.shouldShow
+  @State private var capsuleImportError: String?
   /// Incremented on library reset — causes all tab content to be recreated,
   /// clearing every NavigationStack and flushing any stale in-memory data.
   @State private var libraryResetID: Int = 0
@@ -155,6 +156,9 @@ struct OpenTabView: View {
         self.lyricsService.setModelContext(self.modelContext)
         self.metadataService.setModelContext(self.modelContext)
         self.recommendationEngine.setModelContext(self.modelContext)
+        UserPreferences.sharedContextForNetworkCheck = self.modelContext
+        // Also drains any scrobbles queued while offline or before a restart.
+        LastFMScrobbler.shared.setModelContext(self.modelContext)
         #if os(iOS)
           WatchSyncService.shared.setModelContext(self.modelContext)
         #endif
@@ -208,6 +212,17 @@ struct OpenTabView: View {
         showOnboarding = true
       }
     }
+    .onReceive(NotificationCenter.default.publisher(for: .capsuleDidImport)) { _ in
+      selectedTab = .playlists
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .capsuleImportFailed)) { notification in
+      capsuleImportError = notification.object as? String ?? "The Capsule could not be imported."
+    }
+    .alert("Couldn't Import Capsule", isPresented: capsuleImportAlertBinding) {
+      Button("OK") { capsuleImportError = nil }
+    } message: {
+      Text(capsuleImportError ?? "The Capsule could not be imported.")
+    }
     #if os(iOS)
       .fullScreenCover(isPresented: $showOnboarding) {
         Group {
@@ -223,6 +238,13 @@ struct OpenTabView: View {
         .environment(ThemeManager.shared)
       }
     #endif
+  }
+
+  private var capsuleImportAlertBinding: Binding<Bool> {
+    Binding(
+      get: { capsuleImportError != nil },
+      set: { if !$0 { capsuleImportError = nil } }
+    )
   }
 }
 

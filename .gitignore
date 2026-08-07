@@ -338,4 +338,6 @@ xcuserdata
 !*.xcworkspace/contents.xcworkspacedata
 /*.gcno
 **/xcshareddata/WorkspaceSettings.xcsettings
+
+# Generated from .env — never commit Last.fm credentials
 Ampwave/Services/LastFM/LastFMSecrets.swift

@@ -18,8 +18,21 @@ final class ListeningHistoryTracker {
   private var currentPlayDuration: TimeInterval = 0
   private var currentSourceRaw: String?
   private var currentPlaylistId: UUID?
+  /// When the current track first started, kept across pauses. Scrobbles are
+  /// timestamped from when playback began, and `currentPlayStartTime` is reset
+  /// every time the user pauses.
+  private var currentTrackStartedAt: Date?
 
-  private init() {}
+  private init() {
+    // Deleting a song removes its statistics rows behind this cache's back.
+    NotificationCenter.default.addObserver(
+      forName: .songsWereDeleted,
+      object: nil,
+      queue: .main
+    ) { _ in
+      MainActor.assumeIsolated { ListeningHistoryTracker.shared.invalidateStatisticsIndex() }
+    }
+  }
 
   func setModelContext(_ context: ModelContext) {
     self.modelContext = context
@@ -30,6 +43,15 @@ final class ListeningHistoryTracker {
   func songStarted(
     _ song: LibrarySong, source: PlaySource = PlaySource.library, playlistId: UUID? = nil
   ) {
+    // Already tracking this exact track: a redundant start (a KVO re-fire, or
+    // a play() on the song already playing) would reset the timers and throw
+    // away the listening time accumulated so far, which then reads back as a
+    // far shorter play than actually happened.
+    if let currentSong, currentSong.id == song.id {
+      print("[DEBUG] ListeningHistoryTracker: ignoring duplicate start for \(song.title)")
+      return
+    }
+
     // If there was a previous song playing, record it
     if let previousSong = currentSong {
       let sessionDuration = currentPlayStartTime.map { Date().timeIntervalSince($0) } ?? 0
@@ -40,13 +62,17 @@ final class ListeningHistoryTracker {
       recordPlay(
         song: previousSong, duration: totalDuration, source: usedSource,
         playlistId: currentPlaylistId ?? playlistId)
+      scrobblePlay(previousSong, playedDuration: totalDuration)
     }
 
     currentSong = song
     currentPlayStartTime = Date()
+    currentTrackStartedAt = Date()
     currentPlayDuration = 0
     currentSourceRaw = source.rawValue
     currentPlaylistId = playlistId
+
+    LastFMScrobbler.shared.nowPlaying(song)
   }
 
   /// Called when a song is paused
@@ -55,11 +81,13 @@ final class ListeningHistoryTracker {
       currentPlayDuration += Date().timeIntervalSince(startTime)
       currentPlayStartTime = nil
     }
+    LastFMScrobbler.shared.playbackPaused()
   }
 
   /// Called when a song is resumed
   func songResumed() {
     currentPlayStartTime = Date()
+    LastFMScrobbler.shared.playbackResumed()
   }
 
   /// Called when a song ends or is skipped
@@ -80,11 +108,38 @@ final class ListeningHistoryTracker {
       )
     }
 
+    // Offered even for skips: a "skip" here just means under 10 seconds of the
+    // *current* pass, while the user may still have heard enough of the track
+    // overall. The scrobbler applies Last.fm's own threshold.
+    scrobblePlay(song, playedDuration: currentPlayDuration)
+
     currentSong = nil
     currentPlayStartTime = nil
+    currentTrackStartedAt = nil
     currentPlayDuration = 0
     currentSourceRaw = nil
     currentPlaylistId = nil
+  }
+
+  /// Drops model references without writing a play. Used before the entire
+  /// library is deleted, when retaining the current song would leave a
+  /// detached SwiftData model in this long-lived singleton.
+  func discardCurrentSong() {
+    currentSong = nil
+    currentPlayStartTime = nil
+    currentTrackStartedAt = nil
+    currentPlayDuration = 0
+    currentSourceRaw = nil
+    currentPlaylistId = nil
+    LastFMScrobbler.shared.cancelCurrentTracking()
+  }
+
+  private func scrobblePlay(_ song: LibrarySong, playedDuration: TimeInterval) {
+    LastFMScrobbler.shared.recordPlay(
+      song,
+      playedDuration: playedDuration,
+      startedAt: currentTrackStartedAt ?? Date().addingTimeInterval(-playedDuration)
+    )
   }
 
   /// Records a play in the database

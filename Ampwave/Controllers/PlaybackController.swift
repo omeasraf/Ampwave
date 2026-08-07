@@ -91,8 +91,28 @@ final class PlaybackController {
   private var effectiveOutputVolume: Float {
     let preamp = Float(UserDefaults.standard.double(forKey: "com.ampwave.audioPreamp"))
     let gain = (preamp > 0.25 && preamp < 4.0) ? preamp : 1.0
-    let soundCheck: Float = (preferences?.normalizeVolume ?? false) ? 0.94 : 1.0
-    return min(1, volume * gain * soundCheck)
+    return min(1, volume * gain * normalizationGain)
+  }
+
+  /// Per-track attenuation that levels loudness across the library.
+  ///
+  /// Replaces a flat 0.94 multiplier that was applied to every track equally —
+  /// which only made everything quieter and left the *relative* loudness
+  /// between tracks exactly as it was, so the setting did nothing.
+  ///
+  /// `player.volume` can only attenuate (it clamps at 1.0), so this normalizes
+  /// downward: loud tracks are pulled toward the reference level and quiet
+  /// tracks are left alone. Files with no ReplayGain tag are untouched rather
+  /// than guessed at.
+  private var normalizationGain: Float {
+    guard preferences?.normalizeVolume ?? false else { return 1.0 }
+    guard let gainDB = currentItem?.replayGainDB else { return 1.0 }
+    // A positive tag gain means the track is quieter than reference and wants
+    // boosting, which we can't do — leave it at unity.
+    guard gainDB < 0 else { return 1.0 }
+    // Floor at -12 dB so a badly tagged file can't render playback inaudible.
+    let clamped = max(gainDB, -12)
+    return powf(10, Float(clamped) / 20)
   }
 
   func refreshAudioEnhancementsFromSettings() {
@@ -136,8 +156,9 @@ final class PlaybackController {
   var vocalLevel: Float {
     get { currentVocalLevel }
     set {
-      currentVocalLevel = newValue
-      VocalIsolator.shared.vocalLevel = newValue
+      let clamped = min(max(newValue, 0), 1)
+      currentVocalLevel = clamped
+      VocalIsolator.shared.vocalLevel = clamped
 
       if isVocalSliderVisible {
         resetVocalSliderTimer()
@@ -491,6 +512,9 @@ final class PlaybackController {
     print("[DEBUG] PlaybackController: Auto-advanced to \(song.title) at index \(index)")
     self.currentQueueIndex = index
     self.currentItem = song
+    // Gapless hand-off doesn't go through play(), so the per-track
+    // normalization gain has to be re-applied here too.
+    self.applyPlayerOutputVolume()
     self.updateUIForNewItem()
     self.historyTracker.songStarted(
       song, source: self.currentSource, playlistId: self.currentPlaylistId)
@@ -621,8 +645,11 @@ final class PlaybackController {
         }
         if self.player == nil {
           self.player = AVQueuePlayer(items: [item])
+          // Local files are already on disk, so letting the player hold back
+          // to build a buffer only inserts a delay at each track transition —
+          // which is exactly the gap gapless playback is meant to avoid.
+          self.player?.automaticallyWaitsToMinimizeStalling = false
           self.applyEQPresetForPlayback()
-          self.applyPlayerOutputVolume()
           self.addTimeObserver()
           self.observePlayerItemChange()
         } else {
@@ -635,6 +662,11 @@ final class PlaybackController {
         self.duration = song.duration > 0 ? song.duration : 0
         self.currentTime = 0
         self.lyricsClock.currentTime = 0
+
+        // After `currentItem` is set: the normalization gain is per-track, so
+        // applying it earlier used the *previous* song's tag. The reuse branch
+        // above never applied it at all.
+        self.applyPlayerOutputVolume()
 
         self.player?.play()
         self.isPlaying = true
@@ -695,6 +727,12 @@ final class PlaybackController {
       Task { @MainActor in
         if item.status == .readyToPlay {
           print("[VALIDATION] PlaybackController: AVPlayerItem status .readyToPlay")
+          // Only the item actually playing may set the duration. Gapless
+          // preloads the *next* track while this one is still going, and it
+          // becomes ready mid-playback — without this guard it overwrote the
+          // current track's duration with the next one's, so the scrubber hit
+          // the end early and playback appeared to run past it.
+          guard self?.player?.currentItem === item else { return }
           let itemDuration = CMTimeGetSeconds(item.duration)
           if itemDuration.isFinite, itemDuration > 0 {
             self?.duration = itemDuration
@@ -881,8 +919,12 @@ final class PlaybackController {
 
   func seek(to time: TimeInterval) {
     guard time.isFinite, time >= 0 else { return }
-    self.currentTime = time
-    self.lyricsClock.currentTime = time
+    // Never target past the end: a stale or mis-read duration would otherwise
+    // strand playback beyond the last sample.
+    let target = duration > 0 ? min(time, duration) : time
+
+    self.currentTime = target
+    self.lyricsClock.currentTime = target
 
     if isScrubbing {
       debouncedUpdateLyric()
@@ -892,36 +934,39 @@ final class PlaybackController {
     isSeeking = true
     let token = UUID()
     seekToken = token
-    let cmTime = CMTime(seconds: time, preferredTimescale: 600)
+    let cmTime = CMTime(seconds: target, preferredTimescale: 600)
 
-    // AVPlayer's seek completion handler can be dropped entirely if the
-    // player item gets swapped out mid-seek (gapless auto-advance /
-    // crossfade). Without a fallback, `isSeeking` would stay true forever,
-    // which permanently freezes lyric sync: both periodic time observers
-    // refuse to run while it's set, and the karaoke clock keeps
-    // extrapolating from its last (now stale) anchor with nothing to ever
-    // re-anchor it.
+    // Watchdog for a seek completion that never arrives — AVPlayer drops it
+    // when the item is swapped mid-seek (gapless hand-off, crossfade), and
+    // `isSeeking` staying true would freeze lyric sync permanently: both time
+    // observers refuse to run while it's set.
+    //
+    // Deliberately generous, and deliberately does NOT read the player's
+    // clock. Sample-accurate seeking on lossless formats regularly takes over
+    // a second, so a short fuse fired mid-seek and wrote back the player's
+    // *pre-seek* position — which snapped the progress bar backwards and then
+    // let the time observer hold it there.
     Task { @MainActor [weak self] in
-      try? await Task.sleep(for: .seconds(1.5))
+      try? await Task.sleep(for: .seconds(5))
       guard let self, self.seekToken == token, self.isSeeking else { return }
+      print("[DEBUG] PlaybackController: seek watchdog fired at \(Int(target))s")
       self.isSeeking = false
-      let playerSeconds = self.player?.currentTime().seconds
-      let resolvedTime = (playerSeconds?.isFinite == true) ? playerSeconds! : time
-      self.currentTime = resolvedTime
-      self.lyricsClock.currentTime = resolvedTime
-      self.updateCurrentLyric(at: resolvedTime)
+      self.currentTime = target
+      self.lyricsClock.currentTime = target
+      self.updateCurrentLyric(at: target)
       self.updateNowPlaying()
     }
 
     player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) {
       [weak self] finished in
       Task { @MainActor in
+        // A newer seek has superseded this one; its own handler owns the state.
         guard let self, self.seekToken == token else { return }
         self.isSeeking = false
         if finished {
-          self.currentTime = time
-          self.lyricsClock.currentTime = time
-          self.updateCurrentLyric(at: time)
+          self.currentTime = target
+          self.lyricsClock.currentTime = target
+          self.updateCurrentLyric(at: target)
           self.updateNowPlaying()
           self.saveState()
         }
@@ -953,6 +998,9 @@ final class PlaybackController {
   func playPrevious() {
     if currentTime > 3 {
       seek(to: 0)
+      // Same reasoning as skipping forward: pressing Previous while paused
+      // should play, not silently rewind.
+      if !isPlaying { play() }
       return
     }
 
@@ -1017,6 +1065,11 @@ final class PlaybackController {
         asset.url == library.getFileURL(for: nextSong)
       {
         player.advanceToNextItem()
+        // Skipping is an explicit request to hear the next track, so start it
+        // even if playback was paused. advanceToNextItem() on its own inherits
+        // the paused state and looked like the button had done nothing.
+        player.play()
+        isPlaying = true
         // currentItem and UI will be updated by KVO (observePlayerItemChange)
         return
       }
@@ -1145,6 +1198,23 @@ final class PlaybackController {
     currentQueueIndex = 0
     cleanupPlayer()
     saveState()
+  }
+
+  /// Clears every retained song reference before a destructive library reset.
+  /// Unlike `clearQueue`, this intentionally does not persist playback state,
+  /// because that state is about to be deleted as part of the same operation.
+  func prepareForLibraryReset() {
+    cleanupPlayer()
+    isPlaying = false
+    queue.removeAll()
+    originalQueue.removeAll()
+    currentItem = nil
+    currentQueueIndex = 0
+    currentTime = 0
+    lyricsClock.currentTime = 0
+    currentLyricIndex = 0
+    historyTracker.discardCurrentSong()
+    updateNowPlaying()
   }
 
   func moveSong(from sourceIndex: Int, to destinationIndex: Int) {
@@ -1517,6 +1587,7 @@ final class PlaybackController {
           // Prepare player but don't play
           let item = await createPlayerItem(for: song)
           self.player = AVQueuePlayer(items: [item])
+          self.player?.automaticallyWaitsToMinimizeStalling = false
           self.applyEQPresetForPlayback()
           self.applyPlayerOutputVolume()
           item.seek(
@@ -1616,6 +1687,7 @@ final class PlaybackController {
     cleanupPlayer()
 
     let newPlayer = AVQueuePlayer(items: [cfItem])
+    newPlayer.automaticallyWaitsToMinimizeStalling = false
     newPlayer.volume = effectiveOutputVolume
     self.player = newPlayer
     self.addTimeObserver()
@@ -1689,6 +1761,18 @@ final class PlaybackController {
       MainActor.assumeIsolated {
         guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
         self.currentTime = time.seconds
+
+        // Keep duration tied to whatever is actually playing. A gapless
+        // hand-off reuses an item that became ready while it was still
+        // queued, so its status observer never fires again — and stored tag
+        // durations are unreliable on some formats.
+        if let itemDuration = self.player?.currentItem?.duration.seconds,
+          itemDuration.isFinite, itemDuration > 0,
+          abs(itemDuration - self.duration) > 0.5
+        {
+          self.duration = itemDuration
+          self.updateNowPlaying()
+        }
 
         // Crossfade tick
         if let prefs = self.preferences, prefs.crossfadeEnabled,

@@ -20,6 +20,16 @@ struct ArtistCard: View {
 
   @Environment(ThemeManager.self) private var themeManager
 
+  /// Matches AlbumCard's caption scale so the Albums and Artists grids read as
+  /// the same grid at the same density.
+  private var titleFontSize: CGFloat {
+    switch artworkSize {
+    case ..<120: return 12
+    case ..<240: return 14
+    default: return 17
+    }
+  }
+
   var body: some View {
     NavigationLink(destination: ArtistView(artist: artist)) {
       VStack(alignment: .center, spacing: 8) {   // explicit 8 pt gap — not 0 + padding
@@ -47,14 +57,14 @@ struct ArtistCard: View {
         // Name + song count — always one line to keep all cards the same height.
         VStack(alignment: .center, spacing: 2) {
           Text(artist.name)
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .font(.system(size: titleFontSize, weight: .semibold, design: .rounded))
             .lineLimit(1)
             .truncationMode(.tail)
             .multilineTextAlignment(.center)
             .foregroundStyle(.primary)
 
-          Text("\(artist.songCount) songs")
-            .font(.system(size: 12, weight: .medium))
+          Text("\(artist.songCount) song\(artist.songCount == 1 ? "" : "s")")
+            .font(.system(size: titleFontSize - 2, weight: .medium))
             .foregroundStyle(.secondary)
             .lineLimit(1)
         }
