@@ -238,8 +238,20 @@ final class MetadataService {
   func fetchMetadata(for album: Album) async -> FetchedMetadata? {
     await respectRateLimit()
 
+    // Apple Music covers albums MusicBrainz misses, so ask it regardless of
+    // whether a release match turns up — bailing early used to mean no artwork
+    // at all for anything MusicBrainz didn't know.
+    let appleArtworkURL = await AppleMusicMetadataService.shared.fetchAlbumArtworkURL(
+      album: album.name,
+      artist: album.artist
+    )
+
     guard let release = await searchRelease(album: album) else {
-      return nil
+      guard let appleArtworkURL else { return nil }
+      return FetchedMetadata(
+        album: album.name,
+        artworkURL: appleArtworkURL
+      )
     }
 
     // Parse release date
@@ -258,8 +270,12 @@ final class MetadataService {
       artworkURL: nil
     )
 
-    // Fetch artwork
-    metadata.artworkURL = await fetchArtworkURL(forRelease: release.id)
+    // Prefer Apple Music's cover; fall back to the Cover Art Archive.
+    if let appleArtworkURL {
+      metadata.artworkURL = appleArtworkURL
+    } else {
+      metadata.artworkURL = await fetchArtworkURL(forRelease: release.id)
+    }
 
     return metadata
   }
@@ -270,6 +286,11 @@ final class MetadataService {
 
     let artistInfo = await searchArtist(artist: artist)
     let theAudioDBInfo = await searchTheAudioDBArtist(artist: artist)
+    // Apple Music has artist photos for far more artists than TheAudioDB, so
+    // prefer it and fall back to the TheAudioDB thumbnail.
+    let appleArtworkURL = await AppleMusicMetadataService.shared.fetchArtistArtworkURL(
+      name: artist.name
+    )
 
     var genres: Set<String> = []
     if let mbGenres = artistInfo?.genres {
@@ -293,7 +314,7 @@ final class MetadataService {
       genres: Array(genres).sorted(),
       biography: theAudioDBInfo?.strBiography,
       musicBrainzId: artistInfo?.id ?? theAudioDBInfo?.strMusicBrainzID,
-      artworkURL: theAudioDBInfo?.strArtistThumb.flatMap { URL(string: $0) },
+      artworkURL: appleArtworkURL ?? theAudioDBInfo?.strArtistThumb.flatMap { URL(string: $0) },
       fanartURL: theAudioDBInfo?.strArtistFanart.flatMap { URL(string: $0) }
     )
   }
@@ -720,6 +741,24 @@ final class MetadataService {
       song.year == nil || song.year == 0
     {
       song.year = year
+      needsSave = true
+    }
+    if let trackNumber = metadata.trackNumber,
+      !song.userEditedFields.contains("trackNumber"),
+      song.trackNumber == nil
+    {
+      song.trackNumber = trackNumber
+      needsSave = true
+    }
+    if let discNumber = metadata.discNumber,
+      !song.userEditedFields.contains("discNumber"),
+      song.discNumber == nil
+    {
+      song.discNumber = discNumber
+      needsSave = true
+    }
+    if let explicit = metadata.isExplicit, explicit != song.isExplicit {
+      song.isExplicit = explicit
       needsSave = true
     }
     if let genre = metadata.genre, !genre.isEmpty,

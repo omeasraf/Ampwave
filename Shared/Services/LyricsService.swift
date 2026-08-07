@@ -7,6 +7,14 @@ import Foundation
 import Observation
 import SwiftData
 
+extension Notification.Name {
+  /// Posted whenever a song's cached lyrics change, with the song's `UUID` as
+  /// the object. Lets the player refresh what it's displaying when lyrics are
+  /// fetched or edited from somewhere else (the song editor, a background
+  /// pass) rather than only at track start.
+  static let lyricsDidUpdate = Notification.Name("com.ampwave.lyricsDidUpdate")
+}
+
 @MainActor
 @Observable
 final class LyricsService {
@@ -29,75 +37,201 @@ final class LyricsService {
     self.modelContext = context
   }
 
-  func fetchLyrics(for song: LibrarySong) async -> SyncedLyric? {
+  /// Collects every lyric representation available for `song` — word-synced,
+  /// line-synced and plain — and caches them together.
+  ///
+  /// All three are gathered regardless of the word-synced *preference*: that
+  /// setting decides what gets drawn, not what gets stored. Fetching only the
+  /// preferred form meant toggling the setting mid-song showed nothing until a
+  /// refetch, and losing word timings whenever a later pass found line-synced
+  /// lyrics first.
+  /// - Parameters:
+  ///   - forceRefresh: skips the cache, the embedded tag and the re-check
+  ///     throttle, so an explicit refresh really does re-query the providers
+  ///     instead of re-seeding from what's already stored.
+  ///   - includeWordSynced: whether to ask the word-synced providers. Bulk
+  ///     import passes `false` — those endpoints rate-limit hard, and firing
+  ///     one request per song across a whole library gets us throttled. Word
+  ///     timings are then picked up per-song on first play instead.
+  func fetchLyrics(
+    for song: LibrarySong,
+    forceRefresh: Bool = false,
+    includeWordSynced: Bool = true
+  ) async -> SyncedLyric? {
     guard let modelContext = modelContext else { return nil }
     let preferences = UserPreferences.getOrCreate(in: modelContext)
 
-    if let cached = getCachedLyrics(for: song) {
-      if !preferences.wordSyncedLyricsEnabled || hasWordSyncedLyrics(cached.lines) {
-        return cached
-      }
+    // Seed from whatever is already known, so a partial cache is topped up
+    // rather than thrown away and refetched.
+    var lines: [LyricLine] = []
+    var plain: String?
+    var source: LyricSource = .local
+    var language: String?
 
-      if let upgraded = await fetchWordSyncedLyrics(for: song) {
-        return upgraded
-      }
-
-      return cached
+    let cached = getCachedLyrics(for: song)
+    if let cached, !forceRefresh {
+      lines = cached.lines
+      plain = cached.plainLyrics
+      source = cached.source
+      language = cached.language
     }
 
-    // Check for local .lrc file first
-    let url = SongLibrary.shared.getFileURL(for: song)
-    let lrcURL = url.deletingPathExtension().appendingPathExtension("lrc")
-    if FileManager.default.fileExists(atPath: lrcURL.path) {
-      if let lrcContent = try? String(contentsOf: lrcURL, encoding: .utf8) {
-        let lines = LRCParser.parse(lrcContent)
-        if !lines.isEmpty {
-          let lyrics = SyncedLyric(
-            songId: song.id,
-            lines: lines,
-            source: .local,
-            language: nil
-          )
-          cacheLyrics(lyrics)
-          song.lyrics = lrcContent
-          return lyrics
+    // Offline sources first — a sidecar .lrc costs nothing and is authoritative
+    // if the user dropped one next to the file.
+    if lines.isEmpty, let sidecar = localSidecarLyrics(for: song) {
+      lines = sidecar
+      source = .local
+    }
+
+    let embedded = song.lyrics ?? ""
+    if !embedded.isEmpty, !forceRefresh {
+      let embeddedLines = LRCParser.parse(embedded)
+      if lines.isEmpty, !embeddedLines.isEmpty {
+        lines = embeddedLines
+        source = .local
+      }
+      // An embedded tag with no parseable timings is still a fine plain copy —
+      // but run it through the sanitizer, since "unparseable" doesn't mean
+      // "unmarked" and raw timings must never reach the plain tier.
+      if embeddedLines.isEmpty, plain?.isEmpty ?? true {
+        let sanitized = LRCParser.plainText(from: embedded)
+        if !sanitized.isEmpty { plain = sanitized }
+      }
+    }
+
+    // Nothing left for a provider to add — don't go online at all. When word
+    // timings are out of scope for this pass, line-synced counts as complete
+    // so a bulk import doesn't keep retrying for them.
+    let syncGoalMet = includeWordSynced ? hasWordSyncedLyrics(lines) : !lines.isEmpty
+    let isComplete = syncGoalMet && !(plain?.isEmpty ?? true)
+
+    // Otherwise we try exactly once, then not again for a week. Without this,
+    // a song with no lyrics upstream would hit every provider on every play.
+    let recheckInterval: TimeInterval = 7 * 24 * 60 * 60
+    let triedRecently =
+      cached?.lastFetchAttemptAt.map { Date().timeIntervalSince($0) < recheckInterval } ?? false
+
+    let canGoOnline =
+      preferences.autoFetchLyrics
+      && NetworkMonitor.shared.isOnline
+      && !preferences.isOfflineMode
+      && !isComplete
+      && (forceRefresh || !triedRecently)
+
+    if canGoOnline {
+      // 1. Word-synced providers — the richest form, so try them first.
+      if includeWordSynced, !hasWordSyncedLyrics(lines),
+        let wordSynced = await fetchFromWordSyncedProviders(song: song)
+      {
+        lines = wordSynced.lines
+        source = wordSynced.source
+        language = wordSynced.language ?? language
+      }
+
+      // 2. LRCLIB returns line-synced *and* plain in one response; ask when
+      //    either is still missing.
+      if lines.isEmpty || (plain?.isEmpty ?? true) {
+        let result = await fetchFromLRCLIB(song: song)
+        if lines.isEmpty, let synced = result.synced {
+          lines = synced.lines
+          source = .lrclib
+          language = synced.language ?? language
+        }
+        if plain?.isEmpty ?? true, let fetchedPlain = result.plain {
+          plain = fetchedPlain
         }
       }
+
+      // 3. Last resort, plain text only.
+      if plain?.isEmpty ?? true, let ovh = await fetchFromLyricsOVH(song: song) {
+        plain = ovh
+      }
     }
 
-    // Check if we already have synced lyrics in the model
-    let storedLines = LRCParser.parse(song.lyrics ?? "")
-    let hasSyncedLyrics = !storedLines.isEmpty
-    let needsWordSyncedUpgrade = preferences.wordSyncedLyricsEnabled && !hasWordSyncedLyrics(storedLines)
-
-    if needsWordSyncedUpgrade {
-      return await fetchWordSyncedLyrics(for: song)
-    }
-
-    // If auto-fetch is off, or we already have synced lyrics, don't fetch
-    if !preferences.autoFetchLyrics || hasSyncedLyrics {
+    guard !lines.isEmpty || !(plain?.isEmpty ?? true) else {
+      // Genuinely nothing upstream. Record the attempt so we wait a week
+      // before asking again — but only if we actually went looking, or an
+      // offline play would block the next online one.
+      if canGoOnline {
+        let placeholder = SyncedLyric(songId: song.id, lines: [], source: source)
+        // Same reasoning as above: a partial pass records that we looked, but
+        // doesn't start the week-long cooldown.
+        if includeWordSynced { placeholder.lastFetchAttemptAt = Date() }
+        cacheLyrics(placeholder)
+      }
       return nil
     }
 
-    // Rate limit checks for songs we already checked but found nothing for
-    // (We could add a 'lastLyricsCheckDate' to LibrarySong in a future update)
+    // Flattening synced lines gives a plain copy for free when no provider
+    // supplied one, so the plain tier is always populated.
+    if plain?.isEmpty ?? true, !lines.isEmpty {
+      plain = lines.map(\.text).joined(separator: "\n")
+    }
 
-    return await fetchOnlineLyrics(for: song)
+    let merged = SyncedLyric(
+      songId: song.id,
+      lines: lines,
+      source: source,
+      language: language,
+      plainLyrics: plain
+    )
+    // Only stamp after a *full* attempt. A purely local hit shouldn't start a
+    // cooldown, and neither should a bulk-import pass that deliberately skipped
+    // the word-synced providers — otherwise first play would find the song
+    // "recently tried" and never go looking for word timings.
+    if canGoOnline, includeWordSynced {
+      merged.lastFetchAttemptAt = Date()
+    }
+    let stored = cacheLyrics(merged)
+
+    song.lyrics = lines.isEmpty ? plain : LRCParser.toLRC(lines)
+    song.updateSearchIndex()
+    try? modelContext.save()
+
+    return stored
+  }
+
+  /// Lines from a `.lrc` file sitting next to the audio file, if present.
+  private func localSidecarLyrics(for song: LibrarySong) -> [LyricLine]? {
+    let url = SongLibrary.shared.getFileURL(for: song)
+    let lrcURL = url.deletingPathExtension().appendingPathExtension("lrc")
+
+    // Referenced files live outside the container; the sidecar needs the same
+    // security-scoped access the audio file does.
+    let secured = lrcURL.startAccessingSecurityScopedResource()
+    defer { if secured { lrcURL.stopAccessingSecurityScopedResource() } }
+
+    guard FileManager.default.fileExists(atPath: lrcURL.path),
+      let content = try? String(contentsOf: lrcURL, encoding: .utf8)
+    else { return nil }
+
+    let lines = LRCParser.parse(content)
+    return lines.isEmpty ? nil : lines
   }
 
   private func hasWordSyncedLyrics(_ lines: [LyricLine]) -> Bool {
     lines.contains { ($0.wordOffsets?.count ?? 0) > 1 }
   }
 
+  /// Fetches word-level timings specifically.
+  ///
+  /// Deliberately *not* gated on `wordSyncedLyricsEnabled` — that preference
+  /// controls rendering. Gating the fetch meant a user who turned the setting
+  /// on later had nothing cached to show.
   func fetchWordSyncedLyrics(for song: LibrarySong) async -> SyncedLyric? {
     guard let modelContext = modelContext else { return nil }
     let preferences = UserPreferences.getOrCreate(in: modelContext)
 
-    guard preferences.wordSyncedLyricsEnabled,
-      NetworkMonitor.shared.isOnline,
+    guard NetworkMonitor.shared.isOnline,
       !preferences.isOfflineMode,
       let wordSynced = await fetchFromWordSyncedProviders(song: song)
     else { return nil }
+
+    // Carry the existing plain copy across — the word-synced provider doesn't
+    // supply one, and dropping it would demote a complete cache.
+    wordSynced.plainLyrics =
+      getCachedLyrics(for: song)?.plainLyrics
+      ?? wordSynced.lines.map(\.text).joined(separator: "\n")
 
     let cached = cacheLyrics(wordSynced)
     song.lyrics = LRCParser.toLRC(cached.lines)
@@ -107,40 +241,13 @@ final class LyricsService {
     return cached
   }
 
+  /// Online-only fetch for explicit "get lyrics now" actions.
+  ///
+  /// Shares the unified path so it collects all three tiers too. It used to
+  /// delete cached synced lyrics whenever a provider returned only plain text,
+  /// which silently downgraded songs that already had good timings.
   func fetchOnlineLyrics(for song: LibrarySong) async -> SyncedLyric? {
-    // YouLy+/am-lyrics — prefers word-synced lyrics from LyricsPlus/Binimum.
-    if let cached = await fetchWordSyncedLyrics(for: song) {
-      return cached
-    }
-
-    // LRCLIB — returns line-synced LRC, and word-synced enhanced LRC for many songs.
-    // The LRCParser already handles the <mm:ss.xx> word-offset format.
-    let lrclibResult = await fetchFromLRCLIB(song: song)
-
-    if let synced = lrclibResult.synced {
-      let cached = cacheLyrics(synced)
-      song.lyrics = LRCParser.toLRC(cached.lines)
-      song.updateSearchIndex()
-      return cached
-    }
-
-    if let plain = lrclibResult.plain {
-      song.lyrics = plain
-      song.updateSearchIndex()
-      // Clear any old cached synced lyrics since we now have plain text
-      clearCachedLyrics(for: song)
-      return nil
-    }
-
-    // Fallback to lyrics.ovh if LRCLIB has nothing
-    if let plain = await fetchFromLyricsOVH(song: song) {
-      song.lyrics = plain
-      song.updateSearchIndex()
-      clearCachedLyrics(for: song)
-      return nil
-    }
-
-    return nil
+    await fetchLyrics(for: song, forceRefresh: true)
   }
 
   private func fetchFromWordSyncedProviders(song: LibrarySong) async -> SyncedLyric? {
@@ -282,7 +389,10 @@ final class LyricsService {
 
       let lrclibResponse = try JSONDecoder().decode(LRCLIBResponse.self, from: data)
 
-      // Parse synced lyrics if available
+      // The response carries both forms; keep whichever are present rather
+      // than treating them as alternatives.
+      let plain = lrclibResponse.plainLyrics.flatMap { $0.isEmpty ? nil : $0 }
+
       if let syncedLyrics = lrclibResponse.syncedLyrics, !syncedLyrics.isEmpty {
         let lines = LRCParser.parse(syncedLyrics)
         if !lines.isEmpty {
@@ -292,16 +402,11 @@ final class LyricsService {
             source: .lrclib,
             language: lrclibResponse.language
           )
-          return (synced, nil)
+          return (synced, plain)
         }
       }
 
-      // Return plain lyrics as is
-      if let plainLyrics = lrclibResponse.plainLyrics, !plainLyrics.isEmpty {
-        return (nil, plainLyrics)
-      }
-
-      return (nil, nil)
+      return (nil, plain)
     } catch {
       print("Failed to fetch lyrics: \(error)")
       return (nil, nil)
@@ -365,14 +470,27 @@ final class LyricsService {
       existing.lines = lyrics.lines
       existing.source = lyrics.source
       existing.language = lyrics.language
+      // Never let an update blank out a plain copy we already had.
+      if let incoming = lyrics.plainLyrics, !incoming.isEmpty {
+        existing.plainLyrics = incoming
+      }
+      if let attempted = lyrics.lastFetchAttemptAt {
+        existing.lastFetchAttemptAt = attempted
+      }
       existing.lastUpdated = Date()
       try? modelContext.save()
+      notifyLyricsChanged(songId: existing.songId)
       return existing
     } else {
       modelContext.insert(lyrics)
       try? modelContext.save()
+      notifyLyricsChanged(songId: lyrics.songId)
       return lyrics
     }
+  }
+
+  private func notifyLyricsChanged(songId: UUID) {
+    NotificationCenter.default.post(name: .lyricsDidUpdate, object: songId)
   }
 
   func clearCachedLyrics(for song: LibrarySong) {
@@ -390,7 +508,7 @@ final class LyricsService {
 
   func refreshLyrics(for song: LibrarySong) async -> SyncedLyric? {
     clearCachedLyrics(for: song)
-    return await fetchOnlineLyrics(for: song)
+    return await fetchLyrics(for: song, forceRefresh: true)
   }
 
   func saveLyrics(for song: LibrarySong, content: String) {
@@ -402,14 +520,23 @@ final class LyricsService {
       let syncedLyric = SyncedLyric(
         songId: song.id,
         lines: lines,
-        source: .lrclib,  // Mark as manual/local if possible, but .lrclib is fine for now
-        language: nil
+        source: .user,
+        language: nil,
+        plainLyrics: lines.map(\.text).joined(separator: "\n")
       )
       cacheLyrics(syncedLyric)
     } else {
-      // It's plain text - we don't store plain text in SyncedLyric for now,
-      // but we might want to clear existing synced lyrics if user explicitly puts plain text
+      // Plain text the user typed in: store it as the plain tier and drop the
+      // stale timings, since they no longer describe this text.
+      let plainLyric = SyncedLyric(
+        songId: song.id,
+        lines: [],
+        source: .user,
+        language: nil,
+        plainLyrics: content
+      )
       clearCachedLyrics(for: song)
+      cacheLyrics(plainLyric)
     }
 
     song.lyrics = content

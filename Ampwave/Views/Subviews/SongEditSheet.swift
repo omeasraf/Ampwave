@@ -20,6 +20,8 @@ struct SongEditSheet: View {
   @State private var year: String
   @State private var genre: String
   @State private var trackNumber: String
+  @State private var discNumber: String
+  @State private var isExplicit: Bool
   @State private var lyrics: String
   @State private var rating: Int
   @State private var isLoadingLyrics: Bool = false
@@ -59,6 +61,10 @@ struct SongEditSheet: View {
     _trackNumber = State(
       initialValue: song.trackNumber.map(String.init) ?? ""
     )
+    _discNumber = State(
+      initialValue: song.discNumber.map(String.init) ?? ""
+    )
+    _isExplicit = State(initialValue: song.isExplicit)
     _lyrics = State(initialValue: song.lyrics ?? "")
     _rating = State(initialValue: ListeningHistoryTracker.shared.rating(for: song) ?? 0)
 
@@ -256,6 +262,13 @@ struct SongEditSheet: View {
               .keyboardType(.numberPad)
             #endif
             .onChange(of: trackNumber) { markFieldAsEdited("trackNumber") }
+          TextField("Disc Number", text: $discNumber)
+            #if os(iOS)
+              .keyboardType(.numberPad)
+            #endif
+            .onChange(of: discNumber) { markFieldAsEdited("discNumber") }
+          Toggle("Explicit", isOn: $isExplicit)
+            .onChange(of: isExplicit) { markFieldAsEdited("isExplicit") }
         }
         .listRowBackground(themeManager.cardBackgroundColor)
 
@@ -509,6 +522,12 @@ struct SongEditSheet: View {
     if let trackInt = Int(trackNumber), trackInt > 0 {
       song.trackNumber = trackInt
     }
+
+    if let discInt = Int(discNumber), discInt > 0 {
+      song.discNumber = discInt
+    }
+
+    song.isExplicit = isExplicit
 
     // Save artwork if changed
     if let data = artworkData {

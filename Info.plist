@@ -39,6 +39,8 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
 		<key>NSExceptionDomains</key>
 		<dict>
 			<key>archive.org</key>
@@ -62,7 +64,7 @@
 	<key>NSBonjourServices</key>
 	<array/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string></string>
+	<string>Ampwave uses your local network to connect to WebDAV music servers you configure.</string>
 	<key>NSSiriUsageDescription</key>
 	<string>Ampwave uses Siri to control music playback.</string>
 	<key>UIApplicationSceneManifest</key>

@@ -8,28 +8,42 @@ internal import SwiftUI
 
 // MARK: - Sheet
 
-struct SmartPlaylistRulesSheet: View {
-  let playlist: Playlist
+/// The rules editor.
+///
+/// Deliberately provides no `NavigationStack` of its own — the create flow
+/// pushes it onto an existing stack, and nesting stacks broke the toolbar and
+/// dropped the whole flow back to step one.
+struct SmartRulesEditor: View {
+  let title: String
+  let confirmTitle: String
+  let onCancel: () -> Void
+  let onSave: (SmartPlaylistRules) -> Void
 
   @State private var rules: [SmartRule]
   @State private var limitEnabled: Bool
   @State private var limitCount: Int
   @State private var limitBy: LimitSort
+  @State private var matchMode: RuleMatchMode
   @State private var previewCount: Int = 0
-
-  @Environment(\.dismiss) private var dismiss
-  @Environment(\.modelContext) private var modelContext
 
   private var library: SongLibrary { SongLibrary.shared }
 
-  init(playlist: Playlist) {
-    self.playlist = playlist
-    let r = playlist.smartRules ?? SmartPlaylistRules(
-      rules: [], limitEnabled: false, limitCount: 25, limitBy: .random)
-    _rules = State(initialValue: r.rules)
-    _limitEnabled = State(initialValue: r.limitEnabled)
-    _limitCount = State(initialValue: r.limitCount)
-    _limitBy = State(initialValue: r.limitBy)
+  init(
+    initialRules: SmartPlaylistRules,
+    title: String = "Smart Rules",
+    confirmTitle: String = "Save",
+    onCancel: @escaping () -> Void,
+    onSave: @escaping (SmartPlaylistRules) -> Void
+  ) {
+    self.title = title
+    self.confirmTitle = confirmTitle
+    self.onCancel = onCancel
+    self.onSave = onSave
+    _rules = State(initialValue: initialRules.rules)
+    _limitEnabled = State(initialValue: initialRules.limitEnabled)
+    _limitCount = State(initialValue: initialRules.limitCount)
+    _limitBy = State(initialValue: initialRules.limitBy)
+    _matchMode = State(initialValue: initialRules.matchMode)
   }
 
   // MARK: - Field groups (computed from flat rules array)
@@ -51,39 +65,42 @@ struct SmartPlaylistRulesSheet: View {
 
   private var currentRulesStruct: SmartPlaylistRules {
     SmartPlaylistRules(
-      rules: rules, limitEnabled: limitEnabled, limitCount: limitCount, limitBy: limitBy)
+      rules: rules,
+      limitEnabled: limitEnabled,
+      limitCount: limitCount,
+      limitBy: limitBy,
+      matchMode: matchMode
+    )
   }
 
   // MARK: - Body
 
   var body: some View {
-    NavigationStack {
-      rulesForm
-    }
-  }
-
-  private var rulesForm: some View {
     Form {
       rulesSection
       limitSection
       previewSection
     }
-    .navigationTitle("Smart Rules")
+    .navigationTitle(title)
     #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
     #endif
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
-        Button("Cancel") { dismiss() }
+        Button("Cancel") { onCancel() }
       }
       ToolbarItem(placement: .confirmationAction) {
-        Button("Save") { save() }
+        Button(confirmTitle) { onSave(currentRulesStruct) }
+          // Without at least one rule a smart playlist matches nothing, and
+          // saving one would silently produce an empty list.
+          .disabled(rules.isEmpty)
       }
     }
     .onChange(of: rules) { _, _ in refreshPreview() }
     .onChange(of: limitEnabled) { _, _ in refreshPreview() }
     .onChange(of: limitCount) { _, _ in refreshPreview() }
     .onChange(of: limitBy) { _, _ in refreshPreview() }
+    .onChange(of: matchMode) { _, _ in refreshPreview() }
     .onAppear { refreshPreview() }
   }
 
@@ -91,15 +108,24 @@ struct SmartPlaylistRulesSheet: View {
 
   private var rulesSection: some View {
     Section {
+      if fieldGroups.count > 1 {
+        Picker("Match", selection: $matchMode) {
+          ForEach(RuleMatchMode.allCases, id: \.self) { mode in
+            Text(mode.displayName).tag(mode)
+          }
+        }
+        .pickerStyle(.segmented)
+      }
+
       if rules.isEmpty {
         Text("No rules yet — tap Add Rule to get started.")
           .foregroundStyle(.secondary)
           .font(.subheadline)
       } else {
         ForEach(Array(fieldGroups.enumerated()), id: \.element.field) { groupIndex, group in
-          // "AND" divider between field groups (not shown before the first group)
+          // Divider between field groups, labelled with how they combine.
           if groupIndex > 0 {
-            andDivider
+            groupDivider
           }
 
           // Rules within the group
@@ -121,18 +147,22 @@ struct SmartPlaylistRulesSheet: View {
       Text("Rules")
     } footer: {
       if fieldGroups.count > 1 {
-        Text("Each field block is AND'd together. OR/AND applies only within the same field.")
-          .font(.caption)
+        Text(
+          matchMode == .all
+            ? "A song must match every block. OR/AND applies only within the same field."
+            : "A song only has to match one block. OR/AND applies only within the same field."
+        )
+        .font(.caption)
       }
     }
   }
 
   // MARK: - Sub-views
 
-  private var andDivider: some View {
+  private var groupDivider: some View {
     HStack {
       VStack { Divider() }
-      Text("AND")
+      Text(matchMode == .all ? "AND" : "OR")
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 6)
@@ -201,13 +231,12 @@ struct SmartPlaylistRulesSheet: View {
   /// Adds a new rule for `field`, inserted right after the last existing rule of that field
   /// (so the same-field group stays contiguous), or at the end if none exists.
   private func addRule(for field: RuleField) {
-    let defaultOp: RuleOperation
-    switch field {
-    case .artist, .album, .genre: defaultOp = .contains
-    case .year, .playCount, .rating, .duration: defaultOp = .greaterThan
-    case .lastPlayed: defaultOp = .inTheLast
-    }
-    let newRule = SmartRule(connector: .or, field: field, operation: defaultOp, value: "")
+    let newRule = SmartRule(
+      connector: .or,
+      field: field,
+      operation: field.defaultOperation,
+      value: field == .liked ? "true" : ""
+    )
 
     // Insert after the last rule of the same field, or append
     if let lastIdx = rules.indices.last(where: { rules[$0].field == field }) {
@@ -222,23 +251,38 @@ struct SmartPlaylistRulesSheet: View {
   }
 
   private func refreshPreview() {
-    let r = currentRulesStruct
-    let allSongs = library.songs
-    let statsDict = buildStatsDict()
-    previewCount = SmartPlaylistEvaluator.evaluate(songs: allSongs, rules: r, stats: statsDict).count
+    previewCount = SmartPlaylistEvaluator.evaluate(
+      songs: library.songs,
+      rules: currentRulesStruct,
+      stats: ListeningHistoryTracker.shared.statisticsBySongId()
+    ).count
   }
+}
 
-  private func save() {
-    playlist.smartRules = currentRulesStruct
-    playlist.touch()
-    try? modelContext.save()
-    PlaylistManager.shared.updateSmartPlaylist(playlist)
-    dismiss()
-  }
+// MARK: - Editing an existing smart playlist
 
-  private func buildStatsDict() -> [UUID: SongPlayStatistics] {
-    guard let all = try? modelContext.fetch(FetchDescriptor<SongPlayStatistics>()) else { return [:] }
-    return Dictionary(uniqueKeysWithValues: all.map { ($0.songId, $0) })
+struct SmartPlaylistRulesSheet: View {
+  let playlist: Playlist
+
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.modelContext) private var modelContext
+
+  var body: some View {
+    NavigationStack {
+      SmartRulesEditor(
+        initialRules: playlist.smartRules
+          ?? SmartPlaylistRules(
+            rules: [], limitEnabled: false, limitCount: 25, limitBy: .random),
+        onCancel: { dismiss() },
+        onSave: { newRules in
+          playlist.smartRules = newRules
+          playlist.touch()
+          try? modelContext.save()
+          PlaylistManager.shared.updateSmartPlaylist(playlist)
+          dismiss()
+        }
+      )
+    }
   }
 }
 
@@ -247,16 +291,7 @@ struct SmartPlaylistRulesSheet: View {
 private struct RuleRowView: View {
   @Binding var rule: SmartRule
 
-  private var validOperations: [RuleOperation] {
-    switch rule.field {
-    case .artist, .album, .genre:
-      return [.contains, .doesNotContain, .is_, .isNot]
-    case .year, .playCount, .rating, .duration:
-      return [.greaterThan, .lessThan, .is_, .isNot]
-    case .lastPlayed:
-      return [.inTheLast, .greaterThan, .lessThan, .is_, .isNot]
-    }
-  }
+  private var validOperations: [RuleOperation] { rule.field.validOperations }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -290,17 +325,6 @@ private struct RuleRowView: View {
   @ViewBuilder
   private var ruleValueInput: some View {
     switch rule.field {
-    case .artist, .album, .genre:
-      TextField("Value", text: $rule.value)
-
-    case .year:
-      TextField("e.g. 2020", text: $rule.value)
-        .keyboardType(.numberPad)
-
-    case .playCount:
-      TextField("Play count", text: $rule.value)
-        .keyboardType(.numberPad)
-
     case .rating:
       Picker("Rating", selection: Binding(
         get: { Int(rule.value) ?? 0 },
@@ -313,52 +337,58 @@ private struct RuleRowView: View {
       }
       .pickerStyle(.segmented)
 
-    case .duration:
-      HStack {
-        TextField("Seconds", text: $rule.value).keyboardType(.numberPad)
-        Text("sec").foregroundStyle(.secondary).font(.caption)
+    case .liked:
+      Picker("Loved", selection: Binding(
+        get: { (rule.value as NSString).boolValue },
+        set: { rule.value = $0 ? "true" : "false" }
+      )) {
+        Text("Loved").tag(true)
+        Text("Not loved").tag(false)
       }
+      .pickerStyle(.segmented)
 
-    case .lastPlayed:
-      HStack {
-        TextField("Days", text: $rule.value).keyboardType(.numberPad)
-        Text(rule.operation == .is_ || rule.operation == .isNot ? "" : "days ago")
-          .foregroundStyle(.secondary).font(.caption)
+    default:
+      switch rule.field.valueKind {
+      case .text:
+        TextField("Value", text: $rule.value)
+
+      case .number:
+        numberField(rule.field == .year ? "e.g. 2020" : "Value")
+
+      case .duration:
+        HStack {
+          numberField("Seconds")
+          Text("sec").foregroundStyle(.secondary).font(.caption)
+        }
+
+      case .days:
+        HStack {
+          numberField("Days")
+          // "is"/"is not" ask whether the date exists at all, so "days ago"
+          // would be misleading there.
+          if rule.operation != .is_ && rule.operation != .isNot {
+            Text("days ago").foregroundStyle(.secondary).font(.caption)
+          }
+        }
+
+      case .boolean:
+        EmptyView()
       }
     }
+  }
+
+  @ViewBuilder
+  private func numberField(_ placeholder: String) -> some View {
+    #if os(iOS)
+      TextField(placeholder, text: $rule.value).keyboardType(.numberPad)
+    #else
+      TextField(placeholder, text: $rule.value)
+    #endif
   }
 }
 
 // MARK: - Display name extensions
-
-extension RuleField {
-  var displayName: String {
-    switch self {
-    case .artist:    return "Artist"
-    case .album:     return "Album"
-    case .genre:     return "Genre"
-    case .year:      return "Year"
-    case .playCount: return "Play Count"
-    case .lastPlayed:return "Last Played"
-    case .rating:    return "Rating"
-    case .duration:  return "Duration"
-    }
-  }
-}
-
-extension RuleOperation {
-  var displayName: String {
-    switch self {
-    case .is_:            return "is"
-    case .isNot:          return "is not"
-    case .contains:       return "contains"
-    case .doesNotContain: return "doesn't contain"
-    case .greaterThan:    return "greater than"
-    case .lessThan:       return "less than"
-    case .inTheLast:      return "in the last"
-    }
-  }
-}
+// RuleField.displayName and RuleOperation.displayName live alongside their enums.
 
 extension LimitSort {
   var displayName: String {

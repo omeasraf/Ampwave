@@ -45,6 +45,9 @@ final class PlaylistManager {
       // Ensure "Liked Songs" playlist exists
       await ensureLikedSongsPlaylist()
       sortPlaylists()
+      // Smart playlists are snapshots of the library, so they go stale as songs
+      // are imported or removed. Re-evaluate them once the library is loaded.
+      refreshAllSmartPlaylists()
     } catch {
       print("[DEBUG] PlaylistManager.loadPlaylists: Error: \(error)")
       playlists = []
@@ -186,6 +189,28 @@ final class PlaylistManager {
     sortPlaylists()
   }
 
+  /// Swaps every occurrence of `song` for `replacement` across all playlists,
+  /// keeping position. Used when merging duplicates so playlist entries survive
+  /// the copy they pointed at being removed.
+  func replaceSong(_ song: LibrarySong, with replacement: LibrarySong) {
+    guard song.id != replacement.id else { return }
+
+    for playlist in playlists {
+      guard playlist.songs.contains(where: { $0.id == song.id }) else { continue }
+
+      if playlist.songs.contains(where: { $0.id == replacement.id }) {
+        // Already present — drop the duplicate entry rather than listing it twice.
+        playlist.songs.removeAll { $0.id == song.id }
+        playlist.songOrder.removeAll { $0 == song.id }
+      } else {
+        playlist.songs = playlist.songs.map { $0.id == song.id ? replacement : $0 }
+        playlist.songOrder = playlist.songOrder.map { $0 == song.id ? replacement.id : $0 }
+      }
+      playlist.touch()
+    }
+    save()
+  }
+
   func removeSong(_ song: LibrarySong, from playlist: Playlist) {
     playlist.removeSong(song)
     save()
@@ -264,7 +289,7 @@ final class PlaylistManager {
   // MARK: - Add Album to Playlist
 
   func addAlbum(_ album: Album, to playlist: Playlist) {
-    for song in album.songs.sorted(by: { ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0) }) {
+    for song in album.songs.sorted(by: LibrarySong.albumTrackOrder) {
       playlist.addSong(song)
     }
     save()
@@ -329,140 +354,37 @@ final class PlaylistManager {
       let rules = playlist.smartRules
     else { return }
 
-    let matchingSongs = applySmartRules(rules, to: library.songs)
+    // SmartPlaylistEvaluator applies the limit itself; doing it again here is
+    // what made a limit of 0 empty the playlist.
+    let matchingSongs = SmartPlaylistEvaluator.evaluate(
+      songs: library.songs,
+      rules: rules,
+      stats: ListeningHistoryTracker.shared.statisticsBySongId()
+    )
 
-    // Apply limit if enabled
-    let limitedSongs: [LibrarySong]
-    if rules.limitEnabled {
-      limitedSongs = Array(matchingSongs.prefix(rules.limitCount))
-    } else {
-      limitedSongs = matchingSongs
-    }
-
-    // Update playlist songs
-    playlist.songs = limitedSongs
-    playlist.songOrder = limitedSongs.map { $0.id }
+    playlist.songs = matchingSongs
+    playlist.songOrder = matchingSongs.map { $0.id }
     playlist.touch()
 
     save()
   }
 
-  private func applySmartRules(_ rules: SmartPlaylistRules, to songs: [LibrarySong])
-    -> [LibrarySong]
-  {
-    guard !rules.rules.isEmpty else { return songs }
+  /// Re-evaluates every smart playlist. Call after the library changes, so
+  /// smart playlists don't quietly go stale as songs are added or removed.
+  func refreshAllSmartPlaylists() {
+    let smart = playlists.filter { $0.playlistType == .smart && $0.smartRules != nil }
+    guard !smart.isEmpty else { return }
 
-    // Group rules by field — same semantics as SmartPlaylistEvaluator
-    let groups = SmartPlaylistEvaluator.fieldGroups(from: rules.rules)
+    let songs = library.songs
+    let stats = ListeningHistoryTracker.shared.statisticsBySongId()
 
-    let filtered = songs.filter { song in
-      groups.allSatisfy { groupRules in
-        var result = evaluateRule(groupRules[0], for: song)
-        for rule in groupRules.dropFirst() {
-          let r = evaluateRule(rule, for: song)
-          switch rule.connector {
-          case .and: result = result && r
-          case .or:  result = result || r
-          }
-        }
-        return result
-      }
+    for playlist in smart {
+      guard let rules = playlist.smartRules else { continue }
+      let matching = SmartPlaylistEvaluator.evaluate(songs: songs, rules: rules, stats: stats)
+      playlist.songs = matching
+      playlist.songOrder = matching.map { $0.id }
     }
-
-    // Apply sorting based on limit settings
-    if rules.limitEnabled {
-      switch rules.limitBy {
-      case .random:
-        return filtered.shuffled()
-      case .recentlyAdded:
-        return filtered.sorted { $0.importedDate > $1.importedDate }
-      case .recentlyPlayed:
-        let tracker = ListeningHistoryTracker.shared
-        return filtered.sorted {
-          let stats1 = tracker.getStatistics(for: $0)
-          let stats2 = tracker.getStatistics(for: $1)
-          return (stats1?.lastPlayedAt ?? Date.distantPast)
-            > (stats2?.lastPlayedAt ?? Date.distantPast)
-        }
-      case .mostPlayed:
-        let tracker = ListeningHistoryTracker.shared
-        return filtered.sorted {
-          let stats1 = tracker.getStatistics(for: $0)
-          let stats2 = tracker.getStatistics(for: $1)
-          return (stats1?.playCount ?? 0) > (stats2?.playCount ?? 0)
-        }
-      case .alphabetical:
-        return filtered.sorted { $0.title < $1.title }
-      }
-    }
-
-    return filtered
-  }
-
-  private func evaluateRule(_ rule: SmartRule, for song: LibrarySong) -> Bool {
-    let value = getFieldValue(rule.field, for: song)
-
-    switch rule.operation {
-    case .is_:
-      return value?.caseInsensitiveCompare(rule.value) == .orderedSame
-    case .isNot:
-      return value?.caseInsensitiveCompare(rule.value) != .orderedSame
-    case .contains:
-      return value?.lowercased().contains(rule.value.lowercased()) ?? false
-    case .doesNotContain:
-      return !(value?.lowercased().contains(rule.value.lowercased()) ?? false)
-    case .greaterThan:
-      if let numValue = Double(value ?? ""), let ruleValue = Double(rule.value) {
-        return numValue > ruleValue
-      }
-      return false
-    case .lessThan:
-      if let numValue = Double(value ?? ""), let ruleValue = Double(rule.value) {
-        return numValue < ruleValue
-      }
-      return false
-    case .inTheLast:
-      // For date-based rules (e.g., "in the last 7 days")
-      if let days = Int(rule.value), let dateValue = getDateFieldValue(rule.field, for: song) {
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
-        return dateValue > cutoffDate
-      }
-      return false
-    }
-  }
-
-  private func getFieldValue(_ field: RuleField, for song: LibrarySong) -> String? {
-    switch field {
-    case .artist:
-      return song.artist
-    case .album:
-      return song.album
-    case .genre:
-      return song.genre
-    case .year:
-      return song.year.map { String($0) }
-    case .playCount:
-      let stats = ListeningHistoryTracker.shared.getStatistics(for: song)
-      return stats.map { String($0.playCount) }
-    case .lastPlayed:
-      let stats = ListeningHistoryTracker.shared.getStatistics(for: song)
-      return stats?.lastPlayedAt?.description
-    case .rating:
-      let stats = ListeningHistoryTracker.shared.getStatistics(for: song)
-      return stats?.userRating.map { String($0) }
-    case .duration:
-      return String(song.duration)
-    }
-  }
-
-  private func getDateFieldValue(_ field: RuleField, for song: LibrarySong) -> Date? {
-    switch field {
-    case .lastPlayed:
-      let stats = ListeningHistoryTracker.shared.getStatistics(for: song)
-      return stats?.lastPlayedAt
-    default:
-      return nil
-    }
+    save()
   }
 
   // MARK: - Generate Playlist Cover

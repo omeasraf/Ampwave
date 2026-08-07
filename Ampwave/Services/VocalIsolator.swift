@@ -32,6 +32,25 @@ struct BiquadCoeffs {
             a2: (1.0 - alpha / A) * a0inv
         )
     }
+
+    /// Low-pass biquad coefficients (Audio EQ Cookbook, R. Zölzer). Used to
+    /// carve the sub-bass/kick fundamental out of the center channel before
+    /// vocal-removal processing runs, so a center-panned kick/bass doesn't
+    /// get hollowed out along with the vocal.
+    static func lowpass(freq: Float, Q: Float, sampleRate: Float) -> BiquadCoeffs {
+        let w0 = 2.0 * Float.pi * freq / sampleRate
+        let sinW0 = sin(w0)
+        let cosW0 = cos(w0)
+        let alpha = sinW0 / (2.0 * Q)
+        let a0inv: Float = 1.0 / (1.0 + alpha)
+        return BiquadCoeffs(
+            b0: ((1.0 - cosW0) / 2.0) * a0inv,
+            b1: (1.0 - cosW0)         * a0inv,
+            b2: ((1.0 - cosW0) / 2.0) * a0inv,
+            a1: (-2.0 * cosW0)        * a0inv,
+            a2: (1.0 - alpha)         * a0inv
+        )
+    }
 }
 
 struct BiquadState {
@@ -63,6 +82,21 @@ final class VocalIsolator {
     private let bandCount = 10
     private let bandFreqs: [Float] = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
     private let bandQ: Float = 1.41
+
+    // Bass protection for vocal removal: below this frequency, the center
+    // channel is left partly alone so kick/bass keep their weight instead of
+    // getting hollowed out along with the vocal.
+    //
+    // Kept deliberately low. The filter is only 12 dB/oct, so a crossover set
+    // anywhere near vocal territory still leaks a lot of vocal energy into the
+    // protected path — at 180 Hz that audibly weakened vocal removal. 90 Hz
+    // sits under essentially every sung fundamental while still covering the
+    // kick and bass fundamentals that carry the low end.
+    private let bassProtectFreq: Float = 90.0
+    private let bassProtectQ: Float = 0.707
+    /// 0 = bass ducks exactly like the rest of the center channel (original
+    /// behavior), 1 = bass level never changes regardless of vocal removal.
+    private let bassProtectAmount: Float = 0.6
 
     var vocalLevel: Float {
         get { targetVocalLevelPtr.pointee }
@@ -118,6 +152,17 @@ final class VocalIsolator {
         var lastGains: [Float]
         var sampleRate: Float = 44100.0
 
+        // Bass-protection split (mid channel only, ahead of vocal removal)
+        let bassProtectFreq: Float
+        let bassProtectQ: Float
+        let bassProtectAmount: Float
+        var bassState = BiquadState()
+        var bassCoeffs: BiquadCoeffs = .passthrough
+        /// False until `prepare` computes real coefficients for the actual
+        /// sample rate. Guards against the identity default being used as a
+        /// low-pass, which would silently defeat vocal removal entirely.
+        var bassReady = false
+
         var frameCounter: Int64 = 0
 
         init(
@@ -126,7 +171,10 @@ final class VocalIsolator {
             eqEnabled: UnsafeMutablePointer<Bool>,
             eqGains: UnsafeMutablePointer<Float>,
             bandFreqs: [Float],
-            bandQ: Float
+            bandQ: Float,
+            bassProtectFreq: Float,
+            bassProtectQ: Float,
+            bassProtectAmount: Float
         ) {
             self.targetLevel = targetLevel
             self.currentLevel = currentLevel
@@ -134,6 +182,9 @@ final class VocalIsolator {
             self.eqGains = eqGains
             self.bandFreqs = bandFreqs
             self.bandQ = bandQ
+            self.bassProtectFreq = bassProtectFreq
+            self.bassProtectQ = bassProtectQ
+            self.bassProtectAmount = bassProtectAmount
             let n = bandFreqs.count
             self.eqState = Array(repeating: Array(repeating: BiquadState(), count: 2), count: n)
             self.eqCoeffs = Array(repeating: .passthrough, count: n)
@@ -172,7 +223,10 @@ final class VocalIsolator {
             eqEnabled: eqEnabledPtr,
             eqGains: eqGainsPtr,
             bandFreqs: bandFreqs,
-            bandQ: bandQ
+            bandQ: bandQ,
+            bassProtectFreq: bassProtectFreq,
+            bassProtectQ: bassProtectQ,
+            bassProtectAmount: bassProtectAmount
         )
 
         var callbacks = MTAudioProcessingTapCallbacks(
@@ -204,6 +258,12 @@ final class VocalIsolator {
                         sampleRate: storage.sampleRate
                     )
                 }
+                storage.bassCoeffs = .lowpass(
+                    freq: storage.bassProtectFreq,
+                    Q: storage.bassProtectQ,
+                    sampleRate: storage.sampleRate
+                )
+                storage.bassReady = true
             },
 
             unprepare: nil,
@@ -246,9 +306,38 @@ final class VocalIsolator {
                             let s = vocalCurve(current)
                             let k1 = (s + 1.0) / 2.0
                             let k2 = (s - 1.35) / 2.0
-                            let nL = k1 * L + k2 * R
-                            let nR = k2 * L + k1 * R
-                            L = nL; R = nR
+
+                            // Mid/side decomposition: k1+k2 is the gain applied
+                            // to the center (mid) channel, k1-k2 the constant
+                            // side-channel width boost. Vocal removal is really
+                            // "attenuate the center", but a center-panned
+                            // kick/bass gets caught in that same net.
+                            let midGain = k1 + k2
+                            let sideGain = k1 - k2
+                            let mid = (L + R) * 0.5
+                            let side = (L - R) * 0.5
+
+                            // Split only the very low end back out of mid and
+                            // hold it nearer unity, so the kick/bass keeps its
+                            // weight while everything above it — including the
+                            // whole vocal range — still gets full cancellation.
+                            // Skipped until `prepare` has supplied real
+                            // coefficients: the identity default would make
+                            // lowMid == mid, routing the *entire* center
+                            // channel through bassGain and all but disabling
+                            // vocal removal.
+                            var newMid = mid * midGain
+                            if storage.bassReady {
+                                let lowMid = storage.bassState.process(mid, storage.bassCoeffs)
+                                let highMid = mid - lowMid
+                                let bassGain =
+                                    1.0 + (midGain - 1.0) * (1.0 - storage.bassProtectAmount)
+                                newMid = lowMid * bassGain + highMid * midGain
+                            }
+                            let newSide = side * sideGain
+
+                            L = newMid + newSide
+                            R = newMid - newSide
                         }
 
                         if doEQ { storage.applyEQ(left: &L, right: &R) }
@@ -272,9 +361,38 @@ final class VocalIsolator {
                             let s = vocalCurve(current)
                             let k1 = (s + 1.0) / 2.0
                             let k2 = (s - 1.35) / 2.0
-                            let nL = k1 * L + k2 * R
-                            let nR = k2 * L + k1 * R
-                            L = nL; R = nR
+
+                            // Mid/side decomposition: k1+k2 is the gain applied
+                            // to the center (mid) channel, k1-k2 the constant
+                            // side-channel width boost. Vocal removal is really
+                            // "attenuate the center", but a center-panned
+                            // kick/bass gets caught in that same net.
+                            let midGain = k1 + k2
+                            let sideGain = k1 - k2
+                            let mid = (L + R) * 0.5
+                            let side = (L - R) * 0.5
+
+                            // Split only the very low end back out of mid and
+                            // hold it nearer unity, so the kick/bass keeps its
+                            // weight while everything above it — including the
+                            // whole vocal range — still gets full cancellation.
+                            // Skipped until `prepare` has supplied real
+                            // coefficients: the identity default would make
+                            // lowMid == mid, routing the *entire* center
+                            // channel through bassGain and all but disabling
+                            // vocal removal.
+                            var newMid = mid * midGain
+                            if storage.bassReady {
+                                let lowMid = storage.bassState.process(mid, storage.bassCoeffs)
+                                let highMid = mid - lowMid
+                                let bassGain =
+                                    1.0 + (midGain - 1.0) * (1.0 - storage.bassProtectAmount)
+                                newMid = lowMid * bassGain + highMid * midGain
+                            }
+                            let newSide = side * sideGain
+
+                            L = newMid + newSide
+                            R = newMid - newSide
                         }
 
                         if doEQ { storage.applyEQ(left: &L, right: &R) }

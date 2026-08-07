@@ -528,7 +528,7 @@ struct AlbumsGridView: View {
     }
     .background(themeManager.backgroundColor)
     .toolbar {
-      ToolbarItem(placement: .topBarTrailing) {
+      ToolbarItem(placement: .primaryAction) {
         GridSizePicker(
           selection: $albumGridSizeRaw,
           options: [
@@ -632,7 +632,7 @@ struct ArtistsGridView: View {
       await loadArtists()
     }
     .toolbar {
-      ToolbarItem(placement: .topBarTrailing) {
+      ToolbarItem(placement: .primaryAction) {
         GridSizePicker(
           selection: $artistGridSizeRaw,
           options: [

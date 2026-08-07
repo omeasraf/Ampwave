@@ -159,7 +159,41 @@ final class RecommendationEngine {
   /// Builds a radio queue seeded by a single song — up to `limit` similar songs,
   /// excluding the seed itself. Call sites: PlaybackController.playRadio(from:).
   func buildRadioQueue(seed: LibrarySong, limit: Int = 25) -> [LibrarySong] {
-    findSimilarSongs(to: [seed], exclude: [seed], limit: limit)
+    buildRadioQueue(seeds: [seed], limit: limit)
+  }
+
+  /// Radio from several seeds at once.
+  ///
+  /// A genre mix built off a single track degenerates into that one artist's
+  /// discography, so callers with a pool of representative songs should pass
+  /// all of them and let the scoring blend the result.
+  func buildRadioQueue(seeds: [LibrarySong], limit: Int = 25) -> [LibrarySong] {
+    guard !seeds.isEmpty else { return [] }
+    return findSimilarSongs(to: seeds, exclude: seeds, limit: limit)
+  }
+
+  /// Library songs ranked for discovery — newly added, rarely played and
+  /// un-skipped tracks first, disliked ones dropped entirely.
+  ///
+  /// Exposed so the Discovery mix can rank rather than plain-shuffle, which
+  /// previously let disliked and heavily-skipped songs straight in.
+  func rankedForDiscovery(excluding excludedIds: Set<UUID>, limit: Int) -> [LibrarySong] {
+    let stats = statisticsBySongID()
+
+    let candidates =
+      library.songs
+      .filter { !excludedIds.contains($0.id) && stats[$0.id]?.isDisliked != true }
+      .map { song in
+        (
+          song: song,
+          // Jitter keeps successive refreshes from being identical.
+          score: discoveryScore(for: song, statsBySongId: stats) + Double.random(in: 0...0.6),
+          reason: RecommendationReason.discovery
+        )
+      }
+      .sorted { $0.score > $1.score }
+
+    return diversify(candidates, limit: limit).map(\.song)
   }
 
   // MARK: - Similar Songs
@@ -198,10 +232,16 @@ final class RecommendationEngine {
     let referenceArtists = Set(referenceSongs.map { $0.artist })
     let referenceGenres = extractGenres(from: referenceSongs)
     let referenceAlbums = Set(referenceSongs.compactMap { $0.album })
+    let referenceYears = referenceSongs.compactMap { $0.year }
+    let stats = statisticsBySongID()
 
-    var scoredSongs: [(song: LibrarySong, score: Double)] = []
+    var scoredSongs: [(song: LibrarySong, score: Double, reason: RecommendationReason)] = []
 
     for song in library.songs where !excludeIds.contains(song.id) {
+      // A track the user explicitly disliked has no business turning up in a
+      // queue they didn't hand-pick.
+      if stats[song.id]?.isDisliked == true { continue }
+
       var score: Double = 0
 
       // Same artist bonus
@@ -211,7 +251,7 @@ final class RecommendationEngine {
 
       // Same album bonus (for finding other tracks from same album)
       if let album = song.album, referenceAlbums.contains(album) {
-        score += 2.5
+        score += 2.0
       }
 
       // Genre similarity
@@ -219,34 +259,36 @@ final class RecommendationEngine {
       let commonGenres = referenceGenres.intersection(songGenres)
       score += Double(commonGenres.count) * 1.5
 
-      // Similar release year (within 5 years)
-      if let songYear = song.year {
-        for refSong in referenceSongs {
-          if let refYear = refSong.year {
-            let yearDiff = abs(songYear - refYear)
-            if yearDiff <= 5 {
-              score += 1.0 - (Double(yearDiff) * 0.15)
-            }
-          }
-        }
+      // Closest reference year only. Summing over every reference meant a
+      // large seed set could out-weigh artist and genre matches on era alone.
+      if let songYear = song.year,
+        let closestGap = referenceYears.map({ abs(songYear - $0) }).min(),
+        closestGap <= 5
+      {
+        score += 1.0 - (Double(closestGap) * 0.15)
       }
 
-      // Duration similarity (within 30 seconds)
-      for refSong in referenceSongs {
-        let durationDiff = abs(song.duration - refSong.duration)
-        if durationDiff <= 30 {
-          score += 0.5 - (durationDiff * 0.01)
-        }
-      }
+      // Songs of a similar length are not musically similar; that heuristic
+      // was adding noise, so it's gone.
 
-      if score > 0 {
-        scoredSongs.append((song, score))
-      }
+      guard score > 0 else { continue }
+
+      // Taste signals — plays, likes, ratings, skips. Radio previously ran on
+      // metadata overlap alone, so how the user actually felt about a track
+      // had no bearing on whether it turned up.
+      score += baseRecommendationScore(for: song, statsBySongId: stats) * 0.6
+
+      // Without a little jitter, the same seed produces a byte-identical queue
+      // every single time, which is what makes the mixes feel static.
+      score += Double.random(in: 0...0.9)
+
+      scoredSongs.append((song, score, .similarToRecent))
     }
 
-    // Sort by score and return top matches
+    // Sort by score, then cap per-artist/album so one prolific artist can't
+    // swallow the whole queue.
     scoredSongs.sort { $0.score > $1.score }
-    return scoredSongs.prefix(limit).map { $0.song }
+    return diversify(scoredSongs, limit: limit).map(\.song)
   }
 
   // MARK: - Genre Recommendations

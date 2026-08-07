@@ -35,7 +35,7 @@ public struct PlayLikedSongsIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Play Liked Songs"
   public static var description = IntentDescription(
     "Starts playback of your Liked Songs playlist in Ampwave.")
-  public static var openAppWhenRun: Bool = true
+  public static var openAppWhenRun: Bool = false
 
   public init() {}
 
@@ -60,7 +60,7 @@ public struct ResumePlaybackIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Resume Ampwave"
   public static var description = IntentDescription(
     "Opens Ampwave and resumes the last queue if possible.")
-  public static var openAppWhenRun: Bool = true
+  public static var openAppWhenRun: Bool = false
 
   public init() {}
 
@@ -91,12 +91,14 @@ public struct ControlPlaybackIntent: AudioPlaybackIntent {
     case play, pause, toggle, next, previous
 
     public static var typeDisplayRepresentation: TypeDisplayRepresentation = "Playback Action"
+    // These titles are spoken back and matched against, so they read as the
+    // words someone would actually say.
     public static var caseDisplayRepresentations: [PlaybackAction: DisplayRepresentation] = [
       .play: "Play",
       .pause: "Pause",
-      .toggle: "Toggle Play/Pause",
-      .next: "Next Track",
-      .previous: "Previous Track",
+      .toggle: "Play or pause",
+      .next: "Skip",
+      .previous: "Go back",
     ]
   }
 
@@ -142,7 +144,7 @@ public struct PlayMusicIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Play Music"
   public static var description = IntentDescription(
     "Plays music in Ampwave based on a search query.")
-  public static var openAppWhenRun: Bool = true
+  public static var openAppWhenRun: Bool = false
 
   @Parameter(title: "Query", description: "The song, artist, album, or playlist to play")
   public var query: String
@@ -190,21 +192,22 @@ public struct PlayMusicIntent: AudioPlaybackIntent {
 public struct PlayArtistIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Play Artist"
   public static var description = IntentDescription("Plays songs by a specific artist in Ampwave.")
-  public static var openAppWhenRun: Bool = true
+  public static var openAppWhenRun: Bool = false
 
-  @Parameter(title: "Artist Name")
-  public var artistName: String
+  @Parameter(title: "Artist", requestValueDialog: IntentDialog("Which artist?"))
+  var artist: ArtistEntity
 
   public init() {}
 
-  public func perform() async throws -> some IntentResult {
-    print("[DEBUG] Siri: PlayArtistIntent.perform (artist: \(artistName))")
-    let results = await SearchManager.shared.search(query: artistName, filter: .artists)
+  public static var parameterSummary: some ParameterSummary {
+    Summary("Play \(\.$artist) in Ampwave")
+  }
 
+  public func perform() async throws -> some IntentResult {
+    let name = artist.name
+    print("[DEBUG] Siri: PlayArtistIntent.perform (artist: \(name))")
     await MainActor.run {
-      if let artist = results.artists.first {
-        PlaybackController.shared.playArtist(artist.name)
-      }
+      PlaybackController.shared.playArtist(name)
     }
     return .result()
   }
@@ -214,20 +217,23 @@ public struct PlayArtistIntent: AudioPlaybackIntent {
 public struct PlaySpecificPlaylistIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Play Playlist"
   public static var description = IntentDescription("Plays a specific playlist in Ampwave.")
-  public static var openAppWhenRun: Bool = true
+  public static var openAppWhenRun: Bool = false
 
-  @Parameter(title: "Playlist Name")
-  public var playlistName: String
+  @Parameter(title: "Playlist", requestValueDialog: IntentDialog("Which playlist?"))
+  var playlist: PlaylistEntity
 
   public init() {}
 
-  public func perform() async throws -> some IntentResult {
-    print("[DEBUG] Siri: PlaySpecificPlaylistIntent.perform (playlist: \(playlistName))")
-    let results = await SearchManager.shared.search(query: playlistName, filter: .playlists)
+  public static var parameterSummary: some ParameterSummary {
+    Summary("Play \(\.$playlist) in Ampwave")
+  }
 
+  public func perform() async throws -> some IntentResult {
+    let id = playlist.id
+    print("[DEBUG] Siri: PlaySpecificPlaylistIntent.perform (playlist: \(playlist.name))")
     await MainActor.run {
-      if let playlist = results.playlists.first {
-        PlaybackController.shared.playPlaylist(playlist)
+      if let match = PlaylistManager.shared.playlists.first(where: { $0.id == id }) {
+        PlaybackController.shared.playPlaylist(match)
       }
     }
     return .result()
@@ -239,22 +245,25 @@ public struct AddToPlaylistIntent: AppIntent {
   public static var title: LocalizedStringResource = "Add to Playlist"
   public static var description = IntentDescription(
     "Adds the currently playing song to a playlist.")
-  public static var openAppWhenRun: Bool = true
+  public static var openAppWhenRun: Bool = false
 
-  @Parameter(title: "Playlist Name")
-  public var playlistName: String
+  @Parameter(title: "Playlist", requestValueDialog: IntentDialog("Which playlist?"))
+  var playlist: PlaylistEntity
 
   public init() {}
 
-  public func perform() async throws -> some IntentResult {
-    print("[DEBUG] Siri: AddToPlaylistIntent.perform (playlist: \(playlistName))")
-    let results = await SearchManager.shared.search(query: playlistName, filter: .playlists)
+  public static var parameterSummary: some ParameterSummary {
+    Summary("Add the current song to \(\.$playlist)")
+  }
 
+  public func perform() async throws -> some IntentResult {
+    let id = playlist.id
+    print("[DEBUG] Siri: AddToPlaylistIntent.perform (playlist: \(playlist.name))")
     await MainActor.run {
-      if let playlist = results.playlists.first,
+      if let match = PlaylistManager.shared.playlists.first(where: { $0.id == id }),
         let song = PlaybackController.shared.currentItem
       {
-        PlaylistManager.shared.addSong(song, to: playlist)
+        PlaylistManager.shared.addSong(song, to: match)
       }
     }
     return .result()
@@ -265,13 +274,18 @@ public struct AddToPlaylistIntent: AppIntent {
 struct AmpwaveShortcuts: AppShortcutsProvider {
   @AppShortcutsBuilder
   static var appShortcuts: [AppShortcut] {
-    // ── Song-specific (entity parameter — allowed in phrases) ────────────────
+    // The content parameter is interpolated directly into the phrase, so
+    // "Play <title> on Ampwave" is understood in one shot. That only works
+    // because these are AppEntity parameters — Siri refuses to slot a String
+    // into a phrase, which is why these used to read "Play a song on Ampwave"
+    // and anything more natural fell through to the system media handler.
     AppShortcut(
       intent: PlaySongIntent(),
       phrases: [
+        "Play \(\.$song) on \(.applicationName)",
+        "Play \(\.$song) in \(.applicationName)",
+        "Play the song \(\.$song) on \(.applicationName)",
         "Play a song on \(.applicationName)",
-        "Play a song in \(.applicationName)",
-        "Find and play a song on \(.applicationName)",
       ],
       shortTitle: "Play Song",
       systemImageName: "music.note"
@@ -289,27 +303,40 @@ struct AmpwaveShortcuts: AppShortcutsProvider {
       systemImageName: "magnifyingglass"
     )
 
-    // ── Artist — String param, Siri prompts ──────────────────────────────────
     AppShortcut(
       intent: PlayArtistIntent(),
       phrases: [
+        "Play \(\.$artist) on \(.applicationName)",
+        "Play music by \(\.$artist) on \(.applicationName)",
+        "Play songs by \(\.$artist) on \(.applicationName)",
         "Play an artist on \(.applicationName)",
-        "Play artist music on \(.applicationName)",
       ],
       shortTitle: "Play Artist",
       systemImageName: "music.mic"
     )
 
-    // ── Playlist — String param, Siri prompts ────────────────────────────────
     AppShortcut(
       intent: PlaySpecificPlaylistIntent(),
       phrases: [
+        "Play \(\.$playlist) on \(.applicationName)",
+        "Play my \(\.$playlist) playlist on \(.applicationName)",
+        "Start \(\.$playlist) on \(.applicationName)",
         "Play a playlist on \(.applicationName)",
-        "Start a playlist on \(.applicationName)",
-        "Play my playlist on \(.applicationName)",
       ],
       shortTitle: "Play Playlist",
       systemImageName: "music.note.list"
+    )
+
+    // ── Transport controls — previously unreachable by voice at all ──────────
+    AppShortcut(
+      intent: ControlPlaybackIntent(),
+      phrases: [
+        "\(\.$action) on \(.applicationName)",
+        "\(\.$action) in \(.applicationName)",
+        "\(\.$action) music on \(.applicationName)",
+      ],
+      shortTitle: "Control Playback",
+      systemImageName: "playpause"
     )
 
     // ── Liked songs ──────────────────────────────────────────────────────────
@@ -351,8 +378,9 @@ struct AmpwaveShortcuts: AppShortcutsProvider {
     AppShortcut(
       intent: AddToPlaylistIntent(),
       phrases: [
+        "Add this song to \(\.$playlist) on \(.applicationName)",
+        "Add this to \(\.$playlist) on \(.applicationName)",
         "Add this song to a playlist on \(.applicationName)",
-        "Add to playlist on \(.applicationName)",
       ],
       shortTitle: "Add to Playlist",
       systemImageName: "plus.circle"

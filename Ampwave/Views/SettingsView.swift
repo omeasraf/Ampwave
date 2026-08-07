@@ -31,6 +31,7 @@ struct SettingsView: View {
   @State private var showingResetStatsConfirmation = false
   @State private var isResetting = false
   @State private var backupExportURL: URL?
+  @State private var showingBulkTagEditor = false
   @State private var showingOnboarding = false
 
   private var library: SongLibrary { SongLibrary.shared }
@@ -85,6 +86,7 @@ struct SettingsView: View {
       themingSection.listRowBackground(themeManager.cardBackgroundColor)
       layoutSection.listRowBackground(themeManager.cardBackgroundColor)
       onlineFeaturesSection.listRowBackground(themeManager.cardBackgroundColor)
+      webDAVSection.listRowBackground(themeManager.cardBackgroundColor)
       dataManagementSection.listRowBackground(themeManager.cardBackgroundColor)
       dataSourcesSection.listRowBackground(themeManager.cardBackgroundColor)
       aboutSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -97,6 +99,9 @@ struct SettingsView: View {
     .sheet(isPresented: $showingOnboarding) {
       OnboardingView()
         .environment(ThemeManager.shared)
+    }
+    .sheet(isPresented: $showingBulkTagEditor) {
+      BulkTagEditorSheet()
     }
     .fileImporter(
       isPresented: $isShowingImporter,
@@ -299,6 +304,13 @@ struct SettingsView: View {
         isShowingImporter = true
       } label: {
         Label("Import Playlist", systemImage: "music.note.list")
+      }
+      .disabled(isImporting)
+
+      NavigationLink {
+        WebDAVBrowserView()
+      } label: {
+        Label("Import from WebDAV", systemImage: "externaldrive.badge.icloud")
       }
       .disabled(isImporting)
 
@@ -515,18 +527,25 @@ struct SettingsView: View {
           )
         )
 
-        Toggle(
-          "Word-synced Lyrics",
-          isOn: Binding(
-            get: { preferences.wordSyncedLyricsEnabled },
-            set: {
-              preferences.wordSyncedLyricsEnabled = $0
-              if $0 {
-                PlaybackController.shared.ensureWordSyncedLyricsForCurrentSong()
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle(
+            "Word-synced Lyrics",
+            isOn: Binding(
+              get: { preferences.wordSyncedLyricsEnabled },
+              set: {
+                preferences.wordSyncedLyricsEnabled = $0
+                if $0 {
+                  PlaybackController.shared.ensureWordSyncedLyricsForCurrentSong()
+                }
               }
-            }
+            )
           )
-        )
+          Text(
+            "Highlights each word as it's sung. Word timings are fetched when a song first plays, not during import — the providers rate-limit, so requesting a whole library at once gets throttled."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
 
         Toggle(
           "Copy Imported Music",
@@ -607,6 +626,34 @@ struct SettingsView: View {
     } footer: {
       Text(
         "When online, the app can fetch metadata, lyrics, and artwork from online sources. All data is cached for offline use."
+      )
+    }
+  }
+
+  private var webDAVSection: some View {
+    Section {
+      NavigationLink {
+        WebDAVSettingsView()
+      } label: {
+        HStack {
+          Label("WebDAV Connection", systemImage: "server.rack")
+          Spacer()
+          Text(WebDAVSettingsStore.isConfigured ? "Configured" : "Not Configured")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      NavigationLink {
+        WebDAVBrowserView()
+      } label: {
+        Label("Browse WebDAV Music", systemImage: "folder.badge.gearshape")
+      }
+    } header: {
+      Text("WebDAV")
+    } footer: {
+      Text(
+        "Connect to a WebDAV server, browse remote folders, and securely download music into your Ampwave library."
       )
     }
   }
@@ -713,6 +760,18 @@ struct SettingsView: View {
         MetadataQueueView()
       } label: {
         Label("Review Missing Metadata", systemImage: "questionmark.circle")
+      }
+
+      NavigationLink {
+        MissingFilesView()
+      } label: {
+        Label("Find Missing Files", systemImage: "exclamationmark.triangle")
+      }
+
+      Button {
+        showingBulkTagEditor = true
+      } label: {
+        Label("Bulk Tag Editor", systemImage: "tag")
       }
 
       if let backupExportURL {

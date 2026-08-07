@@ -77,9 +77,12 @@ final class RadioMixGenerator {
 
     var mixNumber = 1
     for (genre, seeds) in topGenres {
-      guard let seed = seeds.randomElement() else { continue }
-      let similar = engine.buildRadioQueue(seed: seed, limit: 24)
-      let queue = [seed] + similar
+      guard !seeds.isEmpty else { continue }
+      // Seed from several tracks in the genre rather than one. A single seed
+      // made "Daily Mix" collapse into that seed artist's discography.
+      let seedPool = Array(seeds.shuffled().prefix(5))
+      let similar = engine.buildRadioQueue(seeds: seedPool, limit: 24)
+      let queue = ([seedPool[0]] + similar).shuffledPreservingFirst()
       let station = RadioStation(
         name: "Daily Mix \(mixNumber)",
         subtitle: genreSubtitle(genre: genre, songs: seeds),
@@ -97,11 +100,16 @@ final class RadioMixGenerator {
     // ── 2. Favorites Mix ────────────────────────────────────────────────────
     if let liked = playlistManager.likedSongsPlaylist, liked.songs.count >= 3 {
       let likedSongs = liked.songs.shuffled()
-      let seed = likedSongs[0]
-      let extras = engine.buildRadioQueue(seed: seed, limit: 20)
-      let queue = Array(Set(likedSongs + extras)
-        .sorted { $0.title < $1.title }
-        .prefix(25))
+      let extras = engine.buildRadioQueue(seeds: Array(likedSongs.prefix(5)), limit: 20)
+      // Interleaved and shuffled, not alphabetised — sorting by title turned
+      // this into an A-to-Z list rather than a mix.
+      var seenIds = Set<UUID>()
+      let queue = Array(
+        (likedSongs + extras)
+          .filter { seenIds.insert($0.id).inserted }
+          .shuffled()
+          .prefix(25)
+      )
       let station = RadioStation(
         name: "Favorites Mix",
         subtitle: "\(liked.songs.count) liked songs & more",
@@ -116,9 +124,14 @@ final class RadioMixGenerator {
 
     // ── 3. Discovery Mix ────────────────────────────────────────────────────
     let recentIds = Set(recentSongs.map(\.id))
-    let unheard = library.songs.filter { !recentIds.contains($0.id) }.shuffled()
+    // Ranked by the discovery score (favours newly added, unplayed, un-skipped
+    // tracks) instead of a plain shuffle, and never surfaces disliked songs.
+    let unheard = engine.rankedForDiscovery(
+      excluding: recentIds,
+      limit: 25
+    )
     if unheard.count >= 5 {
-      let queue = Array(unheard.prefix(25))
+      let queue = unheard
       let station = RadioStation(
         name: "Discovery Mix",
         subtitle: "Fresh picks from your library",
@@ -173,5 +186,14 @@ final class RadioMixGenerator {
       if paths.count == 4 { break }
     }
     return paths
+  }
+}
+
+extension Array {
+  /// Shuffles everything after the first element, so a mix still opens on its
+  /// seed track but doesn't play out in ranked order.
+  fileprivate func shuffledPreservingFirst() -> [Element] {
+    guard count > 2 else { return self }
+    return [self[0]] + self.dropFirst().shuffled()
   }
 }

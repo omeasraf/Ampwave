@@ -16,6 +16,39 @@ import MusicKit
 import SwiftData
 internal import SwiftUI
 
+/// A deliberately tiny observable clock for karaoke rendering.
+///
+/// General playback UI only needs a few updates per second, while word-synced
+/// lyrics need much finer timing. Keeping those updates on a separate object
+/// prevents the rest of the app from being invalidated for every lyric tick.
+@Observable
+@MainActor
+final class LyricsPlaybackClock {
+  fileprivate(set) var currentTime: TimeInterval = 0 {
+    didSet { anchorUptime = ProcessInfo.processInfo.systemUptime }
+  }
+
+  /// Host time captured alongside `currentTime`. Deliberately untracked: it is
+  /// written on every sample and nothing should re-render just because of it.
+  @ObservationIgnored
+  private(set) var anchorUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+
+  /// `currentTime` extrapolated to *now*.
+  ///
+  /// The player samples us ~30x a second, which is enough to know *which* word
+  /// is being sung but not enough to draw a highlight sweeping *through* one —
+  /// at 30 Hz the fill visibly steps. Karaoke rendering runs off a display-linked
+  /// timeline instead and asks for the time at each frame, so the sweep is
+  /// continuous no matter how coarsely the player reports progress.
+  func interpolatedTime(isPlaying: Bool) -> TimeInterval {
+    guard isPlaying else { return currentTime }
+    let elapsed = ProcessInfo.processInfo.systemUptime - anchorUptime
+    // Clamp: if sampling stalls, the highlight should pause rather than run
+    // away from the audio.
+    return currentTime + min(max(elapsed, 0), 0.5)
+  }
+}
+
 @Observable
 @MainActor
 final class PlaybackController {
@@ -23,6 +56,7 @@ final class PlaybackController {
 
   private var player: AVQueuePlayer?
   private var timeObserver: (observer: Any, player: AVPlayer)?
+  private var lyricTimeObserver: (observer: Any, player: AVPlayer)?
   private var itemObservers: [NSKeyValueObservation] = []
   private let library = SongLibrary.shared
   private let historyTracker = ListeningHistoryTracker.shared
@@ -41,7 +75,7 @@ final class PlaybackController {
   private(set) var isPlaying: Bool = false
   private(set) var isLoading: Bool = false
   var isScrubbing: Bool = false
-  private var isSeeking: Bool = false
+  private(set) var isSeeking: Bool = false
 
   var volume: Float = 1.0 {
     didSet {
@@ -156,11 +190,29 @@ final class PlaybackController {
 
   // MARK: - Lyrics
 
-  private(set) var currentLyrics: SyncedLyric?
+  private(set) var currentLyrics: SyncedLyric? {
+    didSet {
+      lyricLineTimestamps = currentLyrics?.lines.map(\.timestamp) ?? []
+    }
+  }
   private(set) var currentLyricIndex: Int?
+  let lyricsClock = LyricsPlaybackClock()
+  private var lyricLineTimestamps: [TimeInterval] = []
 
   var hasLyrics: Bool {
     currentLyrics?.hasLyrics ?? false
+  }
+
+  /// Unsynced text for the current song, used when there are no timings to
+  /// follow. Prefers the provider's own plain copy over stripping timestamps
+  /// out of the LRC, which leaves odd spacing on enhanced (word-synced) lines.
+  var currentPlainLyrics: String? {
+    if let plain = currentLyrics?.plainLyrics, !plain.isEmpty { return plain }
+    guard let raw = currentItem?.lyrics, !raw.isEmpty else { return nil }
+    // `song.lyrics` holds LRC once synced lyrics land, including inline word
+    // timings — strip them rather than showing timestamps as lyrics.
+    let sanitized = LRCParser.plainText(from: raw)
+    return sanitized.isEmpty ? nil : sanitized
   }
 
   // MARK: - Source Tracking
@@ -177,6 +229,10 @@ final class PlaybackController {
     if let (observer, obsPlayer) = timeObserver {
       obsPlayer.removeTimeObserver(observer)
       timeObserver = nil
+    }
+    if let (observer, obsPlayer) = lyricTimeObserver {
+      obsPlayer.removeTimeObserver(observer)
+      lyricTimeObserver = nil
     }
     player?.pause()
     player = nil
@@ -228,6 +284,7 @@ final class PlaybackController {
     self.currentItem = song
     self.currentLyrics = lyrics
     self.currentTime = time
+    self.lyricsClock.currentTime = time
     self.duration = song.duration
     self.isPlaying = false
     self.updateCurrentLyric()
@@ -282,6 +339,29 @@ final class PlaybackController {
       name: .AVPlayerItemDidPlayToEndTime,
       object: nil
     )
+
+    // Lyrics can be fetched or edited from outside playback (the song editor,
+    // a background pass). Without this the player keeps whatever it loaded at
+    // track start and the views fall back to showing raw text.
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleLyricsDidUpdate(_:)),
+      name: .lyricsDidUpdate,
+      object: nil
+    )
+  }
+
+  @objc private func handleLyricsDidUpdate(_ notification: Notification) {
+    Task { @MainActor in
+      guard let songId = notification.object as? UUID,
+        let current = currentItem,
+        current.id == songId
+      else { return }
+
+      currentLyrics = LyricsService.shared.getCachedLyrics(for: current)
+      updateCurrentLyric()
+      updateWidget(force: true)
+    }
   }
 
   @objc private func handleLibraryDidLoad() {
@@ -514,9 +594,12 @@ final class PlaybackController {
 
     setupAudioSession()
 
-    let url = library.getFileURL(for: song)
-    guard FileManager.default.fileExists(atPath: url.path) else {
-      print("[ERROR] PlaybackController: Audio file not found: \(url.path)")
+    // Must go through the library: a referenced song (Copy Imported Music
+    // off) lives outside the container and its file is invisible to a plain
+    // FileManager check until security-scoped access is opened.
+    guard library.fileExists(for: song) else {
+      print(
+        "[ERROR] PlaybackController: Audio file not found: \(library.getFileURL(for: song).path)")
       isLoading = false
       return
     }
@@ -529,6 +612,13 @@ final class PlaybackController {
           "[VALIDATION] PlaybackController: AVPlayerItem ready with audioMix: \(item.audioMix != nil)"
         )
 
+        // A player that failed (e.g. its item pointed at a file that's since
+        // been deleted) is stuck for good — AVQueuePlayer never recovers
+        // from `.failed`, so reusing it here would silently no-op forever.
+        // Tear it down and recreate instead of just checking for nil.
+        if self.player?.status == .failed {
+          self.cleanupPlayer()
+        }
         if self.player == nil {
           self.player = AVQueuePlayer(items: [item])
           self.applyEQPresetForPlayback()
@@ -544,9 +634,7 @@ final class PlaybackController {
         self.currentItem = song
         self.duration = song.duration > 0 ? song.duration : 0
         self.currentTime = 0
-
-        // Prepare next item for gapless
-        self.prepareNextItem()
+        self.lyricsClock.currentTime = 0
 
         self.player?.play()
         self.isPlaying = true
@@ -554,10 +642,6 @@ final class PlaybackController {
 
         self.updateUIForNewItem()
         self.historyTracker.songStarted(song, source: source, playlistId: playlistId)
-
-        Task {
-          await self.loadLyrics(for: song)
-        }
 
         self.saveState()
       }
@@ -619,6 +703,12 @@ final class PlaybackController {
         } else if item.status == .failed {
           print(
             "[ERROR] PlaybackController: AVPlayerItem failed: \(String(describing: item.error))")
+          // Only the actively-playing item failing needs a response — a
+          // preloaded next-item failure just gets discovered fresh when
+          // play() reaches it. Skip ahead rather than sitting on a dead item.
+          if self?.player?.currentItem === item {
+            self?.playNext()
+          }
         }
       }
     }
@@ -636,6 +726,10 @@ final class PlaybackController {
     let nextIndex = currentQueueIndex + 1
     if nextIndex < queue.count {
       let nextSong = queue[nextIndex]
+      guard library.fileExists(for: nextSong) else {
+        print("[ERROR] PlaybackController: Skipping gapless preload, file missing for \(nextSong.title)")
+        return
+      }
       print("[VALIDATION] PlaybackController: preparing next item \(nextSong.title)")
 
       Task {
@@ -716,9 +810,9 @@ final class PlaybackController {
   }
 
   func playAlbum(_ album: Album, startingAtTrack index: Int = 0) {
-    let sortedSongs = album.songs.sorted {
-      ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0)
-    }
+    // Must match the order AlbumView lists tracks in — the caller passes an
+    // index into that list, so a divergent sort here plays the wrong song.
+    let sortedSongs = album.songs.sorted(by: LibrarySong.albumTrackOrder)
     playQueue(sortedSongs, startingAt: index, from: .album)
   }
 
@@ -763,6 +857,7 @@ final class PlaybackController {
     } else {
       if let currentItem {
         currentTime = max(currentTime, currentItem.duration)
+        lyricsClock.currentTime = currentTime
       }
       updateCurrentLyric()
       updateNowPlaying()
@@ -779,9 +874,15 @@ final class PlaybackController {
     }
   }
 
+  /// Identifies the in-flight seek so a completion handler from a
+  /// superseded seek (or the timeout fallback below) can't clobber state
+  /// written by a newer one.
+  private var seekToken = UUID()
+
   func seek(to time: TimeInterval) {
     guard time.isFinite, time >= 0 else { return }
     self.currentTime = time
+    self.lyricsClock.currentTime = time
 
     if isScrubbing {
       debouncedUpdateLyric()
@@ -789,16 +890,40 @@ final class PlaybackController {
     }
 
     isSeeking = true
+    let token = UUID()
+    seekToken = token
     let cmTime = CMTime(seconds: time, preferredTimescale: 600)
+
+    // AVPlayer's seek completion handler can be dropped entirely if the
+    // player item gets swapped out mid-seek (gapless auto-advance /
+    // crossfade). Without a fallback, `isSeeking` would stay true forever,
+    // which permanently freezes lyric sync: both periodic time observers
+    // refuse to run while it's set, and the karaoke clock keeps
+    // extrapolating from its last (now stale) anchor with nothing to ever
+    // re-anchor it.
+    Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .seconds(1.5))
+      guard let self, self.seekToken == token, self.isSeeking else { return }
+      self.isSeeking = false
+      let playerSeconds = self.player?.currentTime().seconds
+      let resolvedTime = (playerSeconds?.isFinite == true) ? playerSeconds! : time
+      self.currentTime = resolvedTime
+      self.lyricsClock.currentTime = resolvedTime
+      self.updateCurrentLyric(at: resolvedTime)
+      self.updateNowPlaying()
+    }
+
     player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) {
       [weak self] finished in
       Task { @MainActor in
-        self?.isSeeking = false
+        guard let self, self.seekToken == token else { return }
+        self.isSeeking = false
         if finished {
-          self?.currentTime = time
-          self?.updateCurrentLyric()
-          self?.updateNowPlaying()
-          self?.saveState()
+          self.currentTime = time
+          self.lyricsClock.currentTime = time
+          self.updateCurrentLyric(at: time)
+          self.updateNowPlaying()
+          self.saveState()
         }
       }
     }
@@ -911,7 +1036,10 @@ final class PlaybackController {
     
     // Reset time immediately to prevent scrubber lag from previous track
     self.currentTime = 0
+    self.lyricsClock.currentTime = 0
     self.duration = song.duration > 0 ? song.duration : 0
+    self.currentLyrics = nil
+    self.currentLyricIndex = nil
     
     // Force immediate remote command and lock screen update
     updateNowPlaying()
@@ -1111,22 +1239,15 @@ final class PlaybackController {
   private func loadLyrics(for song: LibrarySong) async {
     let lyricsService = LyricsService.shared
 
-    // 1. Try full fetch (respects caching + word-sync upgrade inside fetchLyrics)
+    // Collects word-synced, line-synced and plain in one pass and caches all
+    // of them; which one gets drawn is decided at render time from the
+    // word-synced preference.
     let fetched = await lyricsService.fetchLyrics(for: song)
+    guard currentItem?.id == song.id else { return }
     currentLyrics = fetched ?? lyricsService.getCachedLyrics(for: song)
 
-    // 2. If word-sync is enabled but what we have is only line-synced, upgrade now.
-    if let mc = modelContext {
-      let prefs = UserPreferences.getOrCreate(in: mc)
-      let hasWordSync = currentLyrics?.lines.contains { ($0.wordOffsets?.count ?? 0) > 1 } ?? false
-      if prefs.wordSyncedLyricsEnabled && !hasWordSync
-          && NetworkMonitor.shared.isOnline && !prefs.isOfflineMode {
-        if let upgraded = await lyricsService.fetchWordSyncedLyrics(for: song) {
-          currentLyrics = upgraded
-        }
-      }
-    }
-
+    lyricsClock.currentTime = currentTime
+    updateCurrentLyric()
     updateWidget(force: true)
   }
 
@@ -1143,13 +1264,29 @@ final class PlaybackController {
     }
   }
 
-  private func updateCurrentLyric() {
-    guard let lyrics = currentLyrics else {
+  private func updateCurrentLyric(at playbackTime: TimeInterval? = nil) {
+    guard !lyricLineTimestamps.isEmpty else {
       currentLyricIndex = nil
       return
     }
 
-    let newIndex = lyrics.lineIndex(at: currentTime)
+    let time = playbackTime ?? lyricsClock.currentTime
+    let newIndex: Int?
+    if time < lyricLineTimestamps[0] {
+      newIndex = nil
+    } else {
+      var lowerBound = 0
+      var upperBound = lyricLineTimestamps.count
+      while lowerBound < upperBound {
+        let midpoint = lowerBound + (upperBound - lowerBound) / 2
+        if lyricLineTimestamps[midpoint] <= time {
+          lowerBound = midpoint + 1
+        } else {
+          upperBound = midpoint
+        }
+      }
+      newIndex = lowerBound - 1
+    }
 
     if newIndex != currentLyricIndex {
       currentLyricIndex = newIndex
@@ -1160,7 +1297,7 @@ final class PlaybackController {
   var currentLyricLine: LyricLine? {
     guard let index = currentLyricIndex,
       let lyrics = currentLyrics,
-      index >= 0, index < (try? lyrics.lines.count) ?? 0
+      index >= 0, index < lyrics.lines.count
     else { return nil }
     return lyrics.lines[index]
   }
@@ -1168,6 +1305,7 @@ final class PlaybackController {
   func refreshLyrics() async {
     guard let song = currentItem else { return }
     currentLyrics = await LyricsService.shared.refreshLyrics(for: song)
+    updateCurrentLyric()
     updateWidget()
   }
 
@@ -1273,6 +1411,27 @@ final class PlaybackController {
     }
   }
 
+  /// Finds the closest index in `songs` (searching outward from
+  /// `startingAt`) whose audio file actually exists on disk, so a stale
+  /// saved index pointing at a deleted file doesn't get handed to the player.
+  /// Returns `nil` if nothing in `songs` is playable.
+  private func nearestPlayableIndex(in songs: [LibrarySong], startingAt: Int) -> Int? {
+    guard !songs.isEmpty else { return nil }
+    let start = min(max(startingAt, 0), songs.count - 1)
+    if library.fileExists(for: songs[start]) { return start }
+    var offset = 1
+    while start - offset >= 0 || start + offset < songs.count {
+      if start + offset < songs.count, library.fileExists(for: songs[start + offset]) {
+        return start + offset
+      }
+      if start - offset >= 0, library.fileExists(for: songs[start - offset]) {
+        return start - offset
+      }
+      offset += 1
+    }
+    return nil
+  }
+
   private func restoreState() {
     print("[DEBUG] PlaybackController.restoreState: Starting restoration")
     guard let state = persistentState else {
@@ -1316,9 +1475,17 @@ final class PlaybackController {
       restoredQueue.insert(restoredSong, at: min(max(state.lastQueueIndex, 0), restoredQueue.count))
     }
 
-    let resolvedQueueIndex =
+    // Files can vanish out from under the library (e.g. deleted via the
+    // Files app) between app launches. Restoring a player against a song
+    // whose file is gone poisons the AVQueuePlayer for good — every future
+    // play() call reuses that dead player and silently no-ops — so pick the
+    // nearest song that still has a readable file instead of trusting the
+    // saved index blindly.
+    let preferredIndex =
       restoredQueue.firstIndex(where: { $0.id == restoredSong.id })
       ?? min(max(state.lastQueueIndex, 0), max(restoredQueue.count - 1, 0))
+    let resolvedQueueIndex =
+      nearestPlayableIndex(in: restoredQueue, startingAt: preferredIndex) ?? preferredIndex
 
     if !restoredQueue.isEmpty {
       Task { @MainActor in
@@ -1337,13 +1504,14 @@ final class PlaybackController {
           ?? .library
         self.currentPlaylistId = state.lastPlaylistId
 
-        if currentQueueIndex < queue.count {
+        if currentQueueIndex < queue.count, library.fileExists(for: queue[currentQueueIndex]) {
           let song = queue[currentQueueIndex]
           print(
             "[DEBUG] PlaybackController.restoreState.MainActor: Current song: \(song.title)"
           )
           self.currentItem = song
           self.currentTime = state.lastTime
+          self.lyricsClock.currentTime = state.lastTime
           self.isPlaying = false
 
           // Prepare player but don't play
@@ -1375,7 +1543,7 @@ final class PlaybackController {
           }
         } else {
           print(
-            "[DEBUG] PlaybackController.restoreState.MainActor: FAILED - index \(currentQueueIndex) out of bounds"
+            "[DEBUG] PlaybackController.restoreState.MainActor: SKIPPED - no restorable song with a readable file at index \(currentQueueIndex)"
           )
         }
       }
@@ -1485,6 +1653,29 @@ final class PlaybackController {
       obsPlayer.removeTimeObserver(observer)
       timeObserver = nil
     }
+    if let (observer, obsPlayer) = lyricTimeObserver {
+      obsPlayer.removeTimeObserver(observer)
+      lyricTimeObserver = nil
+    }
+
+    // Word timing is isolated from the general playback model so this higher
+    // cadence only refreshes the active karaoke line.
+    let lyricInterval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+    let lyricObserver = player.addPeriodicTimeObserver(
+      forInterval: lyricInterval,
+      queue: .main
+    ) {
+      [weak self] time in
+      MainActor.assumeIsolated {
+        guard let self, !self.isScrubbing, !self.isSeeking else { return }
+        guard !self.lyricLineTimestamps.isEmpty else { return }
+        let seconds = time.seconds
+        guard seconds.isFinite else { return }
+        self.lyricsClock.currentTime = seconds
+        self.updateCurrentLyric(at: seconds)
+      }
+    }
+    lyricTimeObserver = (lyricObserver, player)
 
     // 0.5 s is enough for lyric sync and progress display while keeping the
     // main-thread update rate low. 0.1 s was causing every screen that embeds
@@ -1495,33 +1686,34 @@ final class PlaybackController {
       queue: .main
     ) {
       [weak self] time in
-      guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
-      self.currentTime = time.seconds
-      self.updateCurrentLyric()
+      MainActor.assumeIsolated {
+        guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
+        self.currentTime = time.seconds
 
-      // Crossfade tick
-      if let prefs = self.preferences, prefs.crossfadeEnabled,
-        prefs.crossfadeDuration > 0, self.isPlaying, self.duration > 0
-      {
-        let remaining = self.duration - self.currentTime
-        let fadeDuration = prefs.crossfadeDuration
+        // Crossfade tick
+        if let prefs = self.preferences, prefs.crossfadeEnabled,
+          prefs.crossfadeDuration > 0, self.isPlaying, self.duration > 0
+        {
+          let remaining = self.duration - self.currentTime
+          let fadeDuration = prefs.crossfadeDuration
 
-        if !self.crossfadeStarted && remaining <= fadeDuration && remaining > 0 {
-          let nextIndex = self.currentQueueIndex + 1
-          if nextIndex < self.queue.count {
-            self.startCrossfade(to: self.queue[nextIndex])
+          if !self.crossfadeStarted && remaining <= fadeDuration && remaining > 0 {
+            let nextIndex = self.currentQueueIndex + 1
+            if nextIndex < self.queue.count {
+              self.startCrossfade(to: self.queue[nextIndex])
+            }
+          }
+
+          if self.crossfadeStarted {
+            self.tickCrossfade()
           }
         }
 
-        if self.crossfadeStarted {
-          self.tickCrossfade()
+        // Save at most once every 5 seconds.
+        if self.currentTime - self.lastStateSaveTime >= 5 {
+          self.lastStateSaveTime = self.currentTime
+          self.saveState()
         }
-      }
-
-      // Save at most once every 5 seconds (modulo check fires multiple ticks in a row)
-      if self.currentTime - self.lastStateSaveTime >= 5 {
-        self.lastStateSaveTime = self.currentTime
-        self.saveState()
       }
     }
     timeObserver = (observer, player)

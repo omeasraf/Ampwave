@@ -13,12 +13,33 @@ import SwiftData
   @MainActor
   final class SongLibrary {
     static let shared = SongLibrary()
+
+    /// Set by the app target so long batch work can hold an OS background
+    /// assertion and keep running after the user switches away. Returns the
+    /// closure that ends the assertion.
+    ///
+    /// Injected rather than called directly because this file also compiles
+    /// into the watch app and the Lyrics extension, where `UIApplication` is
+    /// unavailable; it stays nil there and the work simply isn't extended.
+    @ObservationIgnored
+    static var beginBackgroundAssertion: ((String) -> (() -> Void))?
   
     private let fileManager = FileManager.default
-    private(set) var songs: [LibrarySong] = []
+    private(set) var songs: [LibrarySong] = [] {
+      didSet { songIndex = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }) }
+    }
     private(set) var albums: [Album] = []
     private(set) var artists: [Artist] = []
     private(set) var libraryVersion: Int = 0
+
+    /// id → song, so callers resolving many ids (history, most played, playlist
+    /// song order) don't linear-scan `songs` once per id.
+    private var songIndex: [UUID: LibrarySong] = [:]
+
+    func song(id: UUID) -> LibrarySong? { songIndex[id] }
+
+    /// Resolves ids to songs in the order given, skipping any that are gone.
+    func songs(ids: [UUID]) -> [LibrarySong] { ids.compactMap { songIndex[$0] } }
   
     private var isLoaded = false
   nonisolated let songsDirectory: URL
@@ -590,6 +611,7 @@ import SwiftData
 
     var accountedForPaths = Set<String>()
     var deletedSongs: [LibrarySong] = []
+    var songsMissingFromExpectedPath: [LibrarySong] = []
 
     for song in existingSongs {
       // REFERENCED SONGS: We don't delete these automatically in the startup scan.
@@ -599,7 +621,7 @@ import SwiftData
         let secured = url.startAccessingSecurityScopedResource()
         let exists = FileManager.default.fileExists(atPath: url.path)
         if secured { url.stopAccessingSecurityScopedResource() }
-        
+
         if !exists {
           print("[DEBUG] indexOnStartup: Referenced song file not accessible/missing: \(song.title)")
           // We still don't delete it automatically, just log it.
@@ -617,23 +639,44 @@ import SwiftData
         continue
       }
 
-      // File is NOT at expected location. Check if it moved within our directory.
-      var foundMoved = false
-      if let possibleURLs = fileNameToURLs[song.fileName] {
-        for possibleURL in possibleURLs {
-          if await self.fileHash(at: possibleURL) == song.fileHash {
-            // Found it at a new path in our directory - update it
-            print("[DEBUG] indexOnStartup: Found moved file for \(song.title) at \(possibleURL.lastPathComponent)")
-            // We don't move it back here (to avoid disk churn), just store the actual path.
-            updateStoredFilePath(for: song, to: possibleURL)
-            accountedForPaths.insert(possibleURL.standardizedFileURL.path)
-            foundMoved = true
-            break
+      // Not where we expected it — it may have moved. Defer the hashing so it
+      // can all be done in one pass off the main actor.
+      songsMissingFromExpectedPath.append(song)
+    }
+
+    // Hash off the main actor: `fileHash` is `nonisolated async`, which under
+    // this project's Approachable Concurrency settings runs on the caller's
+    // actor. Awaiting it inline checksummed every relocated file on the main
+    // thread at launch, and blocked the deletion pass behind it.
+    let moveCandidates: [PathRepairCandidate] = songsMissingFromExpectedPath.compactMap { song in
+      let urls = fileNameToURLs[song.fileName] ?? []
+      guard !urls.isEmpty else { return nil }
+      return PathRepairCandidate(songID: song.id, fileHash: song.fileHash, candidateURLs: urls)
+    }
+
+    var relocatedURLs: [UUID: URL] = [:]
+    if !moveCandidates.isEmpty {
+      relocatedURLs = await Task.detached(priority: .utility) {
+        var resolved: [UUID: URL] = [:]
+        for candidate in moveCandidates {
+          for url in candidate.candidateURLs {
+            if await self.fileHash(at: url) == candidate.fileHash {
+              resolved[candidate.songID] = url
+              break
+            }
           }
         }
-      }
+        return resolved
+      }.value
+    }
 
-      if !foundMoved {
+    for song in songsMissingFromExpectedPath {
+      if let movedURL = relocatedURLs[song.id] {
+        print("[DEBUG] indexOnStartup: Found moved file for \(song.title) at \(movedURL.lastPathComponent)")
+        // We don't move it back here (to avoid disk churn), just store the actual path.
+        updateStoredFilePath(for: song, to: movedURL)
+        accountedForPaths.insert(movedURL.standardizedFileURL.path)
+      } else {
         // Only mark for deletion if we are reasonably sure it's gone from our managed folder
         print("[DEBUG] indexOnStartup: Marking copied song for deletion (not found on disk): \(song.title)")
         deletedSongs.append(song)
@@ -710,24 +753,54 @@ import SwiftData
       fileNameToURLs[url.lastPathComponent, default: []].append(url)
     }
 
-    var repairedCount = 0
-    for song in copiedSongsNeedingRepair {
+    // Snapshot what the matcher needs, so the hashing pass never touches a
+    // SwiftData model off the main actor.
+    let candidates: [PathRepairCandidate] = copiedSongsNeedingRepair.compactMap { song in
+      var urls: [URL] = []
+
+      // The metadata-derived path is only a *hint*. It is checked first but
+      // still has to prove itself by hash below.
       let legacyURL = legacyMetadataFileURL(for: song)
       if fileManager.fileExists(atPath: legacyURL.path) {
-        if updateStoredFilePath(for: song, to: legacyURL) {
-          repairedCount += 1
-        }
-        continue
+        urls.append(legacyURL)
+      }
+      for url in fileNameToURLs[song.fileName] ?? [] where url != legacyURL {
+        urls.append(url)
       }
 
-      guard let candidates = fileNameToURLs[song.fileName] else { continue }
+      guard !urls.isEmpty else { return nil }
+      return PathRepairCandidate(songID: song.id, fileHash: song.fileHash, candidateURLs: urls)
+    }
+
+    guard !candidates.isEmpty else { return }
+
+    // Hash off the main actor. `fileHash` is `nonisolated async`, and under this
+    // project's Approachable Concurrency settings that inherits the caller's
+    // actor — awaiting it directly from here would checksum every candidate on
+    // the main thread during launch.
+    let resolvedPaths: [UUID: URL] = await Task.detached(priority: .utility) {
+      var resolved: [UUID: URL] = [:]
       for candidate in candidates {
-        if await fileHash(at: candidate) == song.fileHash {
-          if updateStoredFilePath(for: song, to: candidate) {
-            repairedCount += 1
+        for url in candidate.candidateURLs {
+          // Verify by content, never by location. Two versions of an album
+          // (deluxe vs standard) hold the same artist, album and file name, so
+          // a file merely existing at the derived path is not proof it is the
+          // right audio — accepting it there would bind the record to the
+          // wrong track.
+          if await self.fileHash(at: url) == candidate.fileHash {
+            resolved[candidate.songID] = url
+            break
           }
-          break
         }
+      }
+      return resolved
+    }.value
+
+    var repairedCount = 0
+    for song in copiedSongsNeedingRepair {
+      guard let url = resolvedPaths[song.id] else { continue }
+      if updateStoredFilePath(for: song, to: url) {
+        repairedCount += 1
       }
     }
 
@@ -737,6 +810,14 @@ import SwiftData
       )
       try? modelContext.save()
     }
+  }
+
+  /// Plain value snapshot of a song awaiting path repair, so candidate matching
+  /// can run off the main actor without carrying a SwiftData model across.
+  private struct PathRepairCandidate: Sendable {
+    let songID: UUID
+    let fileHash: String
+    let candidateURLs: [URL]
   }
 
   /// Removes albums that have no songs associated with them
@@ -797,6 +878,13 @@ import SwiftData
     return audioFiles
   }
 
+  /// `@concurrent` is load-bearing. This project builds with Approachable
+  /// Concurrency and `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, under which a
+  /// plain `nonisolated async` function runs on its *caller's* actor — so every
+  /// import and startup scan was SHA-256'ing whole audio files on the main
+  /// thread. This forces the work onto the concurrent executor at every call
+  /// site at once.
+  @concurrent
   nonisolated private func fileHash(at url: URL) async -> String? {
     do {
       let handle = try FileHandle(forReadingFrom: url)
@@ -821,7 +909,7 @@ import SwiftData
 
   // MARK: - Import
 
-  func importFiles(_ urls: [URL]) async {
+  func importFiles(_ urls: [URL], forceCopy: Bool? = nil) async {
     print("[DEBUG] SongLibrary.importFiles: Starting import of \(urls.count) files")
     guard let modelContext = modelContext else {
       print("[DEBUG] SongLibrary.importFiles: Error - No modelContext")
@@ -848,7 +936,11 @@ import SwiftData
       indexingStatus = .indexing("Importing \(index + 1)/\(totalCount)…")
 
       if await importFile(
-        from: url, modelContext: modelContext, groupByAlbum: groupByAlbum) != nil
+        from: url,
+        modelContext: modelContext,
+        groupByAlbum: groupByAlbum,
+        forceCopy: forceCopy
+      ) != nil
       {
         importedCount += 1
         print("[DEBUG] SongLibrary.importFiles: Successfully imported \(url.lastPathComponent)")
@@ -882,7 +974,12 @@ import SwiftData
       "[DEBUG] SongLibrary.importFiles: Completed. Imported \(importedCount)/\(totalCount) files")
   }
 
-  private func importFile(from url: URL, modelContext: ModelContext, groupByAlbum: Bool) async
+  private func importFile(
+    from url: URL,
+    modelContext: ModelContext,
+    groupByAlbum: Bool,
+    forceCopy: Bool? = nil
+  ) async
     -> LibrarySong?
   {
     print("[DEBUG] SongLibrary.importFile: Starting for \(url.lastPathComponent)")
@@ -930,7 +1027,7 @@ import SwiftData
     // Offload remaining heavy I/O to a background task
     print("[DEBUG] SongLibrary.importFile: Offloading remaining I/O to background task")
     let preferences = UserPreferences.getOrCreate(in: modelContext)
-    let shouldCopy = preferences.copyMusicToStorage
+    let shouldCopy = forceCopy ?? preferences.copyMusicToStorage
 
     let ioResult = await Task.detached(priority: .userInitiated) {
       // Extract metadata (this also does I/O)
@@ -1060,7 +1157,8 @@ import SwiftData
       metadataSourceArtist: metadata.metadataSourceArtist,
       metadataSourceAlbum: metadata.metadataSourceAlbum,
       isLive: metadata.isLive,
-      isMedley: metadata.isMedley
+      isMedley: metadata.isMedley,
+      isExplicit: metadata.isExplicit ?? false
     )
 
     // Set initial artwork source
@@ -1192,7 +1290,8 @@ import SwiftData
       metadataSourceArtist: metadata.metadataSourceArtist,
       metadataSourceAlbum: metadata.metadataSourceAlbum,
       isLive: metadata.isLive,
-      isMedley: metadata.isMedley
+      isMedley: metadata.isMedley,
+      isExplicit: metadata.isExplicit ?? false
     )
 
     // Set initial artwork source
@@ -1402,9 +1501,9 @@ import SwiftData
     // Fetch if no synced lyrics AND we haven't already tried.
     let syncedLyricLines = LRCParser.parse(song.lyrics ?? "")
     let hasSyncedLyrics = !syncedLyricLines.isEmpty
-    let hasWordSyncedLyrics = syncedLyricLines.contains { ($0.wordOffsets?.count ?? 0) > 1 }
-    let needsLyricsFetch = !hasSyncedLyrics || (preferences.wordSyncedLyricsEnabled && !hasWordSyncedLyrics)
-    if preferences.autoFetchLyrics && needsLyricsFetch && !song.lyricsCheckAttempted && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode {
+    if preferences.autoFetchLyrics && !hasSyncedLyrics && !song.lyricsCheckAttempted
+      && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode
+    {
       print(
         "[DEBUG] SongLibrary.fetchMetadataForSong: Missing synced lyrics, calling LyricsService")
 
@@ -1416,13 +1515,35 @@ import SwiftData
       if lyricsService.modelContext == nil {
         lyricsService.setModelContext(modelContext)
       }
-      _ = await lyricsService.fetchLyrics(for: song)
+      // Word-synced providers are deliberately skipped during import: they
+      // rate-limit aggressively and a library-sized run gets us throttled.
+      // Word timings are fetched per-song on first play instead.
+      _ = await lyricsService.fetchLyrics(
+        for: song,
+        includeWordSynced: !isPartOfBatch
+      )
     }
+  }
+
+  /// Whether any songs still need an online metadata pass. Used to decide
+  /// whether it's worth asking the OS for another background window.
+  var hasPendingMetadataWork: Bool {
+    guard let modelContext = modelContext else { return false }
+    let descriptor = FetchDescriptor<LibrarySong>(
+      predicate: #Predicate<LibrarySong> { song in
+        song.metadataCheckAttempted == false
+      }
+    )
+    return ((try? modelContext.fetchCount(descriptor)) ?? 0) > 0
   }
 
   func fetchMetadataForNewSongs() async {
     print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Starting batch fetch")
     guard let modelContext = modelContext else { return }
+
+    // Keeps the batch alive if the user leaves the app mid-fetch.
+    let endAssertion = Self.beginBackgroundAssertion?("metadata-fetch")
+    defer { endAssertion?() }
 
     let preferences = UserPreferences.getOrCreate(in: modelContext)
     
@@ -1473,7 +1594,14 @@ import SwiftData
       for song in songsToFetch {
         // Double check if context is still valid
         guard self.modelContext != nil else { break }
-        
+
+        // The OS cancels us when a background window expires; stop cleanly so
+        // the remaining songs keep their unattempted flag for the next pass.
+        if Task.isCancelled {
+          print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Cancelled, stopping batch")
+          break
+        }
+
         // Mark as attempted BEFORE the call to prevent infinite loops if it crashes or fails
         song.metadataCheckAttempted = true
         
@@ -1537,10 +1665,17 @@ import SwiftData
     if let modelContext = modelContext, metadataService.modelContext == nil {
       metadataService.setModelContext(modelContext)
     }
+
+    indexingStatus = .indexing("Refreshing \(album.name)…")
+    defer { indexingStatus = .complete }
+
     await metadataService.refreshMetadata(for: album)
 
-    // Also refresh all songs in the album
-    for song in album.songs {
+    // Also refresh all songs in the album — the per-song pass is what fills in
+    // track/disc numbers and the explicit flag.
+    let albumSongs = album.songs.sorted(by: LibrarySong.albumTrackOrder)
+    for (index, song) in albumSongs.enumerated() {
+      indexingStatus = .indexing("Refreshing tracks (\(index + 1)/\(albumSongs.count))…")
       await metadataService.refreshMetadata(for: song)
     }
   }
@@ -1552,12 +1687,51 @@ import SwiftData
       metadataService.setModelContext(modelContext)
     }
 
-    // Refresh artist info
-    await metadataService.fetchMetadata(for: artist)
+    indexingStatus = .indexing("Refreshing \(artist.name)…")
+    defer { indexingStatus = .complete }
+
+    // Refresh artist info. The fetched result has to be written back — it was
+    // previously discarded, so this call quietly did nothing.
+    if let metadata = await metadataService.fetchMetadata(for: artist) {
+      if let genres = metadata.genres, !genres.isEmpty {
+        artist.genres = genres
+        artist.cachedGenres = genres
+      }
+      if let biography = metadata.biography, !biography.isEmpty {
+        artist.biography = biography
+        artist.cachedBiography = biography
+      }
+      if let origin = metadata.origin, !origin.isEmpty {
+        artist.origin = origin
+        artist.cachedOrigin = origin
+      }
+      if let activeYears = metadata.activeYears, !activeYears.isEmpty {
+        artist.activeYears = activeYears
+        artist.cachedActiveYears = activeYears
+      }
+      if artist.musicBrainzId == nil { artist.musicBrainzId = metadata.musicBrainzId }
+
+      if let artworkURL = metadata.artworkURL,
+        let path = await metadataService.downloadArtwork(from: artworkURL)
+      {
+        artist.artworkPath = path
+        artist.isDedicatedArtwork = true
+      }
+      if let fanartURL = metadata.fanartURL {
+        artist.fanartURL = fanartURL.absoluteString
+        if let path = await metadataService.downloadArtwork(from: fanartURL) {
+          artist.fanartPath = path
+        }
+      }
+
+      artist.lastUpdatedDate = Date()
+      saveContext()
+    }
 
     // Refresh all songs by this artist
     let artistSongs = getSongs(byArtist: artist.name)
-    for song in artistSongs {
+    for (index, song) in artistSongs.enumerated() {
+      indexingStatus = .indexing("Refreshing tracks (\(index + 1)/\(artistSongs.count))…")
       await metadataService.refreshMetadata(for: song)
     }
   }
@@ -1933,11 +2107,35 @@ import SwiftData
 
   // MARK: - File Management
 
+  /// Whether the song's audio file is actually readable right now.
+  /// Handles security-scoped referenced files, which need to be opened before
+  /// their existence can be checked.
+  func fileExists(for song: LibrarySong) -> Bool {
+    let url = getFileURL(for: song)
+    if song.storageMode == .referenced {
+      return isReadable(url)
+    }
+    return fileManager.fileExists(atPath: url.path)
+  }
+
+  /// Existence check that opens security scope first — a plain `fileExists`
+  /// reports false for a perfectly good file outside the container.
+  private func isReadable(_ url: URL) -> Bool {
+    let secured = url.startAccessingSecurityScopedResource()
+    defer { if secured { url.stopAccessingSecurityScopedResource() } }
+    return fileManager.fileExists(atPath: url.path)
+  }
+
   func getFileURL(for song: LibrarySong) -> URL {
-    if song.storageMode == .referenced, let data = song.bookmarkData {
-      if let resolved = PathManager.resolveBookmark(data) {
-        return resolved
-      }
+    // A bookmark that still *resolves* isn't necessarily usable — its sandbox
+    // extension can be stale (the "sandbox_extension_consume failed: 22" case),
+    // which used to shadow a perfectly good stored path and make the track
+    // unplayable forever. Only take the bookmark if it actually reads.
+    if song.storageMode == .referenced, let data = song.bookmarkData,
+      let resolved = PathManager.resolveBookmark(data),
+      isReadable(resolved)
+    {
+      return resolved
     }
 
     if let storedURL = resolvedStoredFileURL(for: song),

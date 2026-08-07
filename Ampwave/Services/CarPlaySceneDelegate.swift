@@ -261,7 +261,7 @@
     }
 
     private func showSongsInAlbum(_ album: Album) {
-      let songs = album.songs.sorted { ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0) }
+      let songs = album.songs.sorted(by: LibrarySong.albumTrackOrder)
       let items = songs.map { song in
         let item = CPListItem(text: song.title, detailText: nil)
         item.handler = { _, completion in

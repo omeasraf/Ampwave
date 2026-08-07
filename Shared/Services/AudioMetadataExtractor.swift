@@ -24,6 +24,7 @@ struct ExtractedAudioMetadata: Sendable {
   var year: Int?
   var composer: String?
   var artwork: Data?
+  var isExplicit: Bool?
 
   // Confidence & Sources
   var titleConfidence: Double = 0.0
@@ -81,6 +82,7 @@ enum AudioMetadataExtractor: Sendable {
     var composer: String?
     var artwork: Data?
     var isCompilation: Bool = false
+    var isExplicit: Bool?
 
     for item in allMetadata {
       let value = try? await item.load(.value)
@@ -89,8 +91,51 @@ enum AudioMetadataExtractor: Sendable {
 
       // ── Non-common-key path (format-specific identifiers) ──────────────────
       guard let key = item.commonKey else {
+        // Match on the actual well-known identifiers first — e.g. ID3's
+        // "TRCK"/"TPOS"/"TYER" and iTunes's "trkn"/"disk"/"©day" atoms never
+        // contain the English substrings ("track"/"disc"/"year") the
+        // fallback below looks for, so without this exact match those tags
+        // were silently dropped for essentially every standard file.
+        if let identifier = item.identifier {
+          switch identifier {
+          case .id3MetadataTrackNumber, .iTunesMetadataTrackNumber:
+            if let num = value as? NSNumber { trackNumber = num.intValue }
+            else if let str = value as? String { trackNumber = parseTrackNumber(str) }
+            continue
+          case .id3MetadataPartOfASet, .iTunesMetadataDiscNumber:
+            if let num = value as? NSNumber { discNumber = num.intValue }
+            else if let str = value as? String { discNumber = parseTrackNumber(str) }
+            continue
+          case .id3MetadataYear, .id3MetadataRecordingTime, .id3MetadataOriginalReleaseYear,
+            .iTunesMetadataReleaseDate, .quickTimeMetadataYear:
+            if let num = value as? NSNumber { year = num.intValue }
+            else if let str = value as? String { year = parseYear(str) }
+            continue
+          case .iTunesMetadataContentRating:
+            if let num = value as? NSNumber { isExplicit = num.intValue != 0 }
+            else if let str = value as? String {
+              let normalized = str.lowercased()
+              isExplicit = !(normalized == "clean" || normalized == "0" || normalized.isEmpty)
+            }
+            continue
+          case .iTunesMetadataDiscCompilation:
+            if let num = value as? NSNumber { isCompilation = num.boolValue }
+            else if let str = value as? String { isCompilation = (str == "1" || str.lowercased() == "true") }
+            continue
+          default:
+            break
+          }
+        }
+
         if idRaw.contains("lyrics") || idRaw.contains("Lyrics") { lyrics = (value as? String) ?? lyrics }
         else if idRaw.contains("comment") || idRaw.contains("Comment") || idRaw.contains("description") { songDescription = (value as? String) ?? songDescription }
+        else if idLower.contains("advisory") || idLower.contains("explicit") {
+          if let num = value as? NSNumber { isExplicit = num.intValue != 0 }
+          else if let str = value as? String {
+            let normalized = str.lowercased()
+            isExplicit = (normalized == "1" || normalized == "true" || normalized == "explicit")
+          }
+        }
         else if idRaw.contains("year") || idRaw.contains("Year") || idRaw.contains("date") || idRaw.contains("Date") {
           if let num = value as? NSNumber { year = num.intValue }
           else if let str = value as? String { year = parseYear(str) }
@@ -219,6 +264,7 @@ enum AudioMetadataExtractor: Sendable {
       year: year ?? filenameMetadata.year ?? folderMetadata.year,
       composer: composer,
       artwork: artwork,
+      isExplicit: isExplicit,
       titleConfidence: titleConfidence,
       artistConfidence: artistConfidence,
       albumConfidence: albumConfidence,

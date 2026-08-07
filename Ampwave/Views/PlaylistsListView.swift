@@ -95,12 +95,6 @@ struct PlaylistsListView: View {
           .font(.system(size: 16, weight: .semibold))
       }
       .listRowBackground(themeManager.backgroundColor)
-      .sheet(isPresented: $showingCreateSheet) {
-        CreatePlaylistSheet()
-      }
-      .sheet(isPresented: $showingCreateSmartSheet) {
-        CreateSmartPlaylistSheet()
-      }
 
       ForEach(filteredPlaylists) { playlist in
         NavigationLink(
@@ -178,6 +172,15 @@ struct PlaylistsListView: View {
     .listStyle(.plain)
     .scrollContentBackground(.hidden)
     .background(themeManager.backgroundColor)
+    // Presented from the List itself, not from a row. Attached to a row, the
+    // sheet was torn down and rebuilt whenever that row was re-created — which
+    // reset the multi-step smart playlist flow back to an empty first step.
+    .sheet(isPresented: $showingCreateSheet) {
+      CreatePlaylistSheet()
+    }
+    .sheet(isPresented: $showingCreateSmartSheet) {
+      CreateSmartPlaylistSheet()
+    }
     .overlay {
       if playlistManager.playlists.isEmpty {
         ContentUnavailableView(

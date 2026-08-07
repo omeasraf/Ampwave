@@ -23,6 +23,7 @@ final class ListeningHistoryTracker {
 
   func setModelContext(_ context: ModelContext) {
     self.modelContext = context
+    invalidateStatisticsIndex()
   }
 
   /// Called when a song starts playing
@@ -118,23 +119,50 @@ final class ListeningHistoryTracker {
     try? modelContext.save()
   }
 
+  // MARK: - Statistics index
+
+  /// songId → stats, built once and kept in step with writes.
+  ///
+  /// Every lookup used to fetch the whole `SongPlayStatistics` table and scan it
+  /// linearly. That is called from sort comparators and once per song per rule
+  /// when evaluating smart playlists, so a few hundred songs meant thousands of
+  /// full-table fetches and a visibly stalled UI.
+  private var statsIndex: [UUID: SongPlayStatistics] = [:]
+  private var statsIndexLoaded = false
+
+  private func loadStatsIndex() {
+    guard !statsIndexLoaded, let modelContext else { return }
+    let all = (try? modelContext.fetch(FetchDescriptor<SongPlayStatistics>())) ?? []
+    statsIndex = Dictionary(all.map { ($0.songId, $0) }, uniquingKeysWith: { first, _ in first })
+    statsIndexLoaded = true
+  }
+
+  /// Drops the index so it is rebuilt on next access. Call after bulk deletes,
+  /// a context swap, or anything that inserts stats behind our back.
+  func invalidateStatisticsIndex() {
+    statsIndex.removeAll()
+    statsIndexLoaded = false
+  }
+
+  /// All statistics keyed by song id — for callers that need many lookups at
+  /// once (smart playlist evaluation, sorting) so they never re-query per song.
+  func statisticsBySongId() -> [UUID: SongPlayStatistics] {
+    loadStatsIndex()
+    return statsIndex
+  }
+
   /// Gets or creates statistics for a song
   private func getOrCreateStatistics(for song: LibrarySong) -> SongPlayStatistics {
     guard let modelContext = modelContext else {
       return SongPlayStatistics(songId: song.id)
     }
 
-    // Use a simpler fetch without predicate macro
-    let descriptor = FetchDescriptor<SongPlayStatistics>()
-
-    if let allStats = try? modelContext.fetch(descriptor),
-      let existing = allStats.first(where: { $0.songId == song.id })
-    {
-      return existing
-    }
+    loadStatsIndex()
+    if let existing = statsIndex[song.id] { return existing }
 
     let newStats = SongPlayStatistics(songId: song.id)
     modelContext.insert(newStats)
+    statsIndex[song.id] = newStats
     return newStats
   }
 
@@ -148,12 +176,13 @@ final class ListeningHistoryTracker {
 
   /// Gets play statistics for a song
   func getStatistics(for song: LibrarySong) -> SongPlayStatistics? {
-    guard let modelContext = modelContext else { return nil }
+    statistics(forSongId: song.id)
+  }
 
-    let descriptor = FetchDescriptor<SongPlayStatistics>()
-
-    guard let allStats = try? modelContext.fetch(descriptor) else { return nil }
-    return allStats.first(where: { $0.songId == song.id })
+  func statistics(forSongId id: UUID) -> SongPlayStatistics? {
+    guard modelContext != nil else { return nil }
+    loadStatsIndex()
+    return statsIndex[id]
   }
 
   func setLiked(_ isLiked: Bool, for song: LibrarySong) {
@@ -225,11 +254,7 @@ final class ListeningHistoryTracker {
       }
     }
 
-    // Map to songs
-    let library = SongLibrary.shared
-    return uniqueHistory.compactMap { entry in
-      library.songs.first { $0.id == entry.songId }
-    }
+    return SongLibrary.shared.songs(ids: uniqueHistory.map(\.songId))
   }
 
   /// Gets most played songs
@@ -244,7 +269,7 @@ final class ListeningHistoryTracker {
 
     let library = SongLibrary.shared
     return stats.prefix(limit).compactMap { stat in
-      guard let song = library.songs.first(where: { $0.id == stat.songId }) else { return nil }
+      guard let song = library.song(id: stat.songId) else { return nil }
       return (song: song, count: stat.playCount)
     }
   }

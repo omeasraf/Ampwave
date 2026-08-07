@@ -16,13 +16,11 @@ struct PlaylistArtworkView: View {
     Group {
       switch playlist.artworkType {
       case .grid:
+        // A collage needs four *different* covers to read as one. With fewer
+        // distinct albums, show a single cover rather than tiling one image.
         let paths = playlist.getArtworkPaths()
         if paths.count >= 4 {
-          GridArtworkView(paths: paths, size: size)
-        } else if paths.count > 0 && paths.count < 4 {
-          // Fill up with repeated elements if less than 4 but grid is wanted
-          let filledPaths = (0..<4).map { paths[$0 % paths.count] }
-          GridArtworkView(paths: filledPaths, size: size)
+          GridArtworkView(paths: Array(paths.prefix(4)), size: size)
         } else if let firstPath = paths.first {
           SingleArtworkView(artworkPath: firstPath, size: size)
         } else {
