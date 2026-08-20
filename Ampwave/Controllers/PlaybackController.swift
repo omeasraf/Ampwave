@@ -360,6 +360,18 @@ final class PlaybackController {
       name: .AVPlayerItemDidPlayToEndTime,
       object: nil
     )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(playerItemFailedToReachEnd(_:)),
+      name: .AVPlayerItemFailedToPlayToEndTime,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(playerItemPlaybackStalled(_:)),
+      name: .AVPlayerItemPlaybackStalled,
+      object: nil
+    )
 
     // Must run *before* the model is deleted, so this uses the selector form
     // (synchronous on the posting thread) rather than a block on a queue.
@@ -530,6 +542,12 @@ final class PlaybackController {
       // Automatic advance is handled by KVO (observePlayerItemChange)
       if !(preferences?.gaplessPlayback ?? true) {
         playNext()
+      } else {
+        // AVQueuePlayer occasionally consumes the finished item without
+        // promoting its preloaded successor (notably around Bluetooth route
+        // changes or a stale preload). Reconcile after KVO has had a chance to
+        // report a normal handoff; otherwise playback would stop indefinitely.
+        recoverGaplessHandoffIfNeeded(after: item)
       }
     } else if repeatMode == .all && !queue.isEmpty {
       // Repeat the whole queue by starting from 0
@@ -538,6 +556,64 @@ final class PlaybackController {
     } else {
       isPlaying = false
       saveState()
+    }
+  }
+
+  private func recoverGaplessHandoffIfNeeded(after finishedItem: AVPlayerItem) {
+    let finishedIndex = currentQueueIndex
+    let expectedIndex = finishedIndex + 1
+    guard expectedIndex < queue.count else { return }
+    let expectedSongID = queue[expectedIndex].id
+
+    Task { @MainActor [weak self, weak finishedItem] in
+      try? await Task.sleep(for: .milliseconds(300))
+      guard let self, let finishedItem else { return }
+      guard self.currentQueueIndex == finishedIndex,
+        finishedIndex >= 0, finishedIndex < self.queue.count,
+        self.currentItem?.id == self.queue[finishedIndex].id,
+        expectedIndex < self.queue.count,
+        self.queue[expectedIndex].id == expectedSongID
+      else { return }
+
+      let expectedSong = self.queue[expectedIndex]
+      if let playingItem = self.player?.currentItem,
+        playingItem !== finishedItem,
+        let asset = playingItem.asset as? AVURLAsset,
+        asset.url == self.library.getFileURL(for: expectedSong)
+      {
+        self.updateStateForAutoAdvancedSong(expectedSong, at: expectedIndex)
+        self.player?.play()
+        self.isPlaying = true
+      } else {
+        print("[ERROR] PlaybackController: Recovering failed gapless handoff")
+        self.currentQueueIndex = expectedIndex
+        self.play(expectedSong, from: self.currentSource, playlistId: self.currentPlaylistId)
+      }
+    }
+  }
+
+  @objc nonisolated private func playerItemFailedToReachEnd(_ notification: Notification) {
+    guard let failedItem = notification.object as? AVPlayerItem else { return }
+    Task { @MainActor [weak self, weak failedItem] in
+      guard let self, let failedItem,
+        self.player?.currentItem === failedItem || self.player?.currentItem == nil
+      else { return }
+      print("[ERROR] PlaybackController: Current item failed to reach end; skipping")
+      self.playNext()
+    }
+  }
+
+  @objc nonisolated private func playerItemPlaybackStalled(_ notification: Notification) {
+    guard let stalledItem = notification.object as? AVPlayerItem else { return }
+    Task { @MainActor [weak self, weak stalledItem] in
+      guard let self, let stalledItem, self.player?.currentItem === stalledItem,
+        self.isPlaying
+      else { return }
+      // Local/referenced files should recover as soon as their security scope
+      // or Bluetooth route is available again.
+      self.audioSessionConfigured = false
+      self.setupAudioSession()
+      self.player?.play()
     }
   }
 
@@ -832,6 +908,9 @@ final class PlaybackController {
     let nextIndex = currentQueueIndex + 1
     if nextIndex < queue.count {
       let nextSong = queue[nextIndex]
+      let expectedCurrentItem = player.currentItem
+      let expectedCurrentSongID = currentItem?.id
+      let expectedNextSongID = nextSong.id
       guard library.fileExists(for: nextSong) else {
         print("[ERROR] PlaybackController: Skipping gapless preload, file missing for \(nextSong.title)")
         return
@@ -841,6 +920,16 @@ final class PlaybackController {
       Task {
         let nextItem = await createPlayerItem(for: nextSong)
         await MainActor.run {
+          // Item creation loads tracks asynchronously. Do not let an old task
+          // insert its result after a skip, shuffle, or automatic handoff.
+          guard self.player === player,
+            player.currentItem === expectedCurrentItem,
+            self.currentItem?.id == expectedCurrentSongID,
+            self.currentQueueIndex + 1 == nextIndex,
+            nextIndex < self.queue.count,
+            self.queue[nextIndex].id == expectedNextSongID
+          else { return }
+
           if player.items().count < 2 {
             player.insert(nextItem, after: player.currentItem)
             print("[VALIDATION] PlaybackController: Inserted next item into player")

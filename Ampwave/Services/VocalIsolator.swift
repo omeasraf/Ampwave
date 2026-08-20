@@ -268,6 +268,21 @@ final class VocalIsolator {
             #if !os(visionOS)
             guard maxFrames > 0 else { return }
 
+            // TestFlight crash reports show AUSoundIsolation terminating inside
+            // AudioDSP on iOS 26/27. That is a native exception/segfault outside
+            // Swift's error model, so no do/catch can make it safe. Keep the
+            // deterministic mid/side vocal control on iOS and reserve this
+            // native implementation for platforms where it has been stable.
+            guard Self.nativeVoiceIsolationIsStable else { return }
+
+            // Ordinary playback and flat EQ do not need the neural separator.
+            // Constructing AUSoundIsolation for every preloaded track made an
+            // Apple AudioDSP deferred-graph race reachable during background
+            // playback and route changes. Mid/side processing remains
+            // available if the slider is first lowered after this tap starts;
+            // the native path is prepared on the following track.
+            guard targetLevel.pointee < 0.999 else { return }
+
             let incomingFormat = processingFormat.pointee
             guard incomingFormat.mFormatID == kAudioFormatLinearPCM,
                   incomingFormat.mFormatFlags & kAudioFormatFlagIsFloat != 0,
@@ -458,6 +473,14 @@ final class VocalIsolator {
         /// anything else (notably high-resolution FLAC at 88.2 kHz and up)
         /// takes the mid/side path instead.
         private static let supportedIsolationSampleRates: Set<Double> = [44_100, 48_000]
+
+        private static var nativeVoiceIsolationIsStable: Bool {
+            #if os(iOS)
+            return false
+            #else
+            return true
+            #endif
+        }
 
         private static func isSampleRateSupported(rate: Double) -> Bool {
             // Rates arrive as Double from the stream description, so compare

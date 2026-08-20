@@ -218,8 +218,13 @@ final class WatchSyncService: NSObject {
       error: Error?
     ) {
       if activationState == .activated {
-        print("WCSession activated on iOS")
-        syncEverything()
+        // WatchConnectivity invokes delegates on its own operation queue.
+        // ModelContext is main-actor confined; fetching from that callback
+        // concurrently with the UI corrupts SwiftData's registration cache.
+        Task { @MainActor [weak self] in
+          print("WCSession activated on iOS")
+          self?.syncEverything()
+        }
       }
     }
 
