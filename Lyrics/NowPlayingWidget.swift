@@ -56,12 +56,6 @@ struct NowPlayingWidgetView: View {
   var entry: NowPlayingEntry
   @Environment(\.widgetFamily) private var family
 
-  #if os(iOS)
-    @State private var image: UIImage?
-  #else
-    @State private var image: NSImage?
-  #endif
-
   private var artURL: URL? {
     guard let name = entry.playbackInfo?.artworkRelativePath,
       let container = FileManager.default.containerURL(
@@ -73,44 +67,58 @@ struct NowPlayingWidgetView: View {
 
   var body: some View {
     if let info = entry.playbackInfo {
+      if family == .systemSmall {
+        smallWidget(info)
+      } else {
+        mediumWidget(info)
+      }
+    } else {
+      emptyWidget
+    }
+  }
+
+  private func smallWidget(_ info: SharedPlaybackInfo) -> some View {
+    GeometryReader { geometry in
+      ZStack(alignment: .bottom) {
+        artwork(width: geometry.size.width, height: geometry.size.height, cornerRadius: 0)
+
+        LinearGradient(
+          colors: [.clear, .black.opacity(0.2), .black.opacity(0.9)],
+          startPoint: .center,
+          endPoint: .bottom
+        )
+        .accessibilityHidden(true)
+
+        HStack(alignment: .bottom, spacing: 6) {
+          VStack(alignment: .leading, spacing: 1) {
+            Text(info.title)
+              .font(.system(size: 14, weight: .semibold))
+              .lineLimit(2)
+              .minimumScaleFactor(0.75)
+            Text(info.artist)
+              .font(.system(size: 11, weight: .medium))
+              .lineLimit(1)
+              .opacity(0.82)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+
+          Image(systemName: info.isPlaying ? "play.fill" : "pause.fill")
+            .font(.system(size: 9, weight: .bold))
+            .frame(width: 22, height: 22)
+            .background(.black.opacity(0.42), in: Circle())
+            .accessibilityLabel(info.isPlaying ? "Playing" : "Paused")
+        }
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+        .padding(11)
+      }
+      .clipped()
+    }
+  }
+
+  private func mediumWidget(_ info: SharedPlaybackInfo) -> some View {
       HStack(alignment: .center, spacing: 10) {
-        #if os(iOS)
-          if let url = artURL, let data = try? Data(contentsOf: url), let img = UIImage(data: data)
-          {
-            Image(uiImage: img)
-              .resizable()
-              .aspectRatio(contentMode: .fill)
-              .frame(
-                width: family == .systemSmall ? 52 : 64, height: family == .systemSmall ? 52 : 64
-              )
-              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-              .accessibilityHidden(true)
-          } else {
-            Image(systemName: "music.note")
-              .font(.title2)
-              .frame(width: 52, height: 52)
-              .background(.quaternary)
-              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-          }
-        #else
-          if let url = artURL, let data = try? Data(contentsOf: url), let img = NSImage(data: data)
-          {
-            Image(nsImage: img)
-              .resizable()
-              .aspectRatio(contentMode: .fill)
-              .frame(
-                width: family == .systemSmall ? 52 : 64, height: family == .systemSmall ? 52 : 64
-              )
-              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-              .accessibilityHidden(true)
-          } else {
-            Image(systemName: "music.note")
-              .font(.title2)
-              .frame(width: 52, height: 52)
-              .background(.quaternary)
-              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-          }
-        #endif
+        artwork(width: 64, height: 64, cornerRadius: 8)
 
         VStack(alignment: .leading, spacing: 4) {
           Text(info.title)
@@ -131,7 +139,52 @@ struct NowPlayingWidgetView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
       }
       .padding(8)
-    } else {
+  }
+
+  @ViewBuilder
+  private func artwork(width: CGFloat, height: CGFloat, cornerRadius: CGFloat) -> some View {
+    #if os(iOS)
+      if let url = artURL, let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
+        Image(uiImage: image)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+          .frame(width: width, height: height)
+          .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+          .accessibilityHidden(true)
+      } else {
+        artworkPlaceholder(width: width, height: height, cornerRadius: cornerRadius)
+      }
+    #else
+      if let url = artURL, let data = try? Data(contentsOf: url), let image = NSImage(data: data) {
+        Image(nsImage: image)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+          .frame(width: width, height: height)
+          .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+          .accessibilityHidden(true)
+      } else {
+        artworkPlaceholder(width: width, height: height, cornerRadius: cornerRadius)
+      }
+    #endif
+  }
+
+  private func artworkPlaceholder(width: CGFloat, height: CGFloat, cornerRadius: CGFloat) -> some View {
+    ZStack {
+      LinearGradient(
+        colors: [Color.accentColor.opacity(0.75), Color.black.opacity(0.9)],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+      Image(systemName: "music.note")
+        .font(.system(size: min(width, height) * 0.3, weight: .medium))
+        .foregroundStyle(.white.opacity(0.9))
+    }
+    .frame(width: width, height: height)
+    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    .accessibilityHidden(true)
+  }
+
+  private var emptyWidget: some View {
       VStack(spacing: 6) {
         Image(systemName: "waveform")
           .font(.title)
@@ -142,7 +195,6 @@ struct NowPlayingWidgetView: View {
           .foregroundStyle(.secondary)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
   }
 }
 
@@ -157,5 +209,6 @@ struct NowPlayingWidget: Widget {
     .configurationDisplayName("Now Playing")
     .description("Current track and artwork from Ampwave.")
     .supportedFamilies([.systemSmall, .systemMedium])
+    .contentMarginsDisabled()
   }
 }

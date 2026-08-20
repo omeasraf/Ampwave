@@ -43,6 +43,8 @@ final class Album: Identifiable, Hashable {
   var genre: [String]?
   var albumDescription: String?
   var appleMusicId: String?
+  /// Set after the optional background enrichment pass completes for this album.
+  var metadataCheckAttempted: Bool = false
 
   init(
     name: String,

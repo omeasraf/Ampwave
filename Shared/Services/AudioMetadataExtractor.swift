@@ -93,7 +93,7 @@ enum AudioMetadataExtractor: Sendable {
       let idLower = idRaw.lowercased()
       // FLAC/Ogg carry ReplayGain as a Vorbis comment and MP3 as a TXXX frame;
       // in both cases the tag name lands on `key` rather than the identifier.
-      let keyLower = ((item.key as? String) ?? "").lowercased()
+      let keyLower = (stringValue(item.key) ?? "").lowercased()
 
       if replayGainDB == nil,
         idLower.contains("replaygain") || keyLower.contains("replaygain"),
@@ -113,56 +113,65 @@ enum AudioMetadataExtractor: Sendable {
         if let identifier = item.identifier {
           switch identifier {
           case .id3MetadataTrackNumber, .iTunesMetadataTrackNumber:
-            if let num = value as? NSNumber { trackNumber = num.intValue }
-            else if let str = value as? String { trackNumber = parseTrackNumber(str) }
+            trackNumber = parsePosition(value) ?? trackNumber
             continue
           case .id3MetadataPartOfASet, .iTunesMetadataDiscNumber:
-            if let num = value as? NSNumber { discNumber = num.intValue }
-            else if let str = value as? String { discNumber = parseTrackNumber(str) }
+            discNumber = parsePosition(value) ?? discNumber
             continue
           case .id3MetadataYear, .id3MetadataRecordingTime, .id3MetadataOriginalReleaseYear,
             .iTunesMetadataReleaseDate, .quickTimeMetadataYear:
             if let num = value as? NSNumber { year = num.intValue }
-            else if let str = value as? String { year = parseYear(str) }
+            else if let str = stringValue(value) { year = parseYear(str) }
             continue
           case .iTunesMetadataContentRating:
             if let num = value as? NSNumber { isExplicit = num.intValue != 0 }
-            else if let str = value as? String {
+            else if let str = stringValue(value) {
               let normalized = str.lowercased()
               isExplicit = !(normalized == "clean" || normalized == "0" || normalized.isEmpty)
             }
             continue
           case .iTunesMetadataDiscCompilation:
             if let num = value as? NSNumber { isCompilation = num.boolValue }
-            else if let str = value as? String { isCompilation = (str == "1" || str.lowercased() == "true") }
+            else if let str = stringValue(value) { isCompilation = (str == "1" || str.lowercased() == "true") }
             continue
           default:
             break
           }
         }
 
-        if idRaw.contains("lyrics") || idRaw.contains("Lyrics") { lyrics = (value as? String) ?? lyrics }
-        else if idRaw.contains("comment") || idRaw.contains("Comment") || idRaw.contains("description") { songDescription = (value as? String) ?? songDescription }
+        if idRaw.contains("lyrics") || idRaw.contains("Lyrics") { lyrics = stringValue(value) ?? lyrics }
+        else if idRaw.contains("comment") || idRaw.contains("Comment") || idRaw.contains("description") { songDescription = stringValue(value) ?? songDescription }
         else if idLower.contains("advisory") || idLower.contains("explicit") {
           if let num = value as? NSNumber { isExplicit = num.intValue != 0 }
-          else if let str = value as? String {
+          else if let str = stringValue(value) {
             let normalized = str.lowercased()
             isExplicit = (normalized == "1" || normalized == "true" || normalized == "explicit")
           }
         }
         else if idRaw.contains("year") || idRaw.contains("Year") || idRaw.contains("date") || idRaw.contains("Date") {
           if let num = value as? NSNumber { year = num.intValue }
-          else if let str = value as? String { year = parseYear(str) }
+          else if let str = stringValue(value) { year = parseYear(str) }
         }
-        else if (idRaw.contains("track") || idRaw.contains("Track")) && !idRaw.contains("artist") {
-          if let num = value as? NSNumber { trackNumber = num.intValue }
-          else if let str = value as? String { trackNumber = parseTrackNumber(str) }
+        else if (idLower.contains("track") || keyLower.contains("track") || idLower.contains("trck"))
+          && !idLower.contains("artist") && !keyLower.contains("artist")
+        {
+          trackNumber = parsePosition(value) ?? trackNumber
         }
-        else if idRaw.contains("disc") || idRaw.contains("Disc") { discNumber = (value as? NSNumber)?.intValue ?? discNumber }
+        else if idLower.contains("disc") || keyLower.contains("disc") || idLower.contains("tpos") {
+          discNumber = parsePosition(value) ?? discNumber
+        }
+        // Vorbis comments (FLAC/Ogg) and several ID3 readers expose the tag
+        // name through `key`, not `identifier`. Checking both is essential for
+        // embedded genres to survive an offline import.
+        else if idLower.contains("genre") || keyLower.contains("genre")
+          || idLower.contains("tcon") || idLower.contains("gnre")
+        {
+          genre = stringValue(value) ?? genre
+        }
         // Compilation flag: ID3 TCMP, iTunes cpil
         else if idRaw.contains("TCMP") || idRaw.contains("cpil") || idLower.contains("compilation") {
           if let num = value as? NSNumber { isCompilation = num.boolValue }
-          else if let str = value as? String { isCompilation = (str == "1" || str.lowercased() == "true") }
+          else if let str = stringValue(value) { isCompilation = (str == "1" || str.lowercased() == "true") }
         }
         // Album Artist:
         // • ID3 MP3  → TPE2  (Band/Orchestra — de-facto Album Artist)
@@ -170,8 +179,9 @@ enum AudioMetadataExtractor: Sendable {
         // • FLAC/Ogg → ALBUMARTIST as a TXXX user-defined frame
         else if idRaw.contains("TPE2") || idRaw.contains("aART")
              || idLower.contains("albumartist") || idLower.contains("album artist")
-             || idLower.contains("album_artist") {
-          if let v = value as? String, !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+             || idLower.contains("album_artist") || keyLower.contains("albumartist")
+             || keyLower.contains("album artist") || keyLower.contains("album_artist") {
+          if let v = stringValue(value) {
             albumArtist = v
           }
         }
@@ -180,18 +190,49 @@ enum AudioMetadataExtractor: Sendable {
 
       // ── Common-key path ────────────────────────────────────────────────────
       let raw = key.rawValue.lowercased()
-      if raw == "title" || raw.contains("title") { if let v = value as? String, !v.isEmpty { embeddedTitle = v } }
-      else if raw == "artist" || raw.contains("artist"), !raw.contains("album") { if let v = value as? String, !v.isEmpty { embeddedArtist = v } }
-      else if raw.contains("albumname") || raw == "album" { album = (value as? String) ?? album }
-      else if raw.contains("lyrics") || raw == "lyr" { lyrics = (value as? String) ?? lyrics }
-      else if raw == "type" || raw.contains("genre") { genre = (value as? String) ?? genre }
-      else if raw.contains("creator") || raw.contains("composer") { composer = (value as? String) ?? composer }
+      if raw == "title" || raw.contains("title") { embeddedTitle = stringValue(value) ?? embeddedTitle }
+      else if raw == "artist" || raw.contains("artist"), !raw.contains("album") { embeddedArtist = stringValue(value) ?? embeddedArtist }
+      else if raw.contains("albumname") || raw == "album" { album = stringValue(value) ?? album }
+      else if raw.contains("lyrics") || raw == "lyr" { lyrics = stringValue(value) ?? lyrics }
+      else if raw == "type" || raw.contains("genre") { genre = stringValue(value) ?? genre }
+      else if raw.contains("creator") || raw.contains("composer") { composer = stringValue(value) ?? composer }
       else if raw.contains("artwork") || raw.contains("art") { artwork = value as? Data ?? artwork }
       // Some encoders surface albumArtist through a common-key variant
       else if raw.contains("albumartist") || raw.contains("album artist") {
-        if let v = value as? String, !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let v = stringValue(value) {
           albumArtist = v
         }
+      }
+    }
+
+    // AVFoundation exposes FLAC/Vorbis fields as opaque Objective-C tag
+    // objects and does not expose FLAC PICTURE blocks at all on Apple
+    // platforms. Read the small metadata prefix directly so local tags remain
+    // authoritative and cover art works without an online lookup.
+    if url.pathExtension.lowercased() == "flac", let flac = readFLACMetadata(from: url) {
+      func comment(_ names: String...) -> String? {
+        names.lazy.compactMap { flac.comments[$0]?.first }.first
+      }
+
+      embeddedTitle = comment("TITLE") ?? embeddedTitle
+      embeddedArtist = comment("ARTIST") ?? embeddedArtist
+      album = comment("ALBUM") ?? album
+      albumArtist = comment("ALBUMARTIST", "ALBUM_ARTIST", "ALBUM ARTIST") ?? albumArtist
+      genre = comment("GENRE") ?? genre
+      trackNumber = comment("TRACKNUMBER", "TRACK").flatMap(parseTrackNumber) ?? trackNumber
+      discNumber = comment("DISCNUMBER", "DISC").flatMap(parseTrackNumber) ?? discNumber
+      year = comment("DATE", "YEAR").flatMap(parseYear) ?? year
+      composer = comment("COMPOSER") ?? composer
+      lyrics = comment("LYRICS", "UNSYNCEDLYRICS", "UNSYNCED LYRICS") ?? lyrics
+      songDescription = comment("DESCRIPTION", "COMMENT") ?? songDescription
+      replayGainDB = comment("REPLAYGAIN_TRACK_GAIN").flatMap(parseReplayGain) ?? replayGainDB
+      artwork = flac.artwork ?? artwork
+
+      if let compilation = comment("COMPILATION")?.lowercased() {
+        isCompilation = compilation == "1" || compilation == "true" || compilation == "yes"
+      }
+      if let advisory = comment("ITUNESADVISORY", "EXPLICIT")?.lowercased() {
+        isExplicit = advisory == "1" || advisory == "true" || advisory == "yes" || advisory == "explicit"
       }
     }
 
@@ -344,23 +385,147 @@ enum AudioMetadataExtractor: Sendable {
     return (sampleRate, bitDepth, bitRate, channels, format)
   }
 
-  /// Parses "5", "5/12" -> 5
+  /// Parses "5", "5/12" -> 5.
   private static func parseTrackNumber(_ s: String) -> Int? {
     let part = s.split(separator: "/").first.flatMap(String.init) ?? s
     return Int(part.trimmingCharacters(in: .whitespaces))
   }
 
+  /// Track and disc positions are strings in ID3/Vorbis, but iTunes `trkn`
+  /// and `disk` atoms are commonly returned as big-endian binary data.
+  private static func parsePosition(_ value: Any?) -> Int? {
+    if let number = value as? NSNumber, number.intValue > 0 {
+      return number.intValue
+    }
+    if let string = stringValue(value), let number = parseTrackNumber(string) {
+      return number
+    }
+    guard let data = value as? Data else { return nil }
+
+    if let string = String(data: data, encoding: .utf8)?
+      .trimmingCharacters(in: .controlCharacters.union(.whitespacesAndNewlines)),
+      let number = parseTrackNumber(string)
+    {
+      return number
+    }
+
+    // Apple stores the position in bytes 2...3 (network byte order), followed
+    // by the total track/disc count. Zero means the field is unset.
+    guard data.count >= 4 else { return nil }
+    let bytes = [UInt8](data)
+    let number = (Int(bytes[2]) << 8) | Int(bytes[3])
+    return number > 0 ? number : nil
+  }
+
+  private static func stringValue(_ value: Any?) -> String? {
+    let string: String?
+    if let value = value as? String {
+      string = value
+    } else if let value = value as? NSString {
+      string = value as String
+    } else if let value = value as? NSNumber {
+      string = value.stringValue
+    } else if let value = value as? Data {
+      string = String(data: value, encoding: .utf8)
+    } else {
+      string = nil
+    }
+
+    let trimmed = string?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed?.isEmpty == false ? trimmed : nil
+  }
+
+  private struct FLACMetadata {
+    var comments: [String: [String]] = [:]
+    var artwork: Data?
+    var artworkPriority = -1
+  }
+
+  /// Parses only FLAC metadata blocks; audio frames are never read or copied.
+  private static func readFLACMetadata(from url: URL) -> FLACMetadata? {
+    guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+      data.count >= 8, data.prefix(4) == Data("fLaC".utf8)
+    else { return nil }
+
+    func uint32(_ offset: Int, littleEndian: Bool = false) -> Int? {
+      guard offset >= 0, offset + 4 <= data.count else { return nil }
+      let bytes = data[offset..<(offset + 4)]
+      if littleEndian {
+        return bytes.enumerated().reduce(0) { $0 | (Int($1.element) << ($1.offset * 8)) }
+      }
+      return bytes.reduce(0) { ($0 << 8) | Int($1) }
+    }
+
+    var result = FLACMetadata()
+    var offset = 4
+    var isLast = false
+
+    while !isLast, offset + 4 <= data.count {
+      let header = data[offset]
+      isLast = header & 0x80 != 0
+      let type = header & 0x7f
+      let length = (Int(data[offset + 1]) << 16) | (Int(data[offset + 2]) << 8) | Int(data[offset + 3])
+      let blockStart = offset + 4
+      let blockEnd = blockStart + length
+      guard blockEnd <= data.count else { break }
+
+      if type == 4 { // VORBIS_COMMENT
+        var cursor = blockStart
+        if let vendorLength = uint32(cursor, littleEndian: true),
+          cursor + 4 + vendorLength <= blockEnd
+        {
+          cursor += 4 + vendorLength
+          if cursor + 4 <= blockEnd, let count = uint32(cursor, littleEndian: true) {
+            cursor += 4
+            for _ in 0..<min(count, (blockEnd - cursor) / 4) {
+              guard let itemLength = uint32(cursor, littleEndian: true) else { break }
+              cursor += 4
+              guard itemLength >= 0, cursor + itemLength <= blockEnd else { break }
+              if let entry = String(data: data[cursor..<(cursor + itemLength)], encoding: .utf8),
+                let equals = entry.firstIndex(of: "=")
+              {
+                let key = String(entry[..<equals]).uppercased()
+                let value = String(entry[entry.index(after: equals)...])
+                  .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty { result.comments[key, default: []].append(value) }
+              }
+              cursor += itemLength
+            }
+          }
+        }
+      } else if type == 6, let pictureType = uint32(blockStart) { // PICTURE
+        // Prefer a front cover (type 3), then an unspecified/other image.
+        let priority = pictureType == 3 ? 2 : (pictureType == 0 ? 1 : 0)
+        var cursor = blockStart + 4
+        if priority > result.artworkPriority, let mimeLength = uint32(cursor),
+          cursor + 4 + mimeLength <= blockEnd
+        {
+          cursor += 4 + mimeLength
+          if cursor + 4 <= blockEnd, let descriptionLength = uint32(cursor),
+            cursor + 4 + descriptionLength + 16 <= blockEnd
+          {
+            cursor += 4 + descriptionLength + 16 // dimensions, depth, palette count
+            if cursor + 4 <= blockEnd, let imageLength = uint32(cursor) {
+              cursor += 4
+              if imageLength > 0, cursor + imageLength <= blockEnd {
+                result.artwork = Data(data[cursor..<(cursor + imageLength)])
+                result.artworkPriority = priority
+              }
+            }
+          }
+        }
+      }
+
+      offset = blockEnd
+    }
+
+    return result
+  }
+
   /// Parses a ReplayGain value, which tags store as `"-6.54 dB"`, `"+3.20 dB"`
   /// or a bare number. Returns decibels relative to the tag's reference level.
   private static func parseReplayGain(_ value: Any?) -> Double? {
-    let raw: String
-    if let string = value as? String {
-      raw = string
-    } else if let number = value as? NSNumber {
-      raw = number.stringValue
-    } else {
-      return nil
-    }
+    guard let raw = stringValue(value) else { return nil }
 
     let cleaned =
       raw

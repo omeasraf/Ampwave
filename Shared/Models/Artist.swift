@@ -25,6 +25,9 @@ final class Artist: Identifiable, Hashable {
   var artworkPath: String?
   var isDedicatedArtwork: Bool = false
   var remoteArtworkURL: String?
+  /// Prevents a library-wide opt-in pass from retrying an artist with no API
+  /// match every time the app launches.
+  var metadataCheckAttempted: Bool = false
 
   // New caching fields
   var cachedBiography: String?

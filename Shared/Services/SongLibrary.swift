@@ -81,6 +81,7 @@ extension Notification.Name {
   }
   private var totalMetadataFetches: Int = 0
   private var isGenreBackfillActive: Bool = false
+  private var isArtistAlbumMetadataFetchActive: Bool = false
 
   var modelContext: ModelContext?
 
@@ -599,7 +600,7 @@ extension Notification.Name {
         indexingStatus = .complete
         isIndexing = false
         // Still run metadata backfill check just in case
-        await fetchMetadataForNewSongs()
+        await fetchAutomaticMetadata()
         return
       }
     }
@@ -758,7 +759,7 @@ extension Notification.Name {
     UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "com.ampwave.lastDiskScanTime")
     
     // 6. Check for missing metadata
-    await fetchMetadataForNewSongs()
+    await fetchAutomaticMetadata()
   }
 
   private func repairStoredFilePathsIfNeeded(in modelContext: ModelContext) async {
@@ -1000,7 +1001,7 @@ extension Notification.Name {
 
       // Start background metadata fetch for everything imported
       Task {
-        await fetchMetadataForNewSongs()
+        await fetchAutomaticMetadata()
       }
     }
     print(
@@ -1569,12 +1570,123 @@ extension Notification.Name {
   /// whether it's worth asking the OS for another background window.
   var hasPendingMetadataWork: Bool {
     guard let modelContext = modelContext else { return false }
+    let preferences = UserPreferences.getOrCreate(in: modelContext)
     let descriptor = FetchDescriptor<LibrarySong>(
       predicate: #Predicate<LibrarySong> { song in
         song.metadataCheckAttempted == false
       }
     )
-    return ((try? modelContext.fetchCount(descriptor)) ?? 0) > 0
+    if preferences.autoFetchMetadata,
+      ((try? modelContext.fetchCount(descriptor)) ?? 0) > 0
+    {
+      return true
+    }
+
+    guard preferences.autoFetchArtistAlbumInfo else { return false }
+    return artists.contains {
+      !$0.metadataCheckAttempted
+        && (!$0.isDedicatedArtwork || $0.cachedBiography == nil || $0.cachedGenres == nil)
+    } || albums.contains {
+      !$0.metadataCheckAttempted
+        && ($0.artworkPath == nil || $0.year == nil || $0.albumDescription == nil)
+    }
+  }
+
+  /// Runs the normal song pass followed by the optional, slower artist/album
+  /// enrichment pass. Both use MetadataService's shared API rate limiter.
+  func fetchAutomaticMetadata() async {
+    await fetchMetadataForNewSongs()
+    await fetchArtistAlbumMetadataIfEnabled()
+  }
+
+  private func fetchArtistAlbumMetadataIfEnabled() async {
+    guard !isArtistAlbumMetadataFetchActive, let modelContext else { return }
+    let preferences = UserPreferences.getOrCreate(in: modelContext)
+    guard preferences.autoFetchArtistAlbumInfo else { return }
+    guard !preferences.isOfflineMode, NetworkMonitor.shared.isOnline else { return }
+
+    isArtistAlbumMetadataFetchActive = true
+    let endAssertion = Self.beginBackgroundAssertion?("artist-album-metadata-fetch")
+    defer {
+      endAssertion?()
+      isArtistAlbumMetadataFetchActive = false
+    }
+
+    let metadataService = MetadataService.shared
+    metadataService.setModelContext(modelContext)
+
+    let targetAlbums = albums.filter {
+      !$0.metadataCheckAttempted
+        && ($0.artworkPath == nil || $0.year == nil || $0.albumDescription == nil)
+    }
+    let targetArtists = artists.filter {
+      !$0.metadataCheckAttempted
+        && (!$0.isDedicatedArtwork || $0.cachedBiography == nil || $0.cachedGenres == nil)
+    }
+    let total = targetAlbums.count + targetArtists.count
+    guard total > 0 else { return }
+
+    var completed = 0
+    for album in targetAlbums {
+      guard !Task.isCancelled else { break }
+      indexingStatus = .indexing("Fetching album info (\(completed + 1)/\(total))…")
+      await metadataService.refreshMetadata(for: album)
+      guard !Task.isCancelled else { break }
+      album.metadataCheckAttempted = true
+      completed += 1
+      if completed.isMultiple(of: 5) { saveContext() }
+    }
+
+    for artist in targetArtists {
+      guard !Task.isCancelled else { break }
+      indexingStatus = .indexing("Fetching artist info (\(completed + 1)/\(total))…")
+      if let metadata = await metadataService.fetchMetadata(for: artist) {
+        await applyFetchedArtistMetadata(metadata, to: artist, using: metadataService)
+      }
+      guard !Task.isCancelled else { break }
+      artist.metadataCheckAttempted = true
+      completed += 1
+      if completed.isMultiple(of: 5) { saveContext() }
+    }
+
+    saveContext()
+    if !Task.isCancelled { indexingStatus = .complete }
+  }
+
+  private func applyFetchedArtistMetadata(
+    _ metadata: ArtistMetadata, to artist: Artist, using metadataService: MetadataService
+  ) async {
+    if let genres = metadata.genres, !genres.isEmpty {
+      artist.genres = genres
+      artist.cachedGenres = genres
+    }
+    if let biography = metadata.biography, !biography.isEmpty {
+      artist.biography = biography
+      artist.cachedBiography = biography
+    }
+    if let origin = metadata.origin, !origin.isEmpty {
+      artist.origin = origin
+      artist.cachedOrigin = origin
+    }
+    if let activeYears = metadata.activeYears, !activeYears.isEmpty {
+      artist.activeYears = activeYears
+      artist.cachedActiveYears = activeYears
+    }
+    if artist.musicBrainzId == nil { artist.musicBrainzId = metadata.musicBrainzId }
+    if artist.appleMusicId == nil { artist.appleMusicId = metadata.appleMusicId }
+    if let artworkURL = metadata.artworkURL,
+      let path = await metadataService.downloadArtwork(from: artworkURL)
+    {
+      artist.artworkPath = path
+      artist.isDedicatedArtwork = true
+    }
+    if let fanartURL = metadata.fanartURL {
+      artist.fanartURL = fanartURL.absoluteString
+      if let path = await metadataService.downloadArtwork(from: fanartURL) {
+        artist.fanartPath = path
+      }
+    }
+    artist.lastUpdatedDate = Date()
   }
 
   func fetchMetadataForNewSongs() async {
@@ -1687,8 +1799,10 @@ extension Notification.Name {
     let songsCount = songs.count
     for (index, song) in songs.enumerated() {
       indexingStatus = .indexing("Refreshing songs (\(index + 1)/\(songsCount))…")
+      await refreshEmbeddedMetadata(for: song)
       await metadataService.refreshMetadata(for: song)
     }
+    saveContext()
 
     let albumCount = albums.count
     for (index, album) in albums.enumerated() {
@@ -1709,15 +1823,109 @@ extension Notification.Name {
     indexingStatus = .indexing("Refreshing \(album.name)…")
     defer { indexingStatus = .complete }
 
-    await metadataService.refreshMetadata(for: album)
-
-    // Also refresh all songs in the album — the per-song pass is what fills in
-    // track/disc numbers and the explicit flag.
+    // Embedded tags are local metadata and must not depend on Auto-fetch
+    // Metadata, connectivity, or a successful online match.
     let albumSongs = album.songs.sorted(by: LibrarySong.albumTrackOrder)
     for (index, song) in albumSongs.enumerated() {
       indexingStatus = .indexing("Refreshing tracks (\(index + 1)/\(albumSongs.count))…")
+      await refreshEmbeddedMetadata(for: song)
+    }
+    saveContext()
+
+    await metadataService.refreshMetadata(for: album)
+
+    // Online sources can fill fields that are not present in the files.
+    for (index, song) in albumSongs.enumerated() {
+      indexingStatus = .indexing("Checking online metadata (\(index + 1)/\(albumSongs.count))…")
       await metadataService.refreshMetadata(for: song)
     }
+  }
+
+  /// Re-reads metadata stored inside the audio file. User edits always win;
+  /// otherwise embedded values are authoritative for file-level tags.
+  @MainActor
+  private func refreshEmbeddedMetadata(for song: LibrarySong) async {
+    let url = getFileURL(for: song)
+    let secured = url.startAccessingSecurityScopedResource()
+    defer { if secured { url.stopAccessingSecurityScopedResource() } }
+
+    guard fileManager.fileExists(atPath: url.path) else {
+      print("[DEBUG] SongLibrary.refreshEmbeddedMetadata: Missing file for \(song.title)")
+      return
+    }
+
+    let metadata = await AudioMetadataExtractor.extract(from: url)
+
+    if !song.userEditedFields.contains("title"), metadata.metadataSourceTitle == "embedded" {
+      song.title = metadata.title
+      song.titleConfidence = metadata.titleConfidence
+      song.metadataSourceTitle = metadata.metadataSourceTitle
+    }
+    if !song.userEditedFields.contains("artist"), metadata.metadataSourceArtist == "embedded" {
+      song.artist = metadata.artist
+      song.artists = metadata.artists
+      song.artistConfidence = metadata.artistConfidence
+      song.metadataSourceArtist = metadata.metadataSourceArtist
+    }
+    if !song.userEditedFields.contains("album"), metadata.metadataSourceAlbum == "embedded" {
+      song.album = metadata.album
+      song.albumConfidence = metadata.albumConfidence
+      song.metadataSourceAlbum = metadata.metadataSourceAlbum
+    }
+    if !song.userEditedFields.contains("albumArtist"), let albumArtist = metadata.albumArtist {
+      song.albumArtist = albumArtist
+    }
+    if !song.userEditedFields.contains("genre"), let genre = metadata.genre { song.genre = genre }
+    if !song.userEditedFields.contains("trackNumber"), let trackNumber = metadata.trackNumber {
+      song.trackNumber = trackNumber
+    }
+    if !song.userEditedFields.contains("discNumber"), let discNumber = metadata.discNumber {
+      song.discNumber = discNumber
+    }
+    if !song.userEditedFields.contains("year"), let year = metadata.year { song.year = year }
+    if !song.userEditedFields.contains("composer"), let composer = metadata.composer {
+      song.composer = composer
+    }
+    if !song.userEditedFields.contains("songDescription"),
+      let songDescription = metadata.songDescription
+    {
+      song.songDescription = songDescription
+    }
+    if !song.userEditedFields.contains("isExplicit"), let isExplicit = metadata.isExplicit {
+      song.isExplicit = isExplicit
+    }
+    if !song.userEditedFields.contains("lyrics"), let lyrics = metadata.lyrics, !lyrics.isEmpty {
+      song.lyrics = lyrics
+      LyricsService.shared.saveLyrics(for: song, content: lyrics)
+    }
+
+    if let artwork = metadata.artwork, let path = await cacheArtwork(artwork) {
+      song.embeddedArtworkPath = path
+      let preferences = modelContext.map { UserPreferences.getOrCreate(in: $0) }
+      if song.artworkSource != .user, preferences?.preferOnlineArtwork != true {
+        song.artworkPath = path
+        song.artworkSource = .embedded
+        song.isRemoteArtwork = false
+      }
+      if let album = song.albumReference {
+        if album.embeddedArtworkPath == nil { album.embeddedArtworkPath = path }
+        if album.artworkSource != .user, preferences?.preferOnlineArtwork != true {
+          album.artworkPath = album.embeddedArtworkPath ?? path
+          album.artworkSource = .embedded
+        }
+      }
+    }
+
+    song.duration = metadata.duration > 0 ? metadata.duration : song.duration
+    song.sampleRate = metadata.sampleRate ?? song.sampleRate
+    song.bitDepth = metadata.bitDepth ?? song.bitDepth
+    song.bitRate = metadata.bitRate ?? song.bitRate
+    song.channels = metadata.channels ?? song.channels
+    song.format = metadata.format ?? song.format
+    song.replayGainDB = metadata.replayGainDB ?? song.replayGainDB
+    song.isLive = metadata.isLive
+    song.isMedley = metadata.isMedley
+    song.updateSearchIndex()
   }
 
   func refreshMetadata(for artist: Artist) async {
@@ -1773,8 +1981,10 @@ extension Notification.Name {
     let artistSongs = getSongs(byArtist: artist.name)
     for (index, song) in artistSongs.enumerated() {
       indexingStatus = .indexing("Refreshing tracks (\(index + 1)/\(artistSongs.count))…")
+      await refreshEmbeddedMetadata(for: song)
       await metadataService.refreshMetadata(for: song)
     }
+    saveContext()
   }
 
   @MainActor
@@ -1792,6 +2002,7 @@ extension Notification.Name {
     // Update song fields only if they're empty or generic (Preserve user edits)
     if let title = metadata.title, !title.isEmpty,
       !song.userEditedFields.contains("title"),
+      song.metadataSourceTitle != "embedded",
       (song.titleConfidence < 0.8 || song.title == song.fileName || song.title.contains("Untitled"))
     {
       song.title = title
@@ -1802,6 +2013,7 @@ extension Notification.Name {
 
     if let artist = metadata.artist, !artist.isEmpty,
       !song.userEditedFields.contains("artist"),
+      song.metadataSourceArtist != "embedded",
       (song.artistConfidence < 0.8 || song.artist == "Unknown Artist" || song.artist.isEmpty)
     {
       song.artist = artist
@@ -1812,6 +2024,7 @@ extension Notification.Name {
 
     if let album = metadata.album, !album.isEmpty,
       !song.userEditedFields.contains("album"),
+      song.metadataSourceAlbum != "embedded",
       (song.albumConfidence < 0.8 || song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true)
     {
       song.album = album
@@ -1903,26 +2116,16 @@ extension Notification.Name {
     if let artworkURL = metadata.artworkURL {
       // Only replace if no artwork or if remote artwork is preferred and not user-selected
       let isUserSelected = song.artworkSource == .user
-      let hasEmbeddedArt = song.embeddedArtworkPath != nil
-
-      // One rule, not two: "prefer online" now actually wins when it's on.
-      // Previously a second `preferEmbeddedArtwork` flag (also defaulting
-      // to true) vetoed it for any song with embedded art — i.e. exactly
-      // the songs the setting existed to affect.
-
-      if song.artworkPath == nil
-        || (preferences.preferOnlineArtwork && !isUserSelected)
+      // Album tracks use one album-level online match. Per-track searches can
+      // return compilations/singles and were the source of mismatched covers.
+      if song.albumReference == nil && (song.artworkPath == nil
+        || (preferences.preferOnlineArtwork && !isUserSelected))
       {
         if let artworkPath = await MetadataService.shared.downloadArtwork(from: artworkURL) {
           song.artworkPath = artworkPath
           song.isRemoteArtwork = true
           song.artworkSource = .online
           needsSave = true
-          
-          // Update album artwork too
-          if let album = song.albumReference {
-            album.artworkPath = artworkPath
-          }
         }
       }
     }
@@ -2526,7 +2729,7 @@ extension Notification.Name {
     }
     try? modelContext.save()
 
-    await fetchMetadataForNewSongs()
+    await fetchAutomaticMetadata()
   }
 
   /// Returns true if the song is missing any metadata field worth fetching.

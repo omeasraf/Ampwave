@@ -103,7 +103,7 @@ enum BackgroundWorkCoordinator {
 
   private static func handle(_ task: BGProcessingTask) {
     let work = Task {
-      await SongLibrary.shared.fetchMetadataForNewSongs()
+      await SongLibrary.shared.fetchAutomaticMetadata()
     }
 
     task.expirationHandler = {

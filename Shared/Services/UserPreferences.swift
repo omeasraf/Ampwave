@@ -335,6 +335,9 @@ final class UserPreferences: Identifiable {
   var artworkQualityRaw: String
 
   var autoFetchMetadata: Bool
+  /// Opt-in library-wide enrichment for artist biographies/photos and album
+  /// details. Song-level online metadata remains controlled separately above.
+  var autoFetchArtistAlbumInfo: Bool = false
   var autoFetchLyrics: Bool
   var wordSyncedLyricsEnabled: Bool = false
   var copyMusicToStorage: Bool = true
@@ -594,10 +597,11 @@ final class UserPreferences: Identifiable {
     self.showLyricsByDefault = false
     self.artworkQualityRaw = ArtworkQuality.high.rawValue
     self.autoFetchMetadata = onboardingBool("com.ampwave.onboarding.autoFetchMetadata", default: true)
+    self.autoFetchArtistAlbumInfo = false
     self.autoFetchLyrics = onboardingBool("com.ampwave.onboarding.autoFetchLyrics", default: true)
     self.wordSyncedLyricsEnabled = true
     self.copyMusicToStorage = onboardingBool("com.ampwave.onboarding.copyToStorage", default: true)
-    self.preferOnlineArtwork = true
+    self.preferOnlineArtwork = false
     self.organizeByAlbum = true
     self.isOfflineMode = false
     self.showPlaybackNotifications = true

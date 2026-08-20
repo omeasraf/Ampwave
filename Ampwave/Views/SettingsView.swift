@@ -588,7 +588,7 @@ struct SettingsView: View {
       Text("Library")
     } footer: {
       Text(
-        "Turn off 'Copy Imported Music' to keep files in their original location; the app will reference them instead."
+        "Turn off 'Copy Imported Music' to keep files in their original location. Referenced folders are remembered when imported, and Live Library Monitoring discovers newly synced songs while Ampwave is running."
       )
     }
   }
@@ -629,13 +629,38 @@ struct SettingsView: View {
   private var onlineFeaturesSection: some View {
     Section {
       if let preferences = userPreferences {
-        Toggle(
-          "Auto-fetch Metadata",
-          isOn: Binding(
-            get: { preferences.autoFetchMetadata },
-            set: { preferences.autoFetchMetadata = $0 }
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle(
+            "Auto-fetch Metadata",
+            isOn: Binding(
+              get: { preferences.autoFetchMetadata },
+              set: { preferences.autoFetchMetadata = $0 }
+            )
           )
-        )
+          Text("Tags embedded in your audio files are always imported. This setting controls online metadata and artwork enrichment.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle(
+            "Auto-fetch Artist & Album Info",
+            isOn: Binding(
+              get: { preferences.autoFetchArtistAlbumInfo },
+              set: { enabled in
+                preferences.autoFetchArtistAlbumInfo = enabled
+                try? modelContext.save()
+                if enabled {
+                  BackgroundWorkCoordinator.scheduleMetadataRefresh()
+                  Task { await library.fetchAutomaticMetadata() }
+                }
+              }
+            )
+          )
+          Text("Slowly fetches artist photos, biographies, and missing album details in the background. Public API limits are respected.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
 
         Toggle(
           "Auto-fetch Lyrics",
@@ -1071,6 +1096,10 @@ struct SettingsView: View {
         }
 
         await library.importFiles(audioFiles)
+        let preferences = UserPreferences.getOrCreate(in: modelContext)
+        if !preferences.copyMusicToStorage {
+          LibraryMonitorService.shared.registerReferencedFolder(folderURL)
+        }
         importProgress = 1.0
       }
 
@@ -1113,7 +1142,7 @@ struct SettingsView: View {
   }
 
   private func fetchMetadataForNewSongs() async {
-    await library.fetchMetadataForNewSongs()
+    await library.fetchAutomaticMetadata()
   }
 
   private func refreshAllMetadata() async {

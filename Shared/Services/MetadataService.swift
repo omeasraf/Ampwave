@@ -725,6 +725,7 @@ final class MetadataService {
     // Update song fields only if they're empty or generic (Preserve user edits)
     if let title = metadata.title, !title.isEmpty,
       !song.userEditedFields.contains("title"),
+      song.metadataSourceTitle != "embedded",
       (song.titleConfidence < 0.8 || song.title == song.fileName || song.title.contains("Untitled"))
     {
       song.title = title
@@ -734,6 +735,7 @@ final class MetadataService {
     }
     if let artist = metadata.artist, !artist.isEmpty,
       !song.userEditedFields.contains("artist"),
+      song.metadataSourceArtist != "embedded",
       (song.artistConfidence < 0.8 || song.artist == "Unknown Artist" || song.artist.isEmpty)
     {
       song.artist = artist
@@ -743,6 +745,7 @@ final class MetadataService {
     }
     if let album = metadata.album, !album.isEmpty,
       !song.userEditedFields.contains("album"),
+      song.metadataSourceAlbum != "embedded",
       (song.albumConfidence < 0.8 || song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true)
     {
       song.album = album
@@ -873,15 +876,8 @@ final class MetadataService {
       // Only replace if no artwork or if remote artwork is preferred and not user-selected
       let prefs = UserPreferences.getOrCreate(in: modelContext)
       let isUserSelected = song.artworkSource == .user
-      let hasEmbeddedArt = song.embeddedArtworkPath != nil
-
-      // One rule, not two: "prefer online" now actually wins when it's on.
-      // Previously a second `preferEmbeddedArtwork` flag (also defaulting
-      // to true) vetoed it for any song with embedded art — i.e. exactly
-      // the songs the setting existed to affect.
-
-      if song.artworkPath == nil
-        || (prefs.preferOnlineArtwork && !isUserSelected)
+      if song.albumReference == nil && (song.artworkPath == nil
+        || (prefs.preferOnlineArtwork && !isUserSelected))
       {
         if let artworkPath = await downloadArtwork(from: artworkURL) {
           song.artworkPath = artworkPath
@@ -903,10 +899,13 @@ final class MetadataService {
     guard let modelContext = modelContext else { return }
 
     // Update album fields
-    if let artist = metadata.artist, !artist.isEmpty {
+    if let artist = metadata.artist, !artist.isEmpty,
+      !album.userEditedFields.contains("artist"),
+      album.artist == nil || album.artist?.isEmpty == true
+    {
       album.artist = artist
     }
-    if let year = metadata.year {
+    if let year = metadata.year, !album.userEditedFields.contains("year"), album.year == nil {
       album.year = year
     }
     if let description = metadata.albumDescription, !description.isEmpty {
@@ -932,8 +931,20 @@ final class MetadataService {
 
     // Download and cache artwork if available
     if let artworkURL = metadata.artworkURL {
-      if let artworkPath = await downloadArtwork(from: artworkURL) {
+      let prefs = UserPreferences.getOrCreate(in: modelContext)
+      let isUserSelected = album.artworkSource == .user
+      if (album.artworkPath == nil || (prefs.preferOnlineArtwork && !isUserSelected)),
+        let artworkPath = await downloadArtwork(from: artworkURL)
+      {
         album.artworkPath = artworkPath
+        album.artworkSource = .online
+        for song in album.songs where song.artworkSource != .user {
+          if prefs.preferOnlineArtwork || song.embeddedArtworkPath == nil {
+            song.artworkPath = artworkPath
+            song.artworkSource = .online
+            song.isRemoteArtwork = true
+          }
+        }
       }
     }
 

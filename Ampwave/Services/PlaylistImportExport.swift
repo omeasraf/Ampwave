@@ -9,9 +9,12 @@ import UniformTypeIdentifiers
 
 enum PlaylistImportExport {
   static let playlistM3UType = UTType(filenameExtension: "m3u") ?? .plainText
+  static let playlistM3U8Type = UTType(filenameExtension: "m3u8") ?? .plainText
   static let playlistJSONType = UTType.json
   static let playlistUTType = playlistM3UType
-  static let importableContentTypes: [UTType] = [playlistJSONType, playlistM3UType, .plainText]
+  static let importableContentTypes: [UTType] = [
+    playlistJSONType, playlistM3UType, playlistM3U8Type, .plainText,
+  ]
 
   @MainActor
   static func writeJSONToTemp(playlist: Playlist, library: SongLibrary) throws -> URL {
@@ -68,12 +71,18 @@ enum PlaylistImportExport {
     if shouldTreatAsJSON(data: data, sourceURL: sourceURL) {
       return try importJSON(data: data, into: modelContext, library: library)
     }
-    return try importM3U(data: data, into: modelContext, library: library)
+    return try importM3U(
+      data: data,
+      sourceURL: sourceURL,
+      into: modelContext,
+      library: library
+    )
   }
 
   @MainActor
   static func importM3U(
     data: Data,
+    sourceURL: URL?,
     into modelContext: ModelContext,
     library: SongLibrary
   ) throws -> Playlist {
@@ -86,7 +95,11 @@ enum PlaylistImportExport {
     var pending = PendingM3UEntry()
 
     for rawLine in text.components(separatedBy: .newlines) {
-      let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+      // UTF-8 playlists produced on Windows often start with a BOM. Treat it
+      // as encoding metadata, not as part of the first directive or path.
+      let line = rawLine.trimmingCharacters(
+        in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}"))
+      )
       guard !line.isEmpty else { continue }
 
       if line.hasPrefix("#PLAYLIST:") {
@@ -117,13 +130,19 @@ enum PlaylistImportExport {
 
       if line.hasPrefix("#") { continue }
 
-      // In the new format, this line is "Artist - Title", but we already got it from EXTINF or can parse it here
+      // Standard M3U/M3U8 files put the audio path on this line. Keep it so
+      // referenced songs can be matched against their original Files URLs.
+      pending.filePath = line
+
+      // Ampwave's portable format uses "Artist - Title" here. Standard M3U
+      // files normally already supplied that information through EXTINF.
       if pending.songName == "Unknown Title" {
-          let parts = line.components(separatedBy: " - ")
-          if parts.count >= 2 {
-              pending.artistName = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-              pending.songName = parts.dropFirst().joined(separator: " - ").trimmingCharacters(in: .whitespacesAndNewlines)
-          }
+        let parts = line.components(separatedBy: " - ")
+        if parts.count >= 2 {
+          pending.artistName = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+          pending.songName = parts.dropFirst().joined(separator: " - ").trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        }
       }
 
       importedTracks.append(pending.asTrack())
@@ -131,10 +150,11 @@ enum PlaylistImportExport {
     }
 
     return try makeImportedPlaylist(
-      name: playlistName,
+      name: playlistName ?? sourceURL?.deletingPathExtension().lastPathComponent,
       tracks: importedTracks,
       into: modelContext,
-      library: library
+      library: library,
+      playlistURL: sourceURL
     )
   }
 
@@ -159,7 +179,8 @@ enum PlaylistImportExport {
     name: String?,
     tracks: [PortableTrackDocument],
     into modelContext: ModelContext,
-    library: SongLibrary
+    library: SongLibrary,
+    playlistURL: URL? = nil
   ) throws -> Playlist {
     let playlistManager = PlaylistManager.shared
     playlistManager.setModelContext(modelContext)
@@ -169,11 +190,19 @@ enum PlaylistImportExport {
       (trimmedName?.isEmpty == false ? trimmedName : nil)
       ?? "Imported \(Date().formatted(date: .abbreviated, time: .shortened))"
 
+    let resolvedSongs = tracks.compactMap {
+      resolveSong(from: $0, playlistURL: playlistURL, library: library)
+    }
+    if !tracks.isEmpty && resolvedSongs.isEmpty {
+      throw importError(
+        "None of the playlist's songs could be matched. Import or reference the music folder first, then try the playlist again."
+      )
+    }
+
     guard let playlist = playlistManager.createPlaylist(name: playlistTitle) else {
       throw importError("Could not create playlist.")
     }
 
-    let resolvedSongs = tracks.compactMap { resolveSong(from: $0, library: library) }
     for song in resolvedSongs {
       playlistManager.addSong(song, to: playlist)
     }
@@ -181,8 +210,11 @@ enum PlaylistImportExport {
     return playlist
   }
 
-  private static func resolveSong(from track: PortableTrackDocument, library: SongLibrary)
-    -> LibrarySong?
+  private static func resolveSong(
+    from track: PortableTrackDocument,
+    playlistURL: URL?,
+    library: SongLibrary
+  ) -> LibrarySong?
   {
     // 1. Match by hash first (most reliable)
     if let fileHash = track.hash, !fileHash.isEmpty,
@@ -191,7 +223,15 @@ enum PlaylistImportExport {
       return match
     }
 
-    // 2. Fall back to metadata matching
+    // 2. Resolve standard relative/absolute M3U paths. Referenced songs retain
+    // their original URL, so this works without copying them into Ampwave.
+    if let filePath = track.filePath,
+      let match = resolveSongByPath(filePath, playlistURL: playlistURL, library: library)
+    {
+      return match
+    }
+
+    // 3. Fall back to metadata matching
     let normalizedTitle = normalize(track.songName)
     let normalizedArtist = normalize(track.artistName)
     let normalizedAlbum = normalize(track.albumName ?? "")
@@ -231,6 +271,82 @@ enum PlaylistImportExport {
         return lhs.1 > rhs.1
       }
       .first?.0
+  }
+
+  private static func resolveSongByPath(
+    _ rawPath: String,
+    playlistURL: URL?,
+    library: SongLibrary
+  ) -> LibrarySong? {
+    let path = normalizedPlaylistPath(rawPath)
+    guard !path.isEmpty else { return nil }
+
+    let referencedURLs = library.songs.map { song in
+      (song, library.getFileURL(for: song).standardizedFileURL)
+    }
+
+    // Relative entries are relative to the playlist file, per the M3U format.
+    if let playlistURL, !isAbsolutePlaylistPath(path) {
+      let candidate = playlistURL.deletingLastPathComponent()
+        .appendingPathComponent(path)
+        .standardizedFileURL
+      if let exact = referencedURLs.first(where: { $0.1.path == candidate.path }) {
+        return exact.0
+      }
+    } else if path.hasPrefix("/") {
+      let candidate = URL(fileURLWithPath: path).standardizedFileURL
+      if let exact = referencedURLs.first(where: { $0.1.path == candidate.path }) {
+        return exact.0
+      }
+    }
+
+    // A Windows absolute path cannot exist verbatim on iOS, but the trailing
+    // relative hierarchy usually remains the same after the folder is synced.
+    let comparablePath = normalizePathForComparison(path)
+    let suffixMatches = referencedURLs.filter {
+      let actual = normalizePathForComparison($0.1.path)
+      return actual == comparablePath || actual.hasSuffix("/" + comparablePath)
+    }
+    if suffixMatches.count == 1 { return suffixMatches[0].0 }
+
+    // MusicBee playlists commonly retain just enough Windows-only prefix to
+    // prevent a full suffix match. A unique filename is still deterministic.
+    let fileName = URL(fileURLWithPath: path).lastPathComponent
+    let fileNameMatches = referencedURLs.filter {
+      $0.1.lastPathComponent.compare(fileName, options: [.caseInsensitive]) == .orderedSame
+        || $0.0.fileName.compare(fileName, options: [.caseInsensitive]) == .orderedSame
+    }
+    return fileNameMatches.count == 1 ? fileNameMatches[0].0 : nil
+  }
+
+  private static func normalizedPlaylistPath(_ rawPath: String) -> String {
+    var path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+    if path.hasPrefix("\"") && path.hasSuffix("\"") && path.count >= 2 {
+      path.removeFirst()
+      path.removeLast()
+    }
+    path = path.replacingOccurrences(of: "\\", with: "/")
+    if let decoded = path.removingPercentEncoding { path = decoded }
+    if path.lowercased().hasPrefix("file://"), let url = URL(string: path) {
+      return url.path
+    }
+    return path
+  }
+
+  private static func isAbsolutePlaylistPath(_ path: String) -> Bool {
+    path.hasPrefix("/")
+      || path.range(of: #"^[A-Za-z]:/"#, options: .regularExpression) != nil
+  }
+
+  private static func normalizePathForComparison(_ path: String) -> String {
+    path
+      .replacingOccurrences(of: "\\", with: "/")
+      .replacingOccurrences(of: #"^[A-Za-z]:/"#, with: "", options: .regularExpression)
+      .split(separator: "/")
+      .filter { $0 != "." && $0 != ".." }
+      .joined(separator: "/")
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .lowercased()
   }
 
   private static func shouldTreatAsJSON(data: Data, sourceURL: URL?) -> Bool {
@@ -314,19 +430,22 @@ private struct PortableTrackDocument: Codable {
   let albumName: String?
   let duration: TimeInterval?
   let hash: String?
+  let filePath: String?
 
   init(
     songName: String,
     artistName: String,
     albumName: String? = nil,
     duration: TimeInterval? = nil,
-    hash: String? = nil
+    hash: String? = nil,
+    filePath: String? = nil
   ) {
     self.songName = songName
     self.artistName = artistName
     self.albumName = albumName
     self.duration = duration
     self.hash = hash
+    self.filePath = filePath
   }
 
   init(song: LibrarySong, library: SongLibrary) {
@@ -335,7 +454,8 @@ private struct PortableTrackDocument: Codable {
       artistName: song.artist,
       albumName: song.album,
       duration: song.duration > 0 ? song.duration : nil,
-      hash: song.fileHash
+      hash: song.fileHash,
+      filePath: nil
     )
   }
 }
@@ -346,6 +466,7 @@ private struct PendingM3UEntry {
   var album: String?
   var duration: TimeInterval?
   var fileHash: String?
+  var filePath: String?
 
   mutating func applyEXTINF(_ line: String) {
     let payload = String(line.dropFirst("#EXTINF:".count))
@@ -373,7 +494,8 @@ private struct PendingM3UEntry {
       artistName: artistName,
       albumName: album,
       duration: duration,
-      hash: fileHash
+      hash: fileHash,
+      filePath: filePath
     )
   }
 }
