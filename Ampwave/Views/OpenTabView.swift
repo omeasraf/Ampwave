@@ -10,24 +10,15 @@ import SwiftData
 internal import SwiftUI
 
 struct OpenTabView: View {
-  @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Binding var isPlayerExpanded: Bool
   @State private var selectedTab: AppTab = .home
-  @State private var servicesInitialized = false
   @State private var showOnboarding = OnboardingState.shouldShow
   @State private var capsuleImportError: String?
   /// Incremented on library reset — causes all tab content to be recreated,
   /// clearing every NavigationStack and flushing any stale in-memory data.
   @State private var libraryResetID: Int = 0
 
-  private var library: SongLibrary { SongLibrary.shared }
-  private var playlistManager: PlaylistManager { PlaylistManager.shared }
-  private var historyTracker: ListeningHistoryTracker { ListeningHistoryTracker.shared }
-  private var lyricsService: LyricsService { LyricsService.shared }
-  private var metadataService: MetadataService { MetadataService.shared }
-  private var recommendationEngine: RecommendationEngine { RecommendationEngine.shared }
-  private var playbackController: PlaybackController { PlaybackController.shared }
 
   enum AppTab: String, CaseIterable {
     case home = "Home"
@@ -138,56 +129,6 @@ struct OpenTabView: View {
     //    }
     .overlay(alignment: .top) {
       IndexingStatusView()
-    }
-    .onAppear {
-      // Only setup once to avoid redundant work
-      guard !servicesInitialized else { return }
-      servicesInitialized = true
-
-      print("[DEBUG] OpenTabView.onAppear - Starting on thread: \(Thread.current.name)")
-
-      // Structured initialization sequence
-      Task {
-        // 1. Initial Context Setup (MainActor)
-        print("[DEBUG] Setting model contexts...")
-        self.library.setModelContext(self.modelContext)
-        self.playlistManager.setModelContext(self.modelContext)
-        self.historyTracker.setModelContext(self.modelContext)
-        self.lyricsService.setModelContext(self.modelContext)
-        self.metadataService.setModelContext(self.modelContext)
-        self.recommendationEngine.setModelContext(self.modelContext)
-        UserPreferences.sharedContextForNetworkCheck = self.modelContext
-        // Also drains any scrobbles queued while offline or before a restart.
-        LastFMScrobbler.shared.setModelContext(self.modelContext)
-        #if os(iOS)
-          WatchSyncService.shared.setModelContext(self.modelContext)
-        #endif
-
-        // Setup preferences and theme
-        _ = UserPreferences.getOrCreate(in: self.modelContext)
-
-        // 2. Load songs first (needed for restoration)
-        print("[DEBUG] Loading songs...")
-        await library.loadSongs()
-
-        // 3. Restore playback state
-        print("[DEBUG] Restoring playback state...")
-        self.playbackController.setModelContext(self.modelContext)
-
-        // 4. Perform indexing in background
-        Task.detached(priority: .background) {
-          print("[DEBUG] Starting background index...")
-          await SongLibrary.shared.indexOnStartup()
-          // Resume any metadata fetches that were interrupted (app killed mid-fetch,
-          // network failure, etc.) and pick up any new songs from the previous session.
-          await SongLibrary.shared.resumeIncompleteMetadataFetches()
-          print("[DEBUG] Background indexing complete")
-        }
-
-        LibraryMonitorService.shared.start()
-
-        print("[DEBUG] Service initialization complete")
-      }
     }
     // The player pushes onto the Library stack, so follow it there.
     .onChange(of: AppNavigator.shared.libraryPath) { oldPath, newPath in

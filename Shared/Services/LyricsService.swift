@@ -194,7 +194,7 @@ final class LyricsService {
       cached?.lastFetchAttemptAt.map { Date().timeIntervalSince($0) < recheckInterval } ?? false
 
     let canGoOnline =
-      preferences.autoFetchLyrics
+      (forceRefresh || preferences.autoFetchLyrics)
       && NetworkMonitor.shared.isOnline
       && !preferences.isOfflineMode
       && !isComplete
@@ -329,7 +329,13 @@ final class LyricsService {
   /// delete cached synced lyrics whenever a provider returned only plain text,
   /// which silently downgraded songs that already had good timings.
   func fetchOnlineLyrics(for song: LibrarySong) async -> SyncedLyric? {
-    await fetchLyrics(for: song, forceRefresh: true)
+    guard let modelContext else { return nil }
+    let preferences = UserPreferences.getOrCreate(in: modelContext)
+    return await fetchLyrics(
+      for: song,
+      forceRefresh: true,
+      includeWordSynced: preferences.wordSyncedLyricsEnabled
+    )
   }
 
   private func fetchFromWordSyncedProviders(song: LibrarySong) async -> SyncedLyric? {
@@ -525,7 +531,10 @@ final class LyricsService {
   }
 
   @discardableResult
-  private func cacheLyrics(_ lyrics: SyncedLyric) -> SyncedLyric {
+  private func cacheLyrics(
+    _ lyrics: SyncedLyric,
+    replacingPlainLyrics: Bool = false
+  ) -> SyncedLyric {
     guard let modelContext = modelContext else { return lyrics }
 
     let descriptor = FetchDescriptor<SyncedLyric>()
@@ -536,8 +545,11 @@ final class LyricsService {
       existing.lines = lyrics.lines
       existing.source = lyrics.source
       existing.language = lyrics.language
-      // Never let an update blank out a plain copy we already had.
-      if let incoming = lyrics.plainLyrics, !incoming.isEmpty {
+      // Provider updates should not erase a useful plain tier. User edits,
+      // including an intentionally empty value, replace it exactly.
+      if replacingPlainLyrics {
+        existing.plainLyrics = lyrics.plainLyrics
+      } else if let incoming = lyrics.plainLyrics, !incoming.isEmpty {
         existing.plainLyrics = incoming
       }
       if let attempted = lyrics.lastFetchAttemptAt {
@@ -573,7 +585,8 @@ final class LyricsService {
   }
 
   func refreshLyrics(for song: LibrarySong) async -> SyncedLyric? {
-    clearCachedLyrics(for: song)
+    // `forceRefresh` replaces the existing model's values in place. Deleting
+    // it first detaches the object still held by the player and SwiftUI.
     return await fetchLyrics(for: song, forceRefresh: true)
   }
 
@@ -590,7 +603,7 @@ final class LyricsService {
         language: nil,
         plainLyrics: lines.map(\.text).joined(separator: "\n")
       )
-      cacheLyrics(syncedLyric)
+      cacheLyrics(syncedLyric, replacingPlainLyrics: true)
     } else {
       // Plain text the user typed in: store it as the plain tier and drop the
       // stale timings, since they no longer describe this text.
@@ -601,8 +614,7 @@ final class LyricsService {
         language: nil,
         plainLyrics: content
       )
-      clearCachedLyrics(for: song)
-      cacheLyrics(plainLyric)
+      cacheLyrics(plainLyric, replacingPlainLyrics: true)
     }
 
     song.lyrics = content

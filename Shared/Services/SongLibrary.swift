@@ -42,7 +42,11 @@ extension Notification.Name {
 
     /// id → song, so callers resolving many ids (history, most played, playlist
     /// song order) don't linear-scan `songs` once per id.
-    private var songIndex: [UUID: LibrarySong] = [:]
+  private var songIndex: [UUID: LibrarySong] = [:]
+  /// Prevents overlapping folder scans, document-picker imports, and live
+  /// monitoring events from inserting the same file while metadata extraction
+  /// is suspended.
+  private var importingFileHashes: Set<String> = []
 
     /// song id → resolved audio-file URL.
     ///
@@ -85,9 +89,11 @@ extension Notification.Name {
 
   var modelContext: ModelContext?
 
-  private static let audioExtensions: Set<String> = [
+  nonisolated private static let audioExtensions: Set<String> = [
     "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "aiff", "wma", "alac", "m4b",
   ]
+  private static let liveMonitoringIgnoredHashesKey =
+    "com.ampwave.liveLibraryMonitoringIgnoredHashes"
 
   private init() {
     let baseDir = PathManager.baseDirectory.standardizedFileURL
@@ -495,7 +501,7 @@ extension Notification.Name {
 
   // MARK: - Loading
 
-  func loadSongs(force: Bool = false) async {
+  func loadSongs(force: Bool = false, performMaintenance: Bool = true) async {
     if !force && isLoaded && !songs.isEmpty {
       print("[DEBUG] SongLibrary.loadSongs: Already loaded, skipping")
       return
@@ -515,10 +521,13 @@ extension Notification.Name {
       )
       songs = try modelContext.fetch(descriptor)
       print("[DEBUG] SongLibrary.loadSongs: Fetched \(songs.count) songs")
+      // Loading uses the main SwiftData context, but yielding between fetch
+      // phases lets the launch equalizer commit animation frames.
+      await Task.yield()
 
       // Merge duplicate songs if setting is enabled
       let appSettings = AppSettings.getOrCreate(in: modelContext)
-      if appSettings.mergeSongDuplicates {
+      if performMaintenance && appSettings.mergeSongDuplicates {
         print("[DEBUG] SongLibrary.loadSongs: Merging duplicate songs")
         await mergeSongDuplicates(in: modelContext)
         // Refresh songs after merge
@@ -532,12 +541,13 @@ extension Notification.Name {
       songs = []
     }
 
-    await loadAlbums()
+    await loadAlbums(performMaintenance: performMaintenance)
+    await Task.yield()
     artists = await allArtists()
     print("[DEBUG] SongLibrary.loadSongs: Finished loading songs, albums, and artists")
   }
 
-  private func loadAlbums() async {
+  private func loadAlbums(performMaintenance: Bool = true) async {
     print("[DEBUG] SongLibrary.loadAlbums: Loading albums from database")
     guard let modelContext = modelContext else {
       print("[DEBUG] SongLibrary.loadAlbums: Error - No modelContext")
@@ -555,7 +565,7 @@ extension Notification.Name {
       // "NF"). Now honours the Settings toggle, which was previously written
       // but never read — the merge ran unconditionally either way.
       let settings = AppSettings.getOrCreate(in: modelContext)
-      if settings.mergeAlbumDuplicates {
+      if performMaintenance && settings.mergeAlbumDuplicates {
         print("[DEBUG] SongLibrary.loadAlbums: Merging duplicate albums")
         await mergeAlbumDuplicates(in: modelContext)
       } else {
@@ -725,7 +735,7 @@ extension Notification.Name {
 
     // 4. Import new files
     modelContext.processPendingChanges()
-    let finalExistingHashes = Set(
+    var finalExistingHashes = Set(
       ((try? modelContext.fetch(FetchDescriptor<LibrarySong>())) ?? []).map(\.fileHash))
 
     var newFiles: [URL] = []
@@ -739,7 +749,7 @@ extension Notification.Name {
       indexingStatus = .indexing("Importing \(newFiles.count) new songs…")
       for url in newFiles {
         guard let hash = await self.fileHash(at: url) else { continue }
-        if !finalExistingHashes.contains(hash) {
+        if finalExistingHashes.insert(hash).inserted {
           _ = await importFileInPlace(at: url, modelContext: modelContext)
         }
       }
@@ -1008,6 +1018,64 @@ extension Notification.Name {
       "[DEBUG] SongLibrary.importFiles: Completed. Imported \(importedCount)/\(totalCount) files")
   }
 
+  /// Registers audio files that already live inside Ampwave's managed Songs
+  /// directory. This is used by live monitoring so a Files/Syncthing copy is
+  /// indexed in place instead of being copied a second time or stored as an
+  /// external reference.
+  func importManagedFilesInPlace(_ urls: [URL]) async {
+    guard let modelContext, !urls.isEmpty else { return }
+
+    indexingStatus = .indexing("Importing \(urls.count) new songs…")
+    defer { indexingStatus = .complete }
+
+    var importedCount = 0
+    for (index, url) in urls.enumerated() {
+      indexingStatus = .indexing("Importing \(index + 1)/\(urls.count)…")
+      if await importFileInPlace(at: url, modelContext: modelContext) != nil {
+        importedCount += 1
+      }
+
+      if importedCount > 0, importedCount.isMultiple(of: 5) {
+        saveContext()
+        modelContext.processPendingChanges()
+        await Task.yield()
+      }
+    }
+
+    guard importedCount > 0 else { return }
+    saveContext()
+    await pruneEmptyAlbums()
+    await loadSongs(force: true)
+    Task { await fetchAutomaticMetadata() }
+  }
+
+  /// Hashes of referenced files the user explicitly removed from Ampwave.
+  /// A passive folder event must not resurrect them, while a manual import is
+  /// still free to remove the hash from this set and restore the song.
+  var liveMonitoringIgnoredHashes: Set<String> {
+    Set(
+      UserDefaults.standard.stringArray(forKey: Self.liveMonitoringIgnoredHashesKey) ?? []
+    )
+  }
+
+  private func ignoreForLiveMonitoring(_ hashes: Set<String>) {
+    guard !hashes.isEmpty else { return }
+    let updated = liveMonitoringIgnoredHashes.union(hashes)
+    UserDefaults.standard.set(Array(updated), forKey: Self.liveMonitoringIgnoredHashesKey)
+  }
+
+  func ignoreReferencedSongsForLiveMonitoring(_ songs: [LibrarySong]) {
+    ignoreForLiveMonitoring(
+      Set(songs.filter { $0.storageMode == .referenced }.map(\.fileHash))
+    )
+  }
+
+  private func allowLiveMonitoring(_ hash: String) {
+    var ignored = liveMonitoringIgnoredHashes
+    guard ignored.remove(hash) != nil else { return }
+    UserDefaults.standard.set(Array(ignored), forKey: Self.liveMonitoringIgnoredHashesKey)
+  }
+
   private func importFile(
     from url: URL,
     modelContext: ModelContext,
@@ -1031,6 +1099,16 @@ extension Notification.Name {
       print("[DEBUG] SongLibrary.importFile: Failed to calculate hash for \(url.lastPathComponent)")
       return nil
     }
+
+    // Reaching the regular importer represents an explicit import. It is the
+    // user's way to intentionally restore a referenced song they deleted.
+    allowLiveMonitoring(fileHash)
+
+    guard importingFileHashes.insert(fileHash).inserted else {
+      print("[DEBUG] SongLibrary.importFile: File is already being imported")
+      return nil
+    }
+    defer { importingFileHashes.remove(fileHash) }
 
     // Perform SwiftData operations on Main Actor
     print("[DEBUG] SongLibrary.importFile: Checking for existing song with hash: \(fileHash)")
@@ -1250,6 +1328,8 @@ extension Notification.Name {
     let fileName = url.lastPathComponent
 
     guard let fileHash = await fileHash(at: url) else { return nil }
+    guard importingFileHashes.insert(fileHash).inserted else { return nil }
+    defer { importingFileHashes.remove(fileHash) }
     let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
 
     // Skip if already in library
@@ -1463,7 +1543,11 @@ extension Notification.Name {
   // MARK: - Metadata Fetching from API
 
   private func fetchMetadataForSong(_ song: LibrarySong, isPartOfBatch: Bool = false) async {
-    print("[DEBUG] SongLibrary.fetchMetadataForSong: Starting for \(song.title)")
+    // Never rely on this SwiftData instance after an async suspension. A force
+    // reload or duplicate merge can replace it while an API request is running.
+    let songID = song.id
+    let songTitle = song.title
+    print("[DEBUG] SongLibrary.fetchMetadataForSong: Starting for \(songTitle)")
     guard let modelContext = modelContext else {
       print("[DEBUG] SongLibrary.fetchMetadataForSong: Error - No modelContext")
       return
@@ -1482,21 +1566,27 @@ extension Notification.Name {
       }
       if let genre = await metadataService.fetchGenreTags(for: song), !genre.isEmpty {
         await MainActor.run {
-          song.genre = genre
+          self.song(id: songID)?.genre = genre
           try? modelContext.save()
         }
       }
     }
 
     // 1. Online Metadata & Artwork
+    guard let metadataSong = self.song(id: songID), metadataSong.modelContext != nil else {
+      print("[DEBUG] SongLibrary.fetchMetadataForSong: Song was replaced before metadata fetch")
+      return
+    }
     let isGenericAlbum =
-      song.album == nil || song.album == "Unknown Album" || song.album?.isEmpty == true
-    let isGenericArtist = song.artist == "Unknown Artist" || song.artist.isEmpty
+      metadataSong.album == nil || metadataSong.album == "Unknown Album"
+      || metadataSong.album?.isEmpty == true
+    let isGenericArtist = metadataSong.artist == "Unknown Artist" || metadataSong.artist.isEmpty
     let isMissingKeyInfo =
-      song.genre == nil || song.genre?.isEmpty == true || song.year == nil || song.year == 0
+      metadataSong.genre == nil || metadataSong.genre?.isEmpty == true
+      || metadataSong.year == nil || metadataSong.year == 0
 
     let needsMetadata =
-      song.artworkPath == nil || isGenericAlbum || isGenericArtist || isMissingKeyInfo
+      metadataSong.artworkPath == nil || isGenericAlbum || isGenericArtist || isMissingKeyInfo
 
     if preferences.autoFetchMetadata && needsMetadata && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode {
       // Only increment if not already part of a batch fetch
@@ -1507,7 +1597,7 @@ extension Notification.Name {
 
       // Mark as attempted early to prevent race conditions or repeats on restart
       // (This is redundant if called from fetchMetadataForNewSongs, but good for direct calls)
-      song.metadataCheckAttempted = true
+      metadataSong.metadataCheckAttempted = true
       
       let metadataService = MetadataService.shared
       if metadataService.modelContext == nil {
@@ -1515,16 +1605,23 @@ extension Notification.Name {
       }
 
       print("[DEBUG] SongLibrary.fetchMetadataForSong: Calling MetadataService.fetchMetadata")
-      if let metadata = await metadataService.fetchMetadata(for: song) {
+      if let metadata = await metadataService.fetchMetadata(for: metadataSong) {
+        // A force reload or duplicate merge can replace/detach the instance
+        // while the network request is suspended. Always apply to the current
+        // live model resolved by stable identity.
+        guard let liveSong = self.song(id: songID), liveSong.modelContext != nil else {
+          print("[DEBUG] SongLibrary.fetchMetadataForSong: Song was replaced during fetch")
+          return
+        }
         // Apply fetched metadata (on MainActor)
         print("[DEBUG] SongLibrary.fetchMetadataForSong: Metadata fetched, applying to song")
-        await applyFetchedMetadata(metadata, to: song, preferences: preferences)
-        song.metadataFetchSucceeded = true
+        await applyFetchedMetadata(metadata, to: liveSong, preferences: preferences)
+        liveSong.metadataFetchSucceeded = true
       } else {
         // API returned nothing — mark succeeded so we don't retry on every launch
         // for songs that genuinely have no match in any source.
-        print("[DEBUG] SongLibrary.fetchMetadataForSong: No metadata found for \(song.title)")
-        song.metadataFetchSucceeded = true
+        print("[DEBUG] SongLibrary.fetchMetadataForSong: No metadata found for \(songTitle)")
+        self.song(id: songID)?.metadataFetchSucceeded = true
       }
       
       if !isPartOfBatch {
@@ -1540,16 +1637,20 @@ extension Notification.Name {
     // searched by lyric text. Only the *word-synced* providers are deferred to
     // first play (they rate-limit); LRCLIB still supplies line-synced and
     // plain text here.
-    let syncedLyricLines = LRCParser.parse(song.lyrics ?? "")
+    guard let activeSong = self.song(id: songID), activeSong.modelContext != nil else {
+      print("[DEBUG] SongLibrary.fetchMetadataForSong: Song was replaced before lyrics fetch")
+      return
+    }
+    let syncedLyricLines = LRCParser.parse(activeSong.lyrics ?? "")
     let hasSyncedLyrics = !syncedLyricLines.isEmpty
-    if preferences.autoFetchLyrics && !hasSyncedLyrics && !song.lyricsCheckAttempted
+    if preferences.autoFetchLyrics && !hasSyncedLyrics && !activeSong.lyricsCheckAttempted
       && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode
     {
       print(
         "[DEBUG] SongLibrary.fetchMetadataForSong: Missing synced lyrics, calling LyricsService")
 
       // Mark as attempted even before the call to prevent parallel re-triggers
-      song.lyricsCheckAttempted = true
+      activeSong.lyricsCheckAttempted = true
       saveContext()
 
       let lyricsService = LyricsService.shared
@@ -1560,7 +1661,7 @@ extension Notification.Name {
       // rate-limit aggressively and a library-sized run gets us throttled.
       // Word timings are fetched per-song on first play instead.
       _ = await lyricsService.fetchLyrics(
-        for: song,
+        for: activeSong,
         includeWordSynced: !isPartOfBatch
       )
     }
@@ -1740,10 +1841,13 @@ extension Notification.Name {
       print(
         "[DEBUG] SongLibrary.fetchMetadataForNewSongs: Fetching for \(songsToFetch.count) songs")
 
-      totalMetadataFetches = songsToFetch.count
-      pendingMetadataFetches = songsToFetch.count
+      // Keep stable identities across suspension points. The live SwiftData
+      // instance can be replaced by a force reload while this batch is active.
+      let songIDs = songsToFetch.map(\.id)
+      totalMetadataFetches = songIDs.count
+      pendingMetadataFetches = songIDs.count
 
-      for song in songsToFetch {
+      for songID in songIDs {
         // Double check if context is still valid
         guard self.modelContext != nil else { break }
 
@@ -1752,6 +1856,11 @@ extension Notification.Name {
         if Task.isCancelled {
           print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Cancelled, stopping batch")
           break
+        }
+
+        guard let song = self.song(id: songID), song.modelContext != nil else {
+          pendingMetadataFetches -= 1
+          continue
         }
 
         // Mark as attempted BEFORE the call to prevent infinite loops if it crashes or fails
@@ -1783,8 +1892,13 @@ extension Notification.Name {
     print("[DEBUG] SongLibrary.refreshAllMetadata: Starting full library refresh")
     guard let modelContext = modelContext else { return }
 
+    // Keep only stable identities across the async refresh. File monitoring or
+    // duplicate reconciliation may replace SwiftData instances mid-pass.
+    let songIDs = songs.map(\.id)
+
     // Reset attempt flags so we can try again
-    for song in songs {
+    for songID in songIDs {
+      guard let song = self.song(id: songID) else { continue }
       song.metadataCheckAttempted = false
       song.metadataFetchSucceeded = false
       song.lyricsCheckAttempted = false
@@ -1796,18 +1910,24 @@ extension Notification.Name {
 
     indexingStatus = .indexing("Refreshing library…")
 
-    let songsCount = songs.count
-    for (index, song) in songs.enumerated() {
+    let songsCount = songIDs.count
+    for (index, songID) in songIDs.enumerated() {
       indexingStatus = .indexing("Refreshing songs (\(index + 1)/\(songsCount))…")
+      guard let song = self.song(id: songID) else { continue }
       await refreshEmbeddedMetadata(for: song)
-      await metadataService.refreshMetadata(for: song)
+      if let liveSong = self.song(id: songID) {
+        await metadataService.refreshMetadata(for: liveSong)
+      }
     }
     saveContext()
 
-    let albumCount = albums.count
-    for (index, album) in albums.enumerated() {
+    let albumIDs = albums.map(\.id)
+    let albumCount = albumIDs.count
+    for (index, albumID) in albumIDs.enumerated() {
       indexingStatus = .indexing("Refreshing albums (\(index + 1)/\(albumCount))…")
-      await metadataService.refreshMetadata(for: album)
+      if let album = albums.first(where: { $0.id == albumID }) {
+        await metadataService.refreshMetadata(for: album)
+      }
     }
 
     indexingStatus = .complete
@@ -1825,19 +1945,23 @@ extension Notification.Name {
 
     // Embedded tags are local metadata and must not depend on Auto-fetch
     // Metadata, connectivity, or a successful online match.
-    let albumSongs = album.songs.sorted(by: LibrarySong.albumTrackOrder)
-    for (index, song) in albumSongs.enumerated() {
-      indexingStatus = .indexing("Refreshing tracks (\(index + 1)/\(albumSongs.count))…")
-      await refreshEmbeddedMetadata(for: song)
+    let songIDs = album.songs.sorted(by: LibrarySong.albumTrackOrder).map(\.id)
+    for (index, songID) in songIDs.enumerated() {
+      indexingStatus = .indexing("Refreshing tracks (\(index + 1)/\(songIDs.count))…")
+      if let song = self.song(id: songID) {
+        await refreshEmbeddedMetadata(for: song)
+      }
     }
     saveContext()
 
     await metadataService.refreshMetadata(for: album)
 
     // Online sources can fill fields that are not present in the files.
-    for (index, song) in albumSongs.enumerated() {
-      indexingStatus = .indexing("Checking online metadata (\(index + 1)/\(albumSongs.count))…")
-      await metadataService.refreshMetadata(for: song)
+    for (index, songID) in songIDs.enumerated() {
+      indexingStatus = .indexing("Checking online metadata (\(index + 1)/\(songIDs.count))…")
+      if let song = self.song(id: songID) {
+        await metadataService.refreshMetadata(for: song)
+      }
     }
   }
 
@@ -1845,16 +1969,29 @@ extension Notification.Name {
   /// otherwise embedded values are authoritative for file-level tags.
   @MainActor
   private func refreshEmbeddedMetadata(for song: LibrarySong) async {
+    let songID = song.id
+    let songTitle = song.title
     let url = getFileURL(for: song)
     let secured = url.startAccessingSecurityScopedResource()
     defer { if secured { url.stopAccessingSecurityScopedResource() } }
 
     guard fileManager.fileExists(atPath: url.path) else {
-      print("[DEBUG] SongLibrary.refreshEmbeddedMetadata: Missing file for \(song.title)")
+      print("[DEBUG] SongLibrary.refreshEmbeddedMetadata: Missing file for \(songTitle)")
       return
     }
 
     let metadata = await AudioMetadataExtractor.extract(from: url)
+    let cachedEmbeddedArtworkPath: String?
+    if let artwork = metadata.artwork {
+      cachedEmbeddedArtworkPath = await cacheArtwork(artwork)
+    } else {
+      cachedEmbeddedArtworkPath = nil
+    }
+
+    guard let song = self.song(id: songID), song.modelContext != nil else {
+      print("[DEBUG] SongLibrary.refreshEmbeddedMetadata: Song was replaced during file read")
+      return
+    }
 
     if !song.userEditedFields.contains("title"), metadata.metadataSourceTitle == "embedded" {
       song.title = metadata.title
@@ -1899,7 +2036,7 @@ extension Notification.Name {
       LyricsService.shared.saveLyrics(for: song, content: lyrics)
     }
 
-    if let artwork = metadata.artwork, let path = await cacheArtwork(artwork) {
+    if let path = cachedEmbeddedArtworkPath {
       song.embeddedArtworkPath = path
       let preferences = modelContext.map { UserPreferences.getOrCreate(in: $0) }
       if song.artworkSource != .user, preferences?.preferOnlineArtwork != true {
@@ -2546,6 +2683,7 @@ extension Notification.Name {
       }
     } else {
       print("[DEBUG] SongLibrary.deleteSong: Skipping file deletion for referenced song")
+      ignoreForLiveMonitoring([song.fileHash])
     }
 
     // 2. Remove from observable state before detaching its SwiftData backing.
@@ -2640,6 +2778,7 @@ extension Notification.Name {
     guard let modelContext = modelContext else { return }
 
     let deletedSongIDs = Set(album.songs.map(\.id))
+    ignoreReferencedSongsForLiveMonitoring(album.songs)
 
     // 1. Delete all song files in the album only if they were copied
     for song in album.songs {

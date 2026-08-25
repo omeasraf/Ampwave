@@ -1,6 +1,6 @@
 # Ampwave
 
-> **Your music, unlocked.**
+> **Your music, in motion.**
 
 Ampwave is a beautiful, modern music player for iOS that puts your music library first. Built with SwiftUI and designed with iOS 26's Liquid Glass aesthetic in mind, Ampwave delivers a premium listening experience while keeping your data private and local.
 
@@ -19,12 +19,12 @@ Ampwave is a beautiful, modern music player for iOS that puts your music library
 
 Ampwave uses these open-source community databases to enhance your music library with high-quality metadata, artwork, and lyrics:
 
-| Source | Purpose |
-|--------|---------|
-| [MusicBrainz](https://musicbrainz.org) | Artist, album, and track metadata |
-| [Cover Art Archive](https://coverartarchive.org) | High-resolution album artwork |
-| [LRCLIB](https://lrclib.net) | Time-synced lyrics |
-| [Lyrics.ovh](https://lyrics.ovh) | Plain text lyrics |
+| Source                                           | Purpose                           |
+| ------------------------------------------------ | --------------------------------- |
+| [MusicBrainz](https://musicbrainz.org)           | Artist, album, and track metadata |
+| [Cover Art Archive](https://coverartarchive.org) | High-resolution album artwork     |
+| [LRCLIB](https://lrclib.net)                     | Time-synced lyrics                |
+| [Lyrics.ovh](https://lyrics.ovh)                 | Plain text lyrics                 |
 
 ## Requirements
 

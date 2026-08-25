@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="790" height="500" viewBox="0 0 790 500" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bars" x1="0" y1="0" x2="790" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF6DB5"/>
+      <stop offset="0.5" stop-color="#E83D89"/>
+      <stop offset="1" stop-color="#C0206A"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <g transform="translate(0 0)">
+    <g opacity="0.55" filter="url(#glow)" fill="url(#bars)">
+      <rect x="0" y="150" width="70" height="200" rx="35"/><rect x="90" y="90" width="70" height="320" rx="35"/>
+      <rect x="180" y="37.5" width="70" height="425" rx="35"/><rect x="270" y="0" width="70" height="500" rx="35"/>
+      <rect x="360" y="62.5" width="70" height="375" rx="35"/><rect x="450" y="112.5" width="70" height="275" rx="35"/>
+      <rect x="540" y="50" width="70" height="400" rx="35"/><rect x="630" y="100" width="70" height="300" rx="35"/>
+      <rect x="720" y="162.5" width="70" height="175" rx="35"/>
+    </g>
+    <g fill="url(#bars)">
+      <rect x="0" y="150" width="70" height="200" rx="35"/><rect x="90" y="90" width="70" height="320" rx="35"/>
+      <rect x="180" y="37.5" width="70" height="425" rx="35"/><rect x="270" y="0" width="70" height="500" rx="35"/>
+      <rect x="360" y="62.5" width="70" height="375" rx="35"/><rect x="450" y="112.5" width="70" height="275" rx="35"/>
+      <rect x="540" y="50" width="70" height="400" rx="35"/><rect x="630" y="100" width="70" height="300" rx="35"/>
+      <rect x="720" y="162.5" width="70" height="175" rx="35"/>
+    </g>
+  </g>
+</svg>

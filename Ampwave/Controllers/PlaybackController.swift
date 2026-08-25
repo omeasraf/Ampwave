@@ -1120,12 +1120,29 @@ final class PlaybackController {
         // A newer seek has superseded this one; its own handler owns the state.
         guard let self, self.seekToken == token else { return }
         self.isSeeking = false
-        if finished {
-          self.currentTime = target
-          self.lyricsClock.currentTime = target
-          self.updateCurrentLyric(at: target)
-          self.updateNowPlaying()
-          self.saveState()
+
+        // AVPlayer can land slightly away from the requested timestamp,
+        // especially for lossless files. It can also report `finished == false`
+        // after an internal seek cancellation. In either case the player clock,
+        // not the requested target, is the source of truth once seeking ends.
+        let playerTime = self.player?.currentTime().seconds
+        let resolvedTime = if let playerTime,
+          playerTime.isFinite,
+          playerTime >= 0
+        {
+          playerTime
+        } else {
+          target
+        }
+
+        self.currentTime = resolvedTime
+        self.lyricsClock.currentTime = resolvedTime
+        self.updateCurrentLyric(at: resolvedTime)
+        self.updateNowPlaying()
+        self.saveState()
+
+        if !finished {
+          print("[DEBUG] PlaybackController: seek reconciled after cancellation")
         }
       }
     }
@@ -1215,24 +1232,10 @@ final class PlaybackController {
     let nextIndex = currentQueueIndex + 1
     let nextSong = queue[nextIndex]
 
-    // For AVQueuePlayer, if we have advanceToNextItem and the next item matches, use it
-    if let player = player, player.items().count > 1 {
-      let nextPlayerItem = player.items()[1]
-      if let asset = nextPlayerItem.asset as? AVURLAsset,
-        asset.url == library.getFileURL(for: nextSong)
-      {
-        player.advanceToNextItem()
-        // Skipping is an explicit request to hear the next track, so start it
-        // even if playback was paused. advanceToNextItem() on its own inherits
-        // the paused state and looked like the button had done nothing.
-        player.play()
-        isPlaying = true
-        // currentItem and UI will be updated by KVO (observePlayerItemChange)
-        return
-      }
-    }
-
-    // Fallback: manually play the next song
+    // An explicit skip must build a fresh player item. Promoting the gapless
+    // preload here can race its audio-processing tap/route setup: AVPlayer
+    // reports the item as playing and advances time, but produces no audio.
+    // Automatic end-of-track handoffs can still use the preload.
     currentQueueIndex = nextIndex
     play(nextSong, from: currentSource, playlistId: currentPlaylistId)
     saveState()
@@ -1602,6 +1605,7 @@ final class PlaybackController {
 
       WidgetSyncService.shared.updatePlaybackStatus(
         song: currentItem,
+        upcomingSongs: Array(queue.dropFirst(min(currentQueueIndex + 1, queue.count)).prefix(3)),
         isPlaying: isPlaying,
         currentTime: currentTime,
         duration: duration,

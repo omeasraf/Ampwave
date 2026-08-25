@@ -8,9 +8,18 @@
 import PhotosUI
 import SwiftData
 internal import SwiftUI
+import UniformTypeIdentifiers
 
 struct SongEditSheet: View {
-  let song: LibrarySong
+  private enum FileImportMode {
+    case artwork
+    case lyrics
+  }
+
+  private static let lrcContentType = UTType(filenameExtension: "lrc") ?? .plainText
+
+  let songID: UUID
+  let embeddedArtworkPath: String?
   @Binding var isPresented: Bool
   @Environment(ThemeManager.self) private var themeManager
 
@@ -31,6 +40,8 @@ struct SongEditSheet: View {
   @State private var artworkData: Data?
   @State private var selectedPhotoItem: PhotosPickerItem?
   @State private var isShowingFilePicker = false
+  @State private var fileImportMode: FileImportMode = .artwork
+  @State private var lyricImportError: String?
   @State private var isRemoteArtwork: Bool
   @State private var artworkPath: String?
   @State private var artworkSource: LibrarySong.ArtworkSource
@@ -51,7 +62,8 @@ struct SongEditSheet: View {
   private var historyTracker: ListeningHistoryTracker { ListeningHistoryTracker.shared }
 
   init(song: LibrarySong, isPresented: Binding<Bool>) {
-    self.song = song
+    self.songID = song.id
+    self.embeddedArtworkPath = song.embeddedArtworkPath
     self._isPresented = isPresented
     _title = State(initialValue: song.title)
     _artist = State(initialValue: song.artist)
@@ -155,6 +167,7 @@ struct SongEditSheet: View {
                   .buttonStyle(.bordered)
 
                   Button {
+                    fileImportMode = .artwork
                     isShowingFilePicker = true
                   } label: {
                     Label("Files", systemImage: "folder")
@@ -190,7 +203,7 @@ struct SongEditSheet: View {
                     }
                     .buttonStyle(.bordered)
 
-                    if let embedded = song.embeddedArtworkPath,
+                    if let embedded = embeddedArtworkPath,
                       embedded != artworkPath || artworkImage != nil
                     {
                       Button {
@@ -314,17 +327,32 @@ struct SongEditSheet: View {
               Button("Fetch Online") {
                 Task {
                   isLoadingLyrics = true
-                  if await LyricsService.shared
-                    .fetchOnlineLyrics(for: song) != nil
+                  if let liveSong = library.song(id: songID),
+                    await LyricsService.shared.fetchOnlineLyrics(for: liveSong) != nil,
+                    let refreshedSong = library.song(id: songID)
                   {
-                    lyrics = song.lyrics ?? ""
+                    lyrics = refreshedSong.lyrics ?? ""
                   }
                   isLoadingLyrics = false
                 }
               }
               .font(.caption)
               .buttonStyle(.bordered)
+
+              Button("Import File") {
+                lyricImportError = nil
+                fileImportMode = .lyrics
+                isShowingFilePicker = true
+              }
+              .font(.caption)
+              .buttonStyle(.bordered)
             }
+          }
+
+          if let lyricImportError {
+            Text(lyricImportError)
+              .font(.caption)
+              .foregroundStyle(.red)
           }
 
           TextEditor(text: $lyrics)
@@ -388,15 +416,30 @@ struct SongEditSheet: View {
       }
       .fileImporter(
         isPresented: $isShowingFilePicker,
-        allowedContentTypes: [.image],
+        allowedContentTypes: fileImportMode == .artwork
+          ? [.image]
+          : [Self.lrcContentType, .plainText],
         allowsMultipleSelection: false
       ) { result in
         switch result {
         case .success(let urls):
           guard let url = urls.first else { return }
-          if url.startAccessingSecurityScopedResource() {
-            defer { url.stopAccessingSecurityScopedResource() }
-            if let data = try? Data(contentsOf: url) {
+          let secured = url.startAccessingSecurityScopedResource()
+          defer { if secured { url.stopAccessingSecurityScopedResource() } }
+
+          if fileImportMode == .lyrics {
+            do {
+              let data = try Data(contentsOf: url)
+              guard let imported = decodeLyrics(data), !imported.isEmpty else {
+                lyricImportError = "The selected file doesn’t contain readable lyrics."
+                return
+              }
+              lyrics = imported
+              lyricImportError = nil
+            } catch {
+              lyricImportError = error.localizedDescription
+            }
+          } else if let data = try? Data(contentsOf: url) {
               #if os(iOS)
                 if let uiImage = UIImage(data: data) {
                   artworkData = data
@@ -410,7 +453,6 @@ struct SongEditSheet: View {
                   isRemoteArtwork = false
                 }
               #endif
-            }
           }
         case .failure:
           break
@@ -476,27 +518,33 @@ struct SongEditSheet: View {
   }
 
   private func markFieldAsEdited(_ field: String) {
-    if !song.userEditedFields.contains(field) {
-      song.userEditedFields.append(field)
+    guard let liveSong = library.song(id: songID) else { return }
+    if !liveSong.userEditedFields.contains(field) {
+      liveSong.userEditedFields.append(field)
     }
   }
 
   private func fetchOnlineMetadata() {
     isFetchingMetadata = true
     Task {
-      if let metadata = await MetadataService.shared.fetchMetadata(for: song) {
+      guard let liveSong = library.song(id: songID) else {
+        isFetchingMetadata = false
+        return
+      }
+      if let metadata = await MetadataService.shared.fetchMetadata(for: liveSong) {
         await MainActor.run {
+          guard let refreshedSong = library.song(id: songID) else { return }
           // Apply changes only if not edited by user
-          if !song.userEditedFields.contains("title"), let newTitle = metadata.title {
+          if !refreshedSong.userEditedFields.contains("title"), let newTitle = metadata.title {
             title = newTitle
           }
-          if !song.userEditedFields.contains("artist"), let newArtist = metadata.artist {
+          if !refreshedSong.userEditedFields.contains("artist"), let newArtist = metadata.artist {
             artist = newArtist
           }
-          if !song.userEditedFields.contains("album"), let newAlbum = metadata.album {
+          if !refreshedSong.userEditedFields.contains("album"), let newAlbum = metadata.album {
             album = newAlbum
           }
-          if !song.userEditedFields.contains("year"), let newYear = metadata.year {
+          if !refreshedSong.userEditedFields.contains("year"), let newYear = metadata.year {
             year = String(newYear)
           }
 
@@ -510,6 +558,16 @@ struct SongEditSheet: View {
   }
 
   private func saveSongMetadata() async {
+    // Artwork caching suspends. Resolve the song only after that work so a
+    // concurrent library refresh cannot leave the editor with a detached model.
+    let cachedArtworkPath: String?
+    if let artworkData {
+      cachedArtworkPath = await library.cacheArtwork(artworkData)
+    } else {
+      cachedArtworkPath = nil
+    }
+
+    guard let song = library.song(id: songID) else { return }
     song.title = title
     song.artist = artist
     song.album = album.isEmpty ? nil : album
@@ -530,8 +588,8 @@ struct SongEditSheet: View {
     song.isExplicit = isExplicit
 
     // Save artwork if changed
-    if let data = artworkData {
-      if let newPath = await library.cacheArtwork(data) {
+    if artworkData != nil {
+      if let newPath = cachedArtworkPath {
         song.artworkPath = newPath
         song.artworkSource = .user
 
@@ -561,10 +619,23 @@ struct SongEditSheet: View {
     song.processingChain = processingChain.isEmpty ? nil : processingChain
 
     // Save lyrics
+    if !song.userEditedFields.contains("lyrics") { song.userEditedFields.append("lyrics") }
     LyricsService.shared.saveLyrics(for: song, content: lyrics)
     historyTracker.setRating(rating == 0 ? nil : rating, for: song)
 
     // Persist changes using library service to update search index version
     library.saveContext()
+  }
+
+  private func decodeLyrics(_ data: Data) -> String? {
+    let encodings: [String.Encoding] = [.utf8, .utf16, .utf16LittleEndian, .utf16BigEndian]
+    for encoding in encodings {
+      if let decoded = String(data: data, encoding: encoding) {
+        return decoded
+          .replacingOccurrences(of: "\u{feff}", with: "")
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+      }
+    }
+    return nil
   }
 }

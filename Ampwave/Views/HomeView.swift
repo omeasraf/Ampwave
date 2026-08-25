@@ -111,23 +111,6 @@ struct HomeView: View {
         } else if library.songs.isEmpty {
           emptyState
         } else {
-          // Status indicator for background activity
-          if library.indexingStatus != .complete {
-            if indexingMessage != nil {
-              HStack {
-                ProgressView()
-                  .controlSize(.small)
-                  .padding(.trailing, 4)
-                Text(indexingMessage!)
-                  .font(.system(size: 13))
-                  .foregroundStyle(.secondary)
-                Spacer()
-              }
-              .padding(.horizontal, 20)
-              .padding(.top, -10)
-            }
-          }
-
           // Recently Played section
           if !recentlyPlayedSongs.isEmpty {
             HorizontalSongSection(

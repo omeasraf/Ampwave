@@ -28,6 +28,16 @@ enum AmpwaveURLRouter {
         playback.restoreStateAfterLoading()
         playback.play()
       }
+    case "control/toggle":
+      playback.playPause()
+    case "control/previous":
+      playback.playPrevious()
+    case "control/next":
+      playback.playNext()
+    case "control/like":
+      if let song = playback.currentItem {
+        _ = pm.toggleLike(song: song)
+      }
     default:
       break
     }

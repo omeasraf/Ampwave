@@ -74,23 +74,103 @@ struct SettingsView: View {
 
   var body: some View {
     List {
-      importSection.listRowBackground(themeManager.cardBackgroundColor)
-      libraryStatsSection.listRowBackground(themeManager.cardBackgroundColor)
-      playbackSettingsSection.listRowBackground(themeManager.cardBackgroundColor)
-      librarySettingsSection.listRowBackground(themeManager.cardBackgroundColor)
+      Section {
+        settingsCategoryLink(
+          title: "Import",
+          subtitle: "Songs, folders, playlists and WebDAV",
+          systemImage: "square.and.arrow.down.fill",
+          color: .blue
+        ) {
+          settingsPage("Import") {
+            importSection.listRowBackground(themeManager.cardBackgroundColor)
+          }
+        }
 
-      #if os(iOS)
-        appleWatchSection.listRowBackground(themeManager.cardBackgroundColor)
-      #endif
+        settingsCategoryLink(
+          title: "Playback",
+          subtitle: "Audio, queue behavior and equalizer",
+          systemImage: "play.fill",
+          color: .pink
+        ) {
+          settingsPage("Playback") {
+            playbackSettingsSection.listRowBackground(themeManager.cardBackgroundColor)
+          }
+        }
 
-      themingSection.listRowBackground(themeManager.cardBackgroundColor)
-      layoutSection.listRowBackground(themeManager.cardBackgroundColor)
-      scrobblingSection.listRowBackground(themeManager.cardBackgroundColor)
-      onlineFeaturesSection.listRowBackground(themeManager.cardBackgroundColor)
-      webDAVSection.listRowBackground(themeManager.cardBackgroundColor)
-      dataManagementSection.listRowBackground(themeManager.cardBackgroundColor)
-      dataSourcesSection.listRowBackground(themeManager.cardBackgroundColor)
-      aboutSection.listRowBackground(themeManager.cardBackgroundColor)
+        settingsCategoryLink(
+          title: "Library",
+          subtitle: "Organization, lyrics and monitoring",
+          systemImage: "music.note.house.fill",
+          color: .purple
+        ) {
+          settingsPage("Library") {
+            libraryStatsSection.listRowBackground(themeManager.cardBackgroundColor)
+            librarySettingsSection.listRowBackground(themeManager.cardBackgroundColor)
+          }
+        }
+
+        settingsCategoryLink(
+          title: "Appearance",
+          subtitle: "Theme, player and layout",
+          systemImage: "paintpalette.fill",
+          color: .orange
+        ) {
+          settingsPage("Appearance") {
+            themingSection.listRowBackground(themeManager.cardBackgroundColor)
+            layoutSection.listRowBackground(themeManager.cardBackgroundColor)
+          }
+        }
+
+        settingsCategoryLink(
+          title: "Online & Metadata",
+          subtitle: "Artwork, lyrics and data sources",
+          systemImage: "sparkles",
+          color: .cyan
+        ) {
+          settingsPage("Online & Metadata") {
+            onlineFeaturesSection.listRowBackground(themeManager.cardBackgroundColor)
+            dataSourcesSection.listRowBackground(themeManager.cardBackgroundColor)
+          }
+        }
+
+        settingsCategoryLink(
+          title: "Connections",
+          subtitle: "Watch, Last.fm and WebDAV",
+          systemImage: "point.3.connected.trianglepath.dotted",
+          color: .green
+        ) {
+          settingsPage("Connections") {
+            #if os(iOS)
+              appleWatchSection.listRowBackground(themeManager.cardBackgroundColor)
+            #endif
+            scrobblingSection.listRowBackground(themeManager.cardBackgroundColor)
+            webDAVSection.listRowBackground(themeManager.cardBackgroundColor)
+          }
+        }
+
+        settingsCategoryLink(
+          title: "Data & Storage",
+          subtitle: "Metadata, backups and cleanup",
+          systemImage: "externaldrive.fill",
+          color: .indigo
+        ) {
+          settingsPage("Data & Storage") {
+            dataManagementSection.listRowBackground(themeManager.cardBackgroundColor)
+          }
+        }
+
+        settingsCategoryLink(
+          title: "About",
+          subtitle: "Version, community and privacy",
+          systemImage: "info.circle.fill",
+          color: .gray
+        ) {
+          settingsPage("About") {
+            aboutSection.listRowBackground(themeManager.cardBackgroundColor)
+          }
+        }
+      }
+      .listRowBackground(themeManager.cardBackgroundColor)
     }
     .listRowBackground(themeManager.cardBackgroundColor)
     .background(themeManager.backgroundColor)
@@ -182,6 +262,36 @@ struct SettingsView: View {
     }
   }
 
+  private func settingsCategoryLink<Destination: View>(
+    title: String,
+    subtitle: String,
+    systemImage: String,
+    color: Color,
+    @ViewBuilder destination: () -> Destination
+  ) -> some View {
+    NavigationLink(destination: destination) {
+      SettingsCategoryRow(
+        title: title,
+        subtitle: subtitle,
+        systemImage: systemImage,
+        color: color
+      )
+    }
+  }
+
+  private func settingsPage<Content: View>(
+    _ title: String,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    List {
+      content()
+    }
+    .background(themeManager.backgroundColor)
+    .scrollContentBackground(.hidden)
+    .tint(themeManager.accentColor)
+    .navigationTitle(title)
+  }
+
   private func setupContext() {
     if library.modelContext == nil {
       library.setModelContext(modelContext)
@@ -237,6 +347,18 @@ struct SettingsView: View {
             get: { preferences.openPlayerGlassBackground ?? true },
             set: { preferences.openPlayerGlassBackground = $0 }
           ))
+
+        Toggle(isOn: Binding(
+          get: { preferences.wavyPlayerSlider ?? false },
+          set: { preferences.wavyPlayerSlider = $0 }
+        )) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Wavy Progress Slider")
+            Text("Shows the played portion of the player timeline as a waveform.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
 
         Toggle(isOn: Binding(
           get: { preferences.coverArtAccentPlayer ?? false },
@@ -1167,6 +1289,7 @@ struct SettingsView: View {
       // Clearing after save is too late: SwiftUI or the player can resolve an
       // outstanding attribute fault during that gap and crash.
       PlaybackController.shared.prepareForLibraryReset()
+      library.ignoreReferencedSongsForLiveMonitoring(library.songs)
       library.resetInMemoryState()
 
       // ── 1. Delete SwiftData records ───────────────────────────────────────
@@ -1305,6 +1428,43 @@ struct SettingsView: View {
     } else {
       return "\(minutes)m"
     }
+  }
+}
+
+private struct SettingsCategoryRow: View {
+  let title: String
+  let subtitle: String
+  let systemImage: String
+  let color: Color
+
+  var body: some View {
+    HStack(spacing: 14) {
+      ZStack {
+        RoundedRectangle(cornerRadius: 11, style: .continuous)
+          .fill(
+            LinearGradient(
+              colors: [color.opacity(0.72), color],
+              startPoint: .topLeading,
+              endPoint: .bottomTrailing
+            )
+          )
+
+        Image(systemName: systemImage)
+          .font(.system(size: 17, weight: .semibold))
+          .foregroundStyle(.white)
+      }
+      .frame(width: 40, height: 40)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.headline)
+        Text(subtitle)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+    }
+    .padding(.vertical, 3)
   }
 }
 

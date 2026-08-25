@@ -442,10 +442,62 @@ enum AudioMetadataExtractor: Sendable {
   }
 
   /// Parses only FLAC metadata blocks; audio frames are never read or copied.
+  ///
+  /// A few tag editors write a complete ID3v2 tag in front of the native FLAC
+  /// stream. Although that layout is non-standard, players such as mpv and
+  /// ffmpeg accept it. Locate the native marker after the ID3 tag so those
+  /// files still get their Vorbis comments and PICTURE block imported.
   private static func readFLACMetadata(from url: URL) -> FLACMetadata? {
     guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-      data.count >= 8, data.prefix(4) == Data("fLaC".utf8)
+      data.count >= 8
     else { return nil }
+
+    let flacMarker = Data("fLaC".utf8)
+
+    func hasFLACMarker(at offset: Int) -> Bool {
+      guard offset >= 0, offset + flacMarker.count <= data.count else { return false }
+      return data[offset..<(offset + flacMarker.count)].elementsEqual(flacMarker)
+    }
+
+    let flacOffset: Int
+    if hasFLACMarker(at: 0) {
+      flacOffset = 0
+    } else if data.count >= 10,
+      data[0] == 0x49, data[1] == 0x44, data[2] == 0x33,
+      data[6] & 0x80 == 0, data[7] & 0x80 == 0,
+      data[8] & 0x80 == 0, data[9] & 0x80 == 0
+    {
+      // ID3 sizes are four 7-bit, big-endian (synchsafe) bytes and exclude
+      // the ten-byte header. Some writers also append the optional footer.
+      let id3PayloadSize =
+        (Int(data[6]) << 21)
+        | (Int(data[7]) << 14)
+        | (Int(data[8]) << 7)
+        | Int(data[9])
+      let expectedOffset = 10 + id3PayloadSize
+      let footerOffset = expectedOffset + ((data[5] & 0x10) != 0 ? 10 : 0)
+
+      if hasFLACMarker(at: footerOffset) {
+        flacOffset = footerOffset
+      } else if hasFLACMarker(at: expectedOffset) {
+        flacOffset = expectedOffset
+      } else {
+        // Tolerate a small amount of padding after the declared tag, but do
+        // not scan the audio payload where marker-like bytes could be data.
+        let searchEnd = min(data.count - flacMarker.count, footerOffset + 4096)
+        var locatedOffset: Int?
+        if footerOffset <= searchEnd {
+          for candidate in footerOffset...searchEnd where hasFLACMarker(at: candidate) {
+            locatedOffset = candidate
+            break
+          }
+        }
+        guard let locatedOffset else { return nil }
+        flacOffset = locatedOffset
+      }
+    } else {
+      return nil
+    }
 
     func uint32(_ offset: Int, littleEndian: Bool = false) -> Int? {
       guard offset >= 0, offset + 4 <= data.count else { return nil }
@@ -457,7 +509,7 @@ enum AudioMetadataExtractor: Sendable {
     }
 
     var result = FLACMetadata()
-    var offset = 4
+    var offset = flacOffset + flacMarker.count
     var isLast = false
 
     while !isLast, offset + 4 <= data.count {

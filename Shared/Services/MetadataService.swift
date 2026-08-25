@@ -103,8 +103,30 @@ final class MetadataService {
 
   // MARK: - Public API
 
+  /// Value snapshot used by network requests so they never retain a SwiftData
+  /// model across suspension points.
+  private struct SongLookup {
+    let title: String
+    let artist: String
+    let album: String?
+    let duration: TimeInterval
+    let songDescription: String?
+
+    init(_ song: LibrarySong) {
+      title = song.title
+      artist = song.artist
+      album = song.album
+      duration = song.duration
+      songDescription = song.songDescription
+    }
+  }
+
   /// Fetches metadata for a song from online sources
   func fetchMetadata(for song: LibrarySong) async -> FetchedMetadata? {
+    await fetchMetadata(for: SongLookup(song))
+  }
+
+  private func fetchMetadata(for song: SongLookup) async -> FetchedMetadata? {
     print("[DEBUG] MetadataService.fetchMetadata: Starting for \(song.title)")
     
     // 1. Try Apple Music first (Primary)
@@ -189,8 +211,9 @@ final class MetadataService {
 
   /// Lightweight genre lookup (MusicBrainz recording tags) for backfill and partial updates.
   func fetchGenreTags(for song: LibrarySong) async -> String? {
+    let lookup = SongLookup(song)
     await respectRateLimit()
-    guard let recording = await searchRecording(song: song) else { return nil }
+    guard let recording = await searchRecording(song: lookup) else { return nil }
     guard let details = await fetchRecordingDetails(mbid: recording.id) else { return nil }
     return extractGenreLabel(genres: details.genres, tags: details.tags)
   }
@@ -348,10 +371,15 @@ final class MetadataService {
   /// Refreshes metadata for a song
   @MainActor
   func refreshMetadata(for song: LibrarySong) async {
+    let songID = song.id
     guard let metadata = await fetchMetadata(for: song) else { return }
 
-    // Update song with new metadata
-    await applyMetadata(metadata, to: song)
+    // The library can be reconciled while the network request is suspended.
+    // Apply to the current model, not the instance captured before the await.
+    guard let liveSong = SongLibrary.shared.song(id: songID), liveSong.modelContext != nil else {
+      return
+    }
+    await applyMetadata(metadata, to: liveSong)
   }
 
   /// Refreshes metadata for an album
@@ -390,7 +418,7 @@ final class MetadataService {
 
   // MARK: - MusicBrainz Search
 
-  private func searchRecording(song: LibrarySong) async -> MusicBrainzRecording? {
+  private func searchRecording(song: SongLookup) async -> MusicBrainzRecording? {
     // Escape double quotes for Lucene query
     let title = song.title.replacingOccurrences(of: "\"", with: "\\\"")
     let artist = song.artist.replacingOccurrences(of: "\"", with: "\\\"")
@@ -717,8 +745,24 @@ final class MetadataService {
   // MARK: - Apply Metadata
 
   @MainActor
-  private func applyMetadata(_ metadata: FetchedMetadata, to song: LibrarySong) async {
+  private func applyMetadata(_ metadata: FetchedMetadata, to initialSong: LibrarySong) async {
     guard let modelContext = modelContext else { return }
+
+    // Downloading artwork suspends. Decide whether it is needed first, then
+    // resolve the live SwiftData model after the download completes.
+    let songID = initialSong.id
+    let prefs = UserPreferences.getOrCreate(in: modelContext)
+    let isUserSelected = initialSong.artworkSource == .user
+    let shouldDownloadArtwork = initialSong.albumReference == nil
+      && (initialSong.artworkPath == nil || (prefs.preferOnlineArtwork && !isUserSelected))
+    let downloadedArtworkPath: String?
+    if shouldDownloadArtwork, let artworkURL = metadata.artworkURL {
+      downloadedArtworkPath = await downloadArtwork(from: artworkURL)
+    } else {
+      downloadedArtworkPath = nil
+    }
+
+    guard let song = SongLibrary.shared.song(id: songID), song.modelContext != nil else { return }
 
     var needsSave = false
 
@@ -871,21 +915,11 @@ final class MetadataService {
       needsSave = true
     }
 
-    // Download and cache artwork if available
-    if let artworkURL = metadata.artworkURL {
-      // Only replace if no artwork or if remote artwork is preferred and not user-selected
-      let prefs = UserPreferences.getOrCreate(in: modelContext)
-      let isUserSelected = song.artworkSource == .user
-      if song.albumReference == nil && (song.artworkPath == nil
-        || (prefs.preferOnlineArtwork && !isUserSelected))
-      {
-        if let artworkPath = await downloadArtwork(from: artworkURL) {
-          song.artworkPath = artworkPath
-          song.isRemoteArtwork = true
-          song.artworkSource = .online
-          needsSave = true
-        }
-      }
+    if let artworkPath = downloadedArtworkPath {
+      song.artworkPath = artworkPath
+      song.isRemoteArtwork = true
+      song.artworkSource = .online
+      needsSave = true
     }
 
     if needsSave {
@@ -973,7 +1007,7 @@ final class MetadataService {
   }
 
   private func bestRecordingMatch(
-    for song: LibrarySong,
+    for song: SongLookup,
     in candidates: [MusicBrainzRecording]
   ) -> MusicBrainzRecording? {
     let scored =
@@ -1013,7 +1047,7 @@ final class MetadataService {
     return best.0
   }
 
-  private func scoreRecording(_ recording: MusicBrainzRecording, against song: LibrarySong)
+  private func scoreRecording(_ recording: MusicBrainzRecording, against song: SongLookup)
     -> Double
   {
     let localTitle = normalizedSearchText(song.title)

@@ -129,11 +129,20 @@ struct AmpwaveApp: App {
       .onOpenURL { handleOpenURL($0) }
       #if os(iOS)
         .onChange(of: scenePhase) { _, phase in
-          // Leaving the app: ask for a later window so anything the
-          // post-backgrounding grace period doesn't finish still gets done.
-          guard phase == .background else { return }
-          if SongLibrary.shared.hasPendingMetadataWork {
-            BackgroundWorkCoordinator.scheduleMetadataRefresh()
+          switch phase {
+          case .active:
+            LibraryMonitorService.shared.applicationDidBecomeActive()
+          case .background:
+            LibraryMonitorService.shared.applicationDidEnterBackground()
+            // Leaving the app: ask for a later window so anything the
+            // post-backgrounding grace period doesn't finish still gets done.
+            if SongLibrary.shared.hasPendingMetadataWork {
+              BackgroundWorkCoordinator.scheduleMetadataRefresh()
+            }
+          case .inactive:
+            break
+          @unknown default:
+            break
           }
         }
       #endif

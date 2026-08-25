@@ -35,7 +35,7 @@ struct MiniPlayerView: View {
 
         Text(
           playback.currentItem?.artist
-            ?? (playback.currentItem == nil ? "Your music, unlocked" : "")
+            ?? (playback.currentItem == nil ? "Your music, in motion" : "")
         )
         .font(.system(size: 13, weight: .regular))
         .foregroundStyle(.secondary)

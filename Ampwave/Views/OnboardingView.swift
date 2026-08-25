@@ -33,7 +33,7 @@ struct OnboardingView: View {
     case .light, .catppuccinLatte, .roseGold, .kanagawaLotus, .nordLight, .everforestLight:
       return .light
     case .dark, .oled, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha, .dracula,
-         .nordDark, .everforestDark, .kanagawaWave:
+      .nordDark, .everforestDark, .kanagawaWave:
       return .dark
     case .ampwave, .custom:
       return nil
@@ -119,8 +119,9 @@ struct OnboardingView: View {
 
   private var welcomePage: some View {
     OnboardingPageLayout(
-      title: "Your music, unlocked.",
-      subtitle: "Ampwave plays your library offline — with synced lyrics, smart recommendations, and a player built around how you actually listen.",
+      title: "Your music, in motion.",
+      subtitle:
+        "Ampwave plays your library offline — with synced lyrics, smart recommendations, and a player built around how you actually listen.",
       iconView: {
         AppIconView()
           .frame(width: 100, height: 100)
@@ -471,12 +472,12 @@ struct OnboardingView: View {
     // If UserPreferences already exists (e.g. re-opening onboarding from Settings),
     // apply all choices directly so Settings reflects them immediately.
     if let prefs = ThemeManager.shared.userPreferences {
-      prefs.copyMusicToStorage   = copyToStorage
-      prefs.autoFetchMetadata    = autoFetchMetadata
-      prefs.autoFetchLyrics      = autoFetchLyrics
-      prefs.gaplessPlayback      = gaplessPlayback
-      prefs.normalizeVolume      = normalizeVolume
-      prefs.selectedTheme        = AppTheme.resolved(fromStoredRaw: selectedThemeRaw)
+      prefs.copyMusicToStorage = copyToStorage
+      prefs.autoFetchMetadata = autoFetchMetadata
+      prefs.autoFetchLyrics = autoFetchLyrics
+      prefs.gaplessPlayback = gaplessPlayback
+      prefs.normalizeVolume = normalizeVolume
+      prefs.selectedTheme = AppTheme.resolved(fromStoredRaw: selectedThemeRaw)
     }
 
     dismiss()
@@ -489,21 +490,21 @@ struct OnboardingView: View {
 struct AppIconView: View {
   var body: some View {
     #if os(iOS)
-    if let uiImage = UIImage(named: "AppIcon") {
-      Image(uiImage: uiImage).resizable().scaledToFit()
-    } else {
-      Image(systemName: "music.note.house.fill")
-        .font(.system(size: 68, weight: .light))
-        .symbolRenderingMode(.hierarchical)
-    }
+      if let uiImage = UIImage(named: "AppIcon") {
+        Image(uiImage: uiImage).resizable().scaledToFit()
+      } else {
+        Image(systemName: "music.note.house.fill")
+          .font(.system(size: 68, weight: .light))
+          .symbolRenderingMode(.hierarchical)
+      }
     #else
-    if let nsImage = NSImage(named: "AppIcon") {
-      Image(nsImage: nsImage).resizable().scaledToFit()
-    } else {
-      Image(systemName: "music.note.house.fill")
-        .font(.system(size: 68, weight: .light))
-        .symbolRenderingMode(.hierarchical)
-    }
+      if let nsImage = NSImage(named: "AppIcon") {
+        Image(nsImage: nsImage).resizable().scaledToFit()
+      } else {
+        Image(systemName: "music.note.house.fill")
+          .font(.system(size: 68, weight: .light))
+          .symbolRenderingMode(.hierarchical)
+      }
     #endif
   }
 }

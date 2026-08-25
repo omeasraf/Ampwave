@@ -436,6 +436,19 @@ final class UserPreferences: Identifiable {
   }
   @Attribute(originalName: "openPlayerGlassBackground") var _openPlayerGlassBackground: Bool?
 
+  var wavyPlayerSlider: Bool? {
+    get {
+      _wavyPlayerSlider
+        ?? UserDefaults.standard.object(forKey: "com.ampwave.wavyPlayerSlider") as? Bool
+    }
+    set {
+      _wavyPlayerSlider = newValue
+      UserDefaults.standard.set(newValue ?? false, forKey: "com.ampwave.wavyPlayerSlider")
+      save()
+    }
+  }
+  @Attribute(originalName: "wavyPlayerSlider") var _wavyPlayerSlider: Bool?
+
   var coloredSurfaces: Bool? {
     get {
       _coloredSurfaces ?? UserDefaults.standard.bool(forKey: "com.ampwave.coloredSurfaces")
@@ -556,6 +569,8 @@ final class UserPreferences: Identifiable {
     UserDefaults.standard.set(
       openPlayerGlassBackground ?? true, forKey: "com.ampwave.openPlayerGlassBackground")
     UserDefaults.standard.set(
+      wavyPlayerSlider ?? false, forKey: "com.ampwave.wavyPlayerSlider")
+    UserDefaults.standard.set(
       coloredSurfaces ?? true, forKey: "com.ampwave.coloredSurfaces")
     UserDefaults.standard.set(
       showFullArtworkGradient ?? true, forKey: "com.ampwave.showFullArtworkGradient")
@@ -614,6 +629,7 @@ final class UserPreferences: Identifiable {
     self.selectedThemeRaw = AppTheme.ampwave.rawValue
     self.fullArtworkBackground = true
     self.openPlayerGlassBackground = true
+    self.wavyPlayerSlider = false
     self.coloredSurfaces = true
     self.showFullArtworkGradient = true
     self.miniPlayerFloating = false
@@ -644,6 +660,7 @@ final class UserPreferences: Identifiable {
         }
         if existing.fullArtworkBackground == nil { existing.fullArtworkBackground = true }
         if existing.openPlayerGlassBackground == nil { existing.openPlayerGlassBackground = true }
+        if existing.wavyPlayerSlider == nil { existing.wavyPlayerSlider = false }
         if existing.coloredSurfaces == nil {
           existing.coloredSurfaces = UserDefaults.standard.object(forKey: "com.ampwave.coloredSurfaces") as? Bool ?? true
         }

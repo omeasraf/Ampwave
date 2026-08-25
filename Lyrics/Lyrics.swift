@@ -110,7 +110,7 @@ struct LyricsEntryView: View {
             Text(info.artist)
               .font(.system(size: 8))
               .lineLimit(1)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(WidgetPalette.secondary(info))
           }
         }
         .padding(.bottom, 4)
@@ -121,7 +121,7 @@ struct LyricsEntryView: View {
           Spacer()
           Text("No synced lyrics available")
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(WidgetPalette.secondary(info))
             .frame(maxWidth: .infinity, alignment: .center)
           Spacer()
         }
@@ -131,6 +131,7 @@ struct LyricsEntryView: View {
         maxHeight: .infinity,
         alignment: .topLeading
       )
+      .foregroundStyle(WidgetPalette.primary(info))
 
     } else {
       VStack {
@@ -138,8 +139,9 @@ struct LyricsEntryView: View {
           .font(.headline)
         Text("Open Ampwave")
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(WidgetPalette.secondary(nil))
       }
+      .foregroundStyle(WidgetPalette.primary(nil))
     }
   }
 
@@ -174,7 +176,9 @@ struct LyricsEntryView: View {
           if index < lines.count {
             Text(lines[index].text)
               .font(.system(size: 16, weight: offset == 0 ? .bold : .medium, design: .rounded))
-              .foregroundStyle(offset == 0 ? .primary : .secondary)
+              .foregroundStyle(
+                offset == 0 ? WidgetPalette.primary(info) : WidgetPalette.secondary(info)
+              )
               .lineLimit(family == .systemMedium ? 1 : 2)
               .opacity(offset == 0 ? 1.0 : 0.6)
           }
@@ -202,7 +206,8 @@ struct Lyrics: Widget {
       provider: LyricsProvider()
     ) { entry in
       LyricsEntryView(entry: entry)
-        .containerBackground(.fill.tertiary, for: .widget)
+        .environment(\.colorScheme, WidgetPalette.colorScheme(entry.playbackInfo))
+        .containerBackground(WidgetPalette.background(entry.playbackInfo), for: .widget)
     }
     .configurationDisplayName("Synced Lyrics")
     .description("See real-time lyrics for the current song.")

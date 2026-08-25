@@ -140,7 +140,9 @@ struct OpenPlayerView: View {
                       VStack(spacing: isFullBackground ? 24 : 22) {
                           trackInfoSection
                           
-                          PlayerProgressView()
+                          PlayerProgressView(
+                            usesWavySlider: userPreferences?.wavyPlayerSlider ?? false
+                          )
                           
                           PlayerPlaybackControlsView()
                           
@@ -761,33 +763,41 @@ struct OpenPlayerView: View {
 
 private struct PlayerProgressView: View {
   private var playback: PlaybackController { PlaybackController.shared }
+  let usesWavySlider: Bool
+  @State private var scrubProgress: Double?
+  @State private var isScrubbing = false
 
   var body: some View {
     let duration = playback.duration
-    let progress = duration > 0 ? min(max(playback.currentTime / duration, 0), 1) : 0.0
+    let liveProgress = duration > 0 ? min(max(playback.currentTime / duration, 0), 1) : 0.0
+    let displayedProgress = scrubProgress ?? liveProgress
 
     VStack(spacing: 8) {
-      Slider(
-        value: Binding(
-          get: { progress },
-          set: { newValue in
-            playback.seek(to: newValue * duration)
-          }
-        ),
-        in: 0...1,
-        onEditingChanged: { scrubbing in
-          playback.isScrubbing = scrubbing
-          if !scrubbing {
-            // Force a final seek to sync player state when scrubbing ends
-            playback.seek(to: playback.currentTime)
-          }
+      Group {
+        if usesWavySlider {
+          WavyPlayerSlider(
+            value: displayedProgress,
+            isWavy: playback.isPlaying,
+            onChanged: updateScrubProgress,
+            onEditingChanged: updateScrubbing
+          )
+        } else {
+          Slider(
+            value: Binding(
+              get: { displayedProgress },
+              set: updateScrubProgress
+            ),
+            in: 0...1,
+            onEditingChanged: updateScrubbing
+          )
+          .tint(.primary)
         }
-      )
-      .tint(.primary)
+      }
+      .frame(height: 24)
       .padding(.top, 2)
 
       HStack {
-        Text(formatTime(playback.currentTime))
+        Text(formatTime(displayedProgress * duration))
           .font(.system(size: 12, design: .monospaced))
           .foregroundStyle(.secondary)
 
@@ -800,11 +810,171 @@ private struct PlayerProgressView: View {
     }
   }
 
+  private func updateScrubProgress(_ progress: Double) {
+    let clampedProgress = min(max(progress, 0), 1)
+    if isScrubbing {
+      scrubProgress = clampedProgress
+    } else {
+      // Covers accessibility adjustments and taps that do not begin a drag.
+      scrubProgress = nil
+      playback.seek(to: clampedProgress * playback.duration)
+    }
+  }
+
+  private func updateScrubbing(_ scrubbing: Bool) {
+    if scrubbing {
+      guard !isScrubbing else { return }
+      isScrubbing = true
+      let duration = playback.duration
+      scrubProgress = duration > 0
+        ? min(max(playback.currentTime / duration, 0), 1)
+        : 0
+      playback.isScrubbing = true
+    } else {
+      let duration = playback.duration
+      let liveProgress = duration > 0
+        ? min(max(playback.currentTime / duration, 0), 1)
+        : 0
+      let finalProgress = scrubProgress ?? liveProgress
+
+      isScrubbing = false
+      scrubProgress = nil
+      playback.isScrubbing = false
+      playback.seek(to: finalProgress * duration)
+    }
+  }
+
   private func formatTime(_ seconds: TimeInterval) -> String {
     let s = Int(seconds)
     let m = s / 60
     let sec = s % 60
     return String(format: "%d:%02d", m, sec)
+  }
+}
+
+private struct WavyPlayerSlider: View {
+  let value: Double
+  let isWavy: Bool
+  let onChanged: (Double) -> Void
+  let onEditingChanged: (Bool) -> Void
+
+  @State private var isEditing = false
+
+  private let thumbDiameter: CGFloat = 18
+
+  var body: some View {
+    GeometryReader { geometry in
+      let trackStart = thumbDiameter / 2
+      let trackWidth = max(geometry.size.width - thumbDiameter, 1)
+      let clampedValue = min(max(value, 0), 1)
+      let thumbX = trackStart + (trackWidth * clampedValue)
+      let midY = geometry.size.height / 2
+
+      ZStack {
+        Path { path in
+          path.move(to: CGPoint(x: thumbX, y: midY))
+          path.addLine(to: CGPoint(x: geometry.size.width - trackStart, y: midY))
+        }
+        .stroke(
+          Color.primary.opacity(0.28),
+          style: StrokeStyle(lineWidth: 3, lineCap: .round)
+        )
+
+        if isWavy {
+          TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
+            let phase = timeline.date.timeIntervalSinceReferenceDate * 5.5
+            WavySliderProgressShape(endX: thumbX, startX: trackStart, phase: phase)
+              .stroke(
+                Color.primary,
+                style: StrokeStyle(lineWidth: 3.5, lineCap: .round, lineJoin: .round)
+              )
+          }
+        } else {
+          Path { path in
+            path.move(to: CGPoint(x: trackStart, y: midY))
+            path.addLine(to: CGPoint(x: thumbX, y: midY))
+          }
+            .stroke(
+              Color.primary,
+              style: StrokeStyle(lineWidth: 3.5, lineCap: .round)
+            )
+        }
+
+        Circle()
+          .fill(Color.primary)
+          .frame(width: thumbDiameter, height: thumbDiameter)
+          .position(x: thumbX, y: midY)
+          .shadow(color: .black.opacity(0.16), radius: 2, y: 1)
+      }
+      .contentShape(Rectangle())
+      .gesture(
+        DragGesture(minimumDistance: 0)
+          .onChanged { gesture in
+            if !isEditing {
+              isEditing = true
+              onEditingChanged(true)
+            }
+            let draggedProgress = (gesture.location.x - trackStart) / trackWidth
+            onChanged(min(max(draggedProgress, 0), 1))
+          }
+          .onEnded { gesture in
+            let draggedProgress = (gesture.location.x - trackStart) / trackWidth
+            onChanged(min(max(draggedProgress, 0), 1))
+            isEditing = false
+            onEditingChanged(false)
+          }
+      )
+      .accessibilityElement()
+      .accessibilityLabel("Playback position")
+      .accessibilityValue("\(Int(clampedValue * 100)) percent")
+      .accessibilityAdjustableAction { direction in
+        let step = 0.05
+        switch direction {
+        case .increment:
+          onChanged(min(clampedValue + step, 1))
+        case .decrement:
+          onChanged(max(clampedValue - step, 0))
+        @unknown default:
+          break
+        }
+      }
+    }
+    .frame(height: 24)
+  }
+}
+
+private struct WavySliderProgressShape: Shape {
+  let endX: CGFloat
+  let startX: CGFloat
+  let phase: TimeInterval
+
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    let length = max(endX - startX, 0)
+    let centerY = rect.midY
+
+    guard length > 2 else {
+      path.move(to: CGPoint(x: startX, y: centerY))
+      path.addLine(to: CGPoint(x: endX, y: centerY))
+      return path
+    }
+
+    let wavelength: CGFloat = 18
+    let amplitude = min(4, max(1.5, length / 8))
+    let step = max(1, wavelength / 12)
+
+    let initialPhase = CGFloat(phase)
+    let initialY = centerY + sin(initialPhase) * amplitude
+    path.move(to: CGPoint(x: startX, y: initialY))
+    var x = startX
+    while x < endX {
+      let wavePhase = ((x - startX) / wavelength) * 2 * CGFloat.pi + initialPhase
+      path.addLine(to: CGPoint(x: x, y: centerY + sin(wavePhase) * amplitude))
+      x += step
+    }
+    let endPhase = (length / wavelength) * 2 * CGFloat.pi + initialPhase
+    path.addLine(to: CGPoint(x: endX, y: centerY + sin(endPhase) * amplitude))
+    return path
   }
 }
 

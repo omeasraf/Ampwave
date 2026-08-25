@@ -24,9 +24,7 @@ struct SongRow: View {
   let isCurrent: Bool
   var showArtwork: Bool = true
 
-  private var playback: PlaybackController { PlaybackController.shared }
-
-  @Environment(ThemeManager.self) private var themeManager
+  @State private var playback = PlaybackController.shared
 
   var body: some View {
     HStack(spacing: 12) {
@@ -57,10 +55,9 @@ struct SongRow: View {
       }
 
       if isCurrent {
-        Image(systemName: "waveform")
-          .font(.system(size: 14))
-          .foregroundStyle(themeManager.accentColor)
-          .symbolEffect(.pulse, options: .repeating)
+        AmpwaveEqualizerMark(isAnimated: playback.isPlaying)
+          .frame(width: 22, height: 18)
+          .accessibilityLabel(playback.isPlaying ? "Now playing" : "Current song, paused")
       }
     }
     .padding(.vertical, 4)
@@ -73,9 +70,7 @@ struct SongRow: View {
 struct CompactSongRow: View {
   let song: LibrarySong
   let isCurrent: Bool
-  @Environment(ThemeManager.self) private var themeManager
-
-  private var playback: PlaybackController { PlaybackController.shared }
+  @State private var playback = PlaybackController.shared
 
   var body: some View {
     HStack(spacing: 12) {
@@ -98,10 +93,9 @@ struct CompactSongRow: View {
       Spacer()
 
       if isCurrent {
-        Image(systemName: "waveform")
-          .font(.system(size: 12))
-          .foregroundStyle(themeManager.accentColor)
-          .symbolEffect(.pulse, options: .repeating)
+        AmpwaveEqualizerMark(isAnimated: playback.isPlaying)
+          .frame(width: 20, height: 15)
+          .accessibilityLabel(playback.isPlaying ? "Now playing" : "Current song, paused")
       }
     }
     .padding(.vertical, 4)
@@ -115,19 +109,16 @@ struct NumberedSongRow: View {
   let number: Int
   let song: LibrarySong
   let isCurrent: Bool
-  @Environment(ThemeManager.self) private var themeManager
-
-  private var playback: PlaybackController { PlaybackController.shared }
+  @State private var playback = PlaybackController.shared
 
   var body: some View {
     HStack(spacing: 12) {
       // Number or playing indicator
       if isCurrent {
-        Image(systemName: "waveform")
-          .font(.system(size: 12))
-          .foregroundStyle(themeManager.accentColor)
-          .symbolEffect(.pulse, options: .repeating)
+        AmpwaveEqualizerMark(isAnimated: playback.isPlaying)
+          .frame(width: 22, height: 16)
           .frame(width: 28, alignment: .center)
+          .accessibilityLabel(playback.isPlaying ? "Now playing" : "Current song, paused")
       } else {
         Text("\(number)")
           .font(.system(size: 14, weight: .medium))
