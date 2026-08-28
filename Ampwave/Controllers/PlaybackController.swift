@@ -16,6 +16,81 @@ import MusicKit
 import SwiftData
 internal import SwiftUI
 
+/// Finds long, effectively-silent tails without modifying the source file.
+/// Native AVQueuePlayer handoff removes player-created gaps; this additionally
+/// prevents several seconds of encoded digital silence from sounding like a
+/// playback gap. The threshold is intentionally conservative so quiet fades
+/// and room tone remain part of the recording.
+private enum GaplessSilenceAnalyzer {
+  nonisolated private static let analysisWindow: TimeInterval = 15
+  nonisolated private static let minimumSilentTail: TimeInterval = 1.5
+  nonisolated private static let retainedTail: TimeInterval = 0.15
+  nonisolated private static let windowDuration: TimeInterval = 0.025
+  // Roughly -50 dBFS. The former -32 dBFS threshold could classify audible
+  // fade-outs as silence; this value targets genuinely inaudible tails.
+  nonisolated private static let audibleRMS: Float = 0.0032
+
+  nonisolated static func trailingPlaybackEnd(for url: URL) async -> TimeInterval? {
+    await Task.detached(priority: .utility) {
+      do {
+        let file = try AVAudioFile(forReading: url)
+        let format = file.processingFormat
+        let sampleRate = format.sampleRate
+        guard sampleRate > 0, file.length > 0 else { return nil }
+
+        let framesToRead = min(
+          file.length,
+          AVAudioFramePosition((analysisWindow * sampleRate).rounded(.up))
+        )
+        let startFrame = max(0, file.length - framesToRead)
+        file.framePosition = startFrame
+
+        guard let buffer = AVAudioPCMBuffer(
+          pcmFormat: format,
+          frameCapacity: AVAudioFrameCount(framesToRead)
+        ) else { return nil }
+        try file.read(into: buffer, frameCount: AVAudioFrameCount(framesToRead))
+        guard buffer.frameLength > 0, let channels = buffer.floatChannelData else { return nil }
+
+        let frameCount = Int(buffer.frameLength)
+        let channelCount = Int(format.channelCount)
+        let windowFrames = max(1, Int((windowDuration * sampleRate).rounded()))
+        var lastAudibleFrame: Int?
+        var windowEnd = frameCount
+
+        while windowEnd > 0 {
+          let windowStart = max(0, windowEnd - windowFrames)
+          var sumSquares: Float = 0
+          var sampleCount = 0
+          for channel in 0..<channelCount {
+            let samples = channels[channel]
+            for frame in windowStart..<windowEnd {
+              let sample = samples[frame]
+              sumSquares += sample * sample
+              sampleCount += 1
+            }
+          }
+          let rms = sampleCount > 0 ? sqrt(sumSquares / Float(sampleCount)) : 0
+          if rms >= audibleRMS {
+            lastAudibleFrame = windowEnd
+            break
+          }
+          windowEnd = windowStart
+        }
+
+        guard let lastAudibleFrame else { return nil }
+        let fullDuration = Double(file.length) / sampleRate
+        let lastAudibleTime = Double(startFrame + AVAudioFramePosition(lastAudibleFrame)) / sampleRate
+        let silentTail = fullDuration - lastAudibleTime
+        guard silentTail >= minimumSilentTail else { return nil }
+        return min(fullDuration, lastAudibleTime + retainedTail)
+      } catch {
+        return nil
+      }
+    }.value
+  }
+}
+
 /// A deliberately tiny observable clock for karaoke rendering.
 ///
 /// General playback UI only needs a few updates per second, while word-synced
@@ -61,6 +136,7 @@ final class PlaybackController {
   private var itemObservers: [ObjectIdentifier: [NSKeyValueObservation]] = [:]
   private var itemSongIDs: [ObjectIdentifier: UUID] = [:]
   private var authoritativeItemDurations: [ObjectIdentifier: TimeInterval] = [:]
+  private var gaplessPlaybackEndTimes: [ObjectIdentifier: TimeInterval] = [:]
   private var itemSecurityScopedURLs: [ObjectIdentifier: URL] = [:]
   private var gaplessPreloadToken: UUID?
   private var gaplessPreloadSongID: UUID?
@@ -265,6 +341,8 @@ final class PlaybackController {
       player.actionAtItemEnd = .none
       gaplessPreloadToken = nil
       gaplessPreloadSongID = nil
+      // Repeat One always plays the complete recording before restarting.
+      player.currentItem?.forwardPlaybackEndTime = .invalid
       cleanupCrossfade()
       applyPlayerOutputVolume()
 
@@ -278,6 +356,15 @@ final class PlaybackController {
       }
     } else {
       player.actionAtItemEnd = .advance
+      if let currentItem = player.currentItem,
+        let playbackEnd = gaplessPlaybackEndTimes[ObjectIdentifier(currentItem)],
+        shouldTrimGaplessEnding(at: currentQueueIndex, songID: self.currentItem?.id)
+      {
+        currentItem.forwardPlaybackEndTime = CMTime(
+          seconds: playbackEnd,
+          preferredTimescale: 600
+        )
+      }
       prepareNextItem()
     }
   }
@@ -295,6 +382,36 @@ final class PlaybackController {
 
   var hasLyrics: Bool {
     currentLyrics?.hasLyrics ?? false
+  }
+
+  /// One correction applies to both line and word timings. A positive value
+  /// means the lyrics should appear later than the timestamps in the file.
+  var lyricsTimingOffset: TimeInterval {
+    currentItem?.lyricsTimingOffset ?? 0
+  }
+
+  func adjustedLyricsTime(for playbackTime: TimeInterval) -> TimeInterval {
+    playbackTime - lyricsTimingOffset
+  }
+
+  func playbackTime(forLyricTimestamp timestamp: TimeInterval) -> TimeInterval {
+    min(max(timestamp + lyricsTimingOffset, 0), max(duration, 0))
+  }
+
+  func seekToLyricTimestamp(_ timestamp: TimeInterval) {
+    seek(to: playbackTime(forLyricTimestamp: timestamp))
+  }
+
+  /// Updates the live lyric position immediately. Slider drags can defer the
+  /// database write until the gesture/sheet finishes.
+  func setLyricsTimingOffset(_ offset: TimeInterval, persist: Bool = true) {
+    guard let song = currentItem else { return }
+    song.lyricsTimingOffset = min(max(offset, -30), 30)
+    updateCurrentLyric(at: currentTime)
+    updateWidget(force: true)
+    if persist {
+      try? modelContext?.save()
+    }
   }
 
   /// Unsynced text for the current song, used when there are no timings to
@@ -339,6 +456,7 @@ final class PlaybackController {
     itemObservers.removeAll()
     itemSongIDs.removeAll()
     authoritativeItemDurations.removeAll()
+    gaplessPlaybackEndTimes.removeAll()
     gaplessPreloadToken = nil
     gaplessPreloadSongID = nil
     releaseAllSecurityScopes()
@@ -349,6 +467,7 @@ final class PlaybackController {
     itemObservers.removeValue(forKey: key)?.forEach { $0.invalidate() }
     itemSongIDs.removeValue(forKey: key)
     authoritativeItemDurations.removeValue(forKey: key)
+    gaplessPlaybackEndTimes.removeValue(forKey: key)
     if let url = itemSecurityScopedURLs.removeValue(forKey: key) {
       url.stopAccessingSecurityScopedResource()
     }
@@ -372,6 +491,16 @@ final class PlaybackController {
     (preferences?.gaplessPlayback ?? true)
       && !(preferences?.crossfadeEnabled ?? false)
       && !VocalIsolator.shared.requiresProcessing
+  }
+
+  private func shouldTrimGaplessEnding(at index: Int, songID: UUID?) -> Bool {
+    guard usesNativeGaplessPlayback,
+      repeatMode != .one,
+      index >= 0,
+      index < queue.count,
+      queue[index].id == songID
+    else { return false }
+    return index < queue.count - 1 || repeatMode == .all
   }
 
   func setModelContext(_ context: ModelContext) {
@@ -637,6 +766,16 @@ final class PlaybackController {
     else { return }
 
     let itemKey = ObjectIdentifier(item)
+    guard itemSongIDs[itemKey] != nil else {
+      // AVPlayerItemDidPlayToEndTime is process-wide. Animated artwork and any
+      // other auxiliary AVPlayer post the same notification, so only items
+      // created and registered by the audio player may alter the song queue.
+      DiagnosticLog.shared.log(
+        "transition",
+        "Ignored end notification from non-audio player url=\((item.asset as? AVURLAsset)?.url.lastPathComponent ?? "unknown")"
+      )
+      return
+    }
     let finishedSongID = itemSongIDs[itemKey]
     let finishedIndex = finishedSongID.flatMap { id in queue.firstIndex { $0.id == id } }
     DiagnosticLog.shared.log(
@@ -1005,7 +1144,13 @@ final class PlaybackController {
     }
 
     Task {
-      let item = await createPlayerItem(for: song)
+      let item = await createPlayerItem(
+        for: song,
+        trimTrailingSilence: shouldTrimGaplessEnding(
+          at: currentQueueIndex,
+          songID: song.id
+        )
+      )
 
       await MainActor.run {
         print(
@@ -1069,7 +1214,8 @@ final class PlaybackController {
 
   private func createPlayerItem(
     for song: LibrarySong,
-    includeAudioProcessing: Bool? = nil
+    includeAudioProcessing: Bool? = nil,
+    trimTrailingSilence: Bool = false
   ) async -> AVPlayerItem {
     let url = library.getFileURL(for: song)
 
@@ -1088,8 +1234,30 @@ final class PlaybackController {
     let item = AVPlayerItem(asset: asset)
     let itemKey = ObjectIdentifier(item)
     let songID = song.id
+    let songTitle = song.title
     itemSongIDs[itemKey] = songID
     if secured { itemSecurityScopedURLs[itemKey] = url }
+
+    if trimTrailingSilence {
+      // This never delays playback. For the current item it runs alongside
+      // playback; for a queued item it normally finishes long before handoff.
+      Task { @MainActor [weak self, weak item] in
+        guard let playbackEnd = await GaplessSilenceAnalyzer.trailingPlaybackEnd(for: url),
+          let self,
+          let item,
+          self.itemSongIDs[itemKey] == songID,
+          let queueIndex = self.queue.firstIndex(where: { $0.id == songID }),
+          self.shouldTrimGaplessEnding(at: queueIndex, songID: songID)
+        else { return }
+
+        self.gaplessPlaybackEndTimes[itemKey] = playbackEnd
+        item.forwardPlaybackEndTime = CMTime(seconds: playbackEnd, preferredTimescale: 600)
+        DiagnosticLog.shared.log(
+          "transition",
+          "Smart gapless ending title=\(songTitle) playbackEnd=\(playbackEnd)"
+        )
+      }
+    }
 
     // Resolve duration from both the asset and its audio-track time range.
     // Some FLAC containers initially report a tag-derived duration through
@@ -1273,7 +1441,8 @@ final class PlaybackController {
       Task {
         let nextItem = await createPlayerItem(
           for: nextSong,
-          includeAudioProcessing: false
+          includeAudioProcessing: false,
+          trimTrailingSilence: nextIndex < queue.count - 1 || repeatMode == .all
         )
         await MainActor.run {
           guard self.gaplessPreloadToken == preloadToken else {
@@ -1404,6 +1573,7 @@ final class PlaybackController {
     DiagnosticLog.shared.log("playback", "Resume title=\(currentItem?.title ?? "unknown") at=\(currentTime)")
     isPlaying = true
     historyTracker.songResumed()
+    refreshAnimatedArtworkForCurrentSong()
     updateNowPlaying()
   }
 
@@ -1705,9 +1875,40 @@ final class PlaybackController {
     updateNowPlaying()
     
     prepareNextItem()
+    refreshAnimatedArtworkForCurrentSong()
     Task {
       await loadLyrics(for: song)
     }
+  }
+
+  /// Re-evaluates the opt-in source without scanning the library. This is
+  /// called by Settings and whenever playback moves to a different album.
+  func refreshAnimatedArtworkFromSettings() {
+    guard preferences?.animatedArtworkEnabled == true,
+      isPlaying,
+      let song = currentItem
+    else {
+      AnimatedArtworkService.shared.clearCurrent()
+      updateNowPlaying()
+      return
+    }
+    AnimatedArtworkService.shared.load(for: song)
+  }
+
+  private func refreshAnimatedArtworkForCurrentSong() {
+    guard preferences?.animatedArtworkEnabled == true,
+      isPlaying,
+      let song = currentItem
+    else {
+      AnimatedArtworkService.shared.clearCurrent()
+      return
+    }
+    AnimatedArtworkService.shared.load(for: song)
+  }
+
+  func animatedArtworkDidChange(for songID: UUID) {
+    guard currentItem?.id == songID else { return }
+    updateNowPlaying()
   }
 
   // MARK: - Queue Management
@@ -1739,7 +1940,10 @@ final class PlaybackController {
 
     // Insert into AVQueuePlayer
     if let player = player {
-      let item = await createPlayerItem(for: song)
+      let item = await createPlayerItem(
+        for: song,
+        trimTrailingSilence: insertIndex < queue.count - 1 || repeatMode == .all
+      )
       player.insert(item, after: player.currentItem)
     }
     saveState()
@@ -1951,7 +2155,7 @@ final class PlaybackController {
       return
     }
 
-    let time = playbackTime ?? lyricsClock.currentTime
+    let time = adjustedLyricsTime(for: playbackTime ?? lyricsClock.currentTime)
     let newIndex: Int?
     if time < lyricLineTimestamps[0] {
       newIndex = nil
@@ -2018,6 +2222,33 @@ final class PlaybackController {
           image
         }
         nowPlayingInfo[MPMediaItemPropertyArtwork] = artwork
+
+        if #available(iOS 26.0, *),
+          preferences?.animatedArtworkEnabled == true,
+          let animated = AnimatedArtworkService.shared.artwork(for: song.id)
+        {
+          let supportedKeys = MPNowPlayingInfoCenter.supportedAnimatedArtworkKeys
+          if supportedKeys.contains(MPNowPlayingInfoProperty1x1AnimatedArtwork) {
+            nowPlayingInfo[MPNowPlayingInfoProperty1x1AnimatedArtwork] =
+              AnimatedArtworkService.shared.lockScreenArtwork(
+                remoteURL: animated.squareURL,
+                previewImage: image,
+                title: "\(animated.artist) — \(animated.album)",
+                songID: song.id
+              )
+          }
+          if let tallURL = animated.tallURL,
+            supportedKeys.contains(MPNowPlayingInfoProperty3x4AnimatedArtwork)
+          {
+            nowPlayingInfo[MPNowPlayingInfoProperty3x4AnimatedArtwork] =
+              AnimatedArtworkService.shared.lockScreenArtwork(
+                remoteURL: tallURL,
+                previewImage: image,
+                title: "\(animated.artist) — \(animated.album)",
+                songID: song.id
+              )
+          }
+        }
       }
     #endif
 
@@ -2197,7 +2428,13 @@ final class PlaybackController {
           self.isPlaying = false
 
           // Prepare player but don't play
-          let item = await createPlayerItem(for: song)
+          let item = await createPlayerItem(
+            for: song,
+            trimTrailingSilence: shouldTrimGaplessEnding(
+              at: currentQueueIndex,
+              songID: song.id
+            )
+          )
           self.player = AVQueuePlayer(items: [item])
           self.player?.automaticallyWaitsToMinimizeStalling = false
           self.applyRepeatModeToPlayer()

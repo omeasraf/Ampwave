@@ -8,6 +8,8 @@ internal import SwiftUI
 
 struct FullArtworkBackgroundView: View {
   let artworkPath: String?
+  var animatedArtworkURL: URL? = nil
+  var isPlaying: Bool = false
   @State private var image: PlatformImage?
   @Environment(ThemeManager.self) private var themeManager
   @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
@@ -15,8 +17,14 @@ struct FullArtworkBackgroundView: View {
 
   private var userPreferences: UserPreferences? { preferencesList.first }
 
-  init(artworkPath: String?) {
+  init(
+    artworkPath: String?,
+    animatedArtworkURL: URL? = nil,
+    isPlaying: Bool = false
+  ) {
     self.artworkPath = artworkPath
+    self.animatedArtworkURL = animatedArtworkURL
+    self.isPlaying = isPlaying
   }
 
   var body: some View {
@@ -44,6 +52,16 @@ struct FullArtworkBackgroundView: View {
                 .frame(width: 140, height: 94)
             )
         }
+
+        #if os(iOS)
+          if let animatedArtworkURL, !accessibilityReduceMotion {
+            LoopingArtworkPlayerView(url: animatedArtworkURL, isPlaying: isPlaying)
+              .frame(width: size.width, height: size.height)
+              .clipped()
+              .allowsHitTesting(false)
+              .transition(.opacity)
+          }
+        #endif
       }
     }
     .task(id: artworkPath) {

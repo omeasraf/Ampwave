@@ -114,7 +114,7 @@ public class WidgetSyncService {
         text = line.text
       }
       return LyricLine(
-        timestamp: line.timestamp,
+        timestamp: max(0, line.timestamp + (song?.lyricsTimingOffset ?? 0)),
         text: text,
         translation: line.translation,
         wordOffsets: nil

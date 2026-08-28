@@ -19,6 +19,7 @@ struct ExpandedLyricsView: View {
   @State private var isProgrammaticScroll = false
   @State private var isVisible = false
   @State private var scrollTimeout: Timer?
+  @State private var showTimingAdjustment = false
   @Environment(ThemeManager.self) private var themeManager
 
   @Bindable private var playback = PlaybackController.shared
@@ -80,6 +81,22 @@ struct ExpandedLyricsView: View {
                 isProgrammaticScroll = true
                 withAnimation(.easeInOut(duration: 0.35)) {
                   proxy.scrollTo(idx, anchor: .center)
+                }
+              }
+              .onChange(of: showTimingAdjustment) { _, isAdjusting in
+                guard isAdjusting, let currentIndex = playback.currentLyricIndex else { return }
+
+                // Let the safe-area inset resize the scroll view first, then
+                // recenter the active line in the space that remains above the
+                // timing controls. Without this yield, SwiftUI can scroll
+                // against the old full-height viewport and leave the line
+                // underneath the newly inserted control.
+                Task { @MainActor in
+                  await Task.yield()
+                  isProgrammaticScroll = true
+                  withAnimation(.easeInOut(duration: 0.3)) {
+                    proxy.scrollTo(currentIndex, anchor: .center)
+                  }
                 }
               }
               .onScrollPhaseChange { _, newPhase in
@@ -171,7 +188,24 @@ struct ExpandedLyricsView: View {
             }
           }
 
-          ToolbarItem(placement: .primaryAction) {
+          ToolbarItemGroup(placement: .primaryAction) {
+            if playback.currentLyrics?.hasLineSync == true {
+              Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                  showTimingAdjustment.toggle()
+                }
+              } label: {
+                Image(systemName: showTimingAdjustment ? "xmark" : "captions.bubble")
+                  .font(.system(size: 17, weight: .semibold))
+                  .foregroundStyle(
+                    showTimingAdjustment || abs(playback.lyricsTimingOffset) > 0.001
+                      ? themeManager.accentColor
+                      : .white.opacity(0.7)
+                  )
+              }
+              .accessibilityLabel("Adjust lyrics timing")
+            }
+
             Button {
               withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
                 playback.toggleVocalSlider()
@@ -219,12 +253,131 @@ struct ExpandedLyricsView: View {
           .zIndex(100)
       }
     }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      if showTimingAdjustment {
+        LyricsTimingOffsetControl(isPresented: $showTimingAdjustment)
+          .padding(.horizontal, 14)
+          .padding(.bottom, 8)
+          .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
+    }
   }
 
   private func isCurrentLine(_ index: Int) -> Bool {
     playback.currentLyricIndex == index
   }
 
+}
+
+private struct LyricsTimingOffsetControl: View {
+  @Binding var isPresented: Bool
+  @Environment(ThemeManager.self) private var themeManager
+  @Bindable private var playback = PlaybackController.shared
+  @State private var draftOffset: TimeInterval = 0
+  @State private var targetSongID: UUID?
+
+  var body: some View {
+    VStack(spacing: 10) {
+      HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 1) {
+          Text("Lyrics Timing")
+            .font(.subheadline.weight(.semibold))
+          Text(offsetMeaning)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        Spacer(minLength: 4)
+
+        Text(formattedOffset)
+          .font(.system(.body, design: .rounded, weight: .bold).monospacedDigit())
+          .foregroundStyle(themeManager.accentColor)
+          .contentTransition(.numericText())
+
+        Button("Done") {
+          persistOffsetIfStillApplicable()
+          withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+            isPresented = false
+          }
+        }
+        .font(.subheadline.weight(.semibold))
+      }
+
+      Slider(value: $draftOffset, in: -10...10, step: 0.05)
+        .tint(themeManager.accentColor)
+        .accessibilityLabel("Lyrics timing offset")
+
+      HStack(spacing: 8) {
+        timingButton(title: "0.5", systemImage: "minus", adjustment: -0.5)
+        timingButton(title: "0.1", systemImage: "minus", adjustment: -0.1)
+
+        Button("Reset") {
+          draftOffset = 0
+        }
+        .font(.caption.weight(.semibold))
+        .frame(maxWidth: .infinity)
+        .buttonStyle(.plain)
+        .disabled(abs(draftOffset) < 0.001)
+
+        timingButton(title: "0.1", systemImage: "plus", adjustment: 0.1)
+        timingButton(title: "0.5", systemImage: "plus", adjustment: 0.5)
+      }
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 12)
+    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .stroke(.white.opacity(0.12), lineWidth: 0.5)
+    }
+    .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
+    .onAppear {
+      targetSongID = playback.currentItem?.id
+      draftOffset = playback.lyricsTimingOffset
+    }
+    .onChange(of: draftOffset) { _, newValue in
+      guard playback.currentItem?.id == targetSongID else { return }
+      playback.setLyricsTimingOffset(newValue, persist: false)
+    }
+    .onChange(of: playback.currentItem?.id) { _, newSongID in
+      if newSongID != targetSongID { isPresented = false }
+    }
+    .onDisappear {
+      persistOffsetIfStillApplicable()
+    }
+  }
+
+  private var formattedOffset: String {
+    String(format: "%+.2f s", draftOffset)
+  }
+
+  private var offsetMeaning: String {
+    if draftOffset > 0.001 { return "Lyrics appear later" }
+    if draftOffset < -0.001 { return "Lyrics appear earlier" }
+    return "Original timing"
+  }
+
+  private func timingButton(
+    title: String,
+    systemImage: String,
+    adjustment: TimeInterval
+  ) -> some View {
+    Button {
+      draftOffset = min(max(draftOffset + adjustment, -10), 10)
+    } label: {
+      Label("\(title)s", systemImage: systemImage)
+        .font(.caption.weight(.semibold))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 7)
+        .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func persistOffsetIfStillApplicable() {
+    guard playback.currentItem?.id == targetSongID else { return }
+    playback.setLyricsTimingOffset(draftOffset, persist: true)
+  }
 }
 
 // MARK: - String+LRC
@@ -279,7 +432,7 @@ struct CompactLyricsView: View {
                 )
                 .id(index)
                 .onTapGesture {
-                  playback.seek(to: line.timestamp)
+                  playback.seekToLyricTimestamp(line.timestamp)
                   if !playback.isPlaying { playback.play() }
                 }
               }
@@ -640,7 +793,7 @@ struct LyricLineView: View {
     // The whole row seeks, not just the glyphs.
     .contentShape(Rectangle())
     .onTapGesture {
-      playback.seek(to: line.timestamp)
+      playback.seekToLyricTimestamp(line.timestamp)
       if !playback.isPlaying { playback.play() }
     }
   }
@@ -660,8 +813,10 @@ private struct KaraokeLineView: View {
     TimelineView(
       .animation(paused: !playback.isPlaying || playback.isScrubbing || playback.isSeeking)
     ) { _ in
-      let now = playback.lyricsClock.interpolatedTime(
-        isPlaying: playback.isPlaying && !playback.isScrubbing && !playback.isSeeking
+      let now = playback.adjustedLyricsTime(
+        for: playback.lyricsClock.interpolatedTime(
+          isPlaying: playback.isPlaying && !playback.isScrubbing && !playback.isSeeking
+        )
       )
 
       WrappingWordsLayout(
@@ -680,7 +835,7 @@ private struct KaraokeLineView: View {
           // falls through to the start of the line.
           .contentShape(Rectangle())
           .onTapGesture {
-            playback.seek(to: word.start)
+            playback.seekToLyricTimestamp(word.start)
             if !playback.isPlaying { playback.play() }
           }
         }

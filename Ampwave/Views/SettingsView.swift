@@ -820,6 +820,25 @@ struct SettingsView: View {
 
         VStack(alignment: .leading, spacing: 4) {
           Toggle(
+            "Animated Album Artwork",
+            isOn: Binding(
+              get: { preferences.animatedArtworkEnabled },
+              set: { enabled in
+                preferences.animatedArtworkEnabled = enabled
+                try? modelContext.save()
+                PlaybackController.shared.refreshAnimatedArtworkFromSettings()
+              }
+            )
+          )
+          Text(
+            "Looks for Apple Music's animated cover only when a song starts playing. Animations are cached for Now Playing and supported lock screens. These video files can be large and may use significant device storage."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle(
             "Prefer Online Artwork",
             isOn: Binding(
               get: { preferences.preferOnlineArtwork },
@@ -995,11 +1014,21 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
         }
       }
+
+      Link(destination: URL(string: "https://github.com/m8tec/apple-music-animated-artworks")!) {
+        HStack {
+          Label("Animated Artwork Lookup", systemImage: "sparkles.tv")
+          Spacer()
+          Text("Animated Artwork")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
     } header: {
       Text("Data Sources")
     } footer: {
       Text(
-        "Ampwave uses open-source community databases and Apple MusicKit for metadata, artwork, and lyrics. AMLL is the primary word-synced source, with Binimum and LyricsPlus as fallbacks."
+        "Ampwave uses community databases and Apple MusicKit for metadata, artwork, and lyrics. Animated artwork is an optional unofficial source and is requested only for the album currently playing."
       )
     }
   }
@@ -1314,6 +1343,7 @@ struct SettingsView: View {
       at: artworkCacheDir,
       withIntermediateDirectories: true
     )
+    AnimatedArtworkService.shared.clearCache()
   }
 
   private func resetLibrary() {

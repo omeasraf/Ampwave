@@ -36,6 +36,7 @@ struct OpenPlayerView: View {
   /// utility row). The artwork is sized around this so the bottom row is never
   /// pushed below the fold, whatever the device or text size.
   @State private var controlsHeight: CGFloat = 0
+  @Bindable private var animatedArtworkService = AnimatedArtworkService.shared
   #if os(iOS)
     @State private var isAirPlayActive = false
   #endif
@@ -49,6 +50,12 @@ struct OpenPlayerView: View {
 
   @Query private var preferencesList: [UserPreferences]
   private var userPreferences: UserPreferences? { preferencesList.first }
+
+  private var currentAnimatedArtwork: AnimatedArtworkResult? {
+    _ = animatedArtworkService.cacheRevision
+    guard userPreferences?.animatedArtworkEnabled == true else { return nil }
+    return animatedArtworkService.artwork(for: playback.currentItem?.id)
+  }
 
   init() {}
 
@@ -94,54 +101,11 @@ struct OpenPlayerView: View {
               VStack(spacing: 0) {
                   // ── First page: fills exactly the viewport ──
                   VStack(spacing: 0) {
-                      if isFullBackground {
-                          // Taller artwork for full background mode
-                          let accentOn = userPreferences?.coverArtAccentPlayer ?? false
-                          FullArtworkBackgroundView(artworkPath: playback.currentItem?.effectiveArtworkPath)
-                              .frame(height: artworkHeight)
-                              .overlay {
-                                  // Primary fade:" artwork → theme background
-                                  LinearGradient(
-                                    stops: [
-                                        .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.6),
-                                        .init(color: themeManager.backgroundColor.opacity(0.8), location: 0.85),
-                                        .init(color: themeManager.backgroundColor, location: 1.0),
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                  )
-                              }
-                              .overlay {
-                                  // Accent tint layer: blends the bottom of the artwork
-                                  // into the same tinted color used for the scroll background.
-                                  if accentOn {
-                                      LinearGradient(
-                                        stops: [
-                                            .init(color: .clear, location: 0),
-                                            .init(color: rawArtworkColor.opacity(0.10), location: 0.65),
-                                            .init(color: rawArtworkColor.opacity(0.18), location: 1.0),
-                                        ],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                      )
-                                  }
-                              }
-                      } else {
-                          // Artwork same width as glass card
-                          let accentOn = userPreferences?.coverArtAccentPlayer ?? false
-                          LargeArtworkImageView(
-                            artworkPath: playback.currentItem?.effectiveArtworkPath,
-                            shadowColor: accentOn
-                              ? rawArtworkColor.opacity(0.55)
-                              : .black.opacity(0.15),
-                            shadowRadius: accentOn ? 32 : 20
-                          )
-                          .frame(width: compactArtworkSize, height: compactArtworkSize)
-                          .frame(maxWidth: .infinity)
-                          .padding(.top, 10)
-                          .padding(.bottom, 10)
-                      }
+                      playerArtwork(
+                        isFullBackground: isFullBackground,
+                        artworkHeight: artworkHeight,
+                        compactArtworkSize: compactArtworkSize
+                      )
                       
                       Spacer(minLength: 0)
                       
@@ -422,6 +386,68 @@ struct OpenPlayerView: View {
         checkAirPlayRoute()
       }
     #endif
+  }
+
+  @ViewBuilder
+  private func playerArtwork(
+    isFullBackground: Bool,
+    artworkHeight: CGFloat,
+    compactArtworkSize: CGFloat
+  ) -> some View {
+    let accentOn = userPreferences?.coverArtAccentPlayer ?? false
+    let animated = currentAnimatedArtwork
+    let squareURL = animated.map {
+      animatedArtworkService.preferredPlaybackURL(for: $0.squareURL)
+    }
+    let tallURL = animated?.tallURL.map {
+      animatedArtworkService.preferredPlaybackURL(for: $0)
+    }
+
+    if isFullBackground {
+      FullArtworkBackgroundView(
+        artworkPath: playback.currentItem?.effectiveArtworkPath,
+        animatedArtworkURL: tallURL ?? squareURL,
+        isPlaying: playback.isPlaying
+      )
+      .frame(height: artworkHeight)
+      .overlay {
+        LinearGradient(
+          stops: [
+            .init(color: .clear, location: 0),
+            .init(color: .clear, location: 0.6),
+            .init(color: themeManager.backgroundColor.opacity(0.8), location: 0.85),
+            .init(color: themeManager.backgroundColor, location: 1.0),
+          ],
+          startPoint: .top,
+          endPoint: .bottom
+        )
+      }
+      .overlay {
+        if accentOn {
+          LinearGradient(
+            stops: [
+              .init(color: .clear, location: 0),
+              .init(color: rawArtworkColor.opacity(0.10), location: 0.65),
+              .init(color: rawArtworkColor.opacity(0.18), location: 1.0),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+          )
+        }
+      }
+    } else {
+      LargeArtworkImageView(
+        artworkPath: playback.currentItem?.effectiveArtworkPath,
+        animatedArtworkURL: squareURL,
+        isPlaying: playback.isPlaying,
+        shadowColor: accentOn ? rawArtworkColor.opacity(0.55) : .black.opacity(0.15),
+        shadowRadius: accentOn ? 32 : 20
+      )
+      .frame(width: compactArtworkSize, height: compactArtworkSize)
+      .frame(maxWidth: .infinity)
+      .padding(.top, 10)
+      .padding(.bottom, 10)
+    }
   }
 
   private var playerBackground: some View {

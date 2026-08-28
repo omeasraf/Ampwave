@@ -74,12 +74,15 @@ struct ArtworkImageView: View {
 
 struct LargeArtworkImageView: View {
   let artworkPath: String?
+  var animatedArtworkURL: URL? = nil
+  var isPlaying: Bool = false
   var shadowColor: Color = .black.opacity(0.15)
   var shadowRadius: CGFloat = 20
   @State private var image: PlatformImage?
+  @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
   var body: some View {
-    Group {
+    ZStack {
       if let image = image {
         #if os(iOS)
           Image(uiImage: image)
@@ -98,6 +101,14 @@ struct LargeArtworkImageView: View {
               .frame(width: 112, height: 76)
           )
       }
+
+      #if os(iOS)
+        if let animatedArtworkURL, !accessibilityReduceMotion {
+          LoopingArtworkPlayerView(url: animatedArtworkURL, isPlaying: isPlaying)
+            .allowsHitTesting(false)
+            .transition(.opacity)
+        }
+      #endif
     }
     .frame(maxWidth: .infinity)
     .aspectRatio(1, contentMode: .fit)

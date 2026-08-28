@@ -50,6 +50,10 @@ final class LibrarySong: Identifiable, Hashable {
 
   // MARK: - Extended metadata (optional)
   var lyrics: String?
+  /// Per-song synchronization correction shared by line- and word-synced
+  /// lyrics. Positive values delay the lyrics; negative values show them
+  /// earlier. Stored with the song so it survives future playback sessions.
+  var lyricsTimingOffset: TimeInterval = 0
   var album: String?
   var albumArtist: String?
   var genre: String?

@@ -340,6 +340,9 @@ final class UserPreferences: Identifiable {
   var autoFetchArtistAlbumInfo: Bool = false
   var autoFetchLyrics: Bool
   var wordSyncedLyricsEnabled: Bool = false
+  /// Opt-in because animated Apple Music artwork uses an unofficial online
+  /// lookup and may download video while the album is playing.
+  var animatedArtworkEnabled: Bool = false
   var copyMusicToStorage: Bool = true
   /// When enabled, removing a referenced song from Ampwave also deletes the
   /// external audio file. Defaults to false because this is destructive and
@@ -619,6 +622,7 @@ final class UserPreferences: Identifiable {
     self.autoFetchArtistAlbumInfo = false
     self.autoFetchLyrics = onboardingBool("com.ampwave.onboarding.autoFetchLyrics", default: true)
     self.wordSyncedLyricsEnabled = true
+    self.animatedArtworkEnabled = false
     self.copyMusicToStorage = onboardingBool("com.ampwave.onboarding.copyToStorage", default: true)
     self.deleteReferencedFilesOnRemoval = false
     self.preferOnlineArtwork = false

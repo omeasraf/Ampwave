@@ -66,6 +66,7 @@ enum LibraryBackupService {
       match.discNumber = backupSong.discNumber
       match.isrc = backupSong.isrc
       match.appleMusicURL = backupSong.appleMusicURL
+      match.lyricsTimingOffset = backupSong.lyricsTimingOffset ?? 0
       match.shouldSyncToWatch = backupSong.shouldSyncToWatch
       match.userEditedFields = backupSong.userEditedFields
       match.sampleRate = backupSong.sampleRate
@@ -172,6 +173,7 @@ enum LibraryBackupService {
       userPreferences.autoFetchArtistAlbumInfo = preferences.autoFetchArtistAlbumInfo ?? false
       userPreferences.autoFetchLyrics = preferences.autoFetchLyrics
       userPreferences.wordSyncedLyricsEnabled = preferences.wordSyncedLyricsEnabled
+      userPreferences.animatedArtworkEnabled = preferences.animatedArtworkEnabled ?? false
       userPreferences.copyMusicToStorage = preferences.copyMusicToStorage
       userPreferences.deleteReferencedFilesOnRemoval =
         preferences.deleteReferencedFilesOnRemoval ?? false
@@ -291,6 +293,7 @@ private struct BackupSong: Codable {
   let composer: String?
   let lyricist: String?
   let lyrics: String?
+  let lyricsTimingOffset: TimeInterval?
   let trackNumber: Int?
   let discNumber: Int?
   let isrc: String?
@@ -325,6 +328,7 @@ private struct BackupSong: Codable {
     composer = song.composer
     lyricist = song.lyricist
     lyrics = song.lyrics
+    lyricsTimingOffset = song.lyricsTimingOffset
     trackNumber = song.trackNumber
     discNumber = song.discNumber
     isrc = song.isrc
@@ -467,6 +471,7 @@ private struct BackupUserPreferences: Codable {
   let autoFetchArtistAlbumInfo: Bool?
   let autoFetchLyrics: Bool
   let wordSyncedLyricsEnabled: Bool
+  let animatedArtworkEnabled: Bool?
   let copyMusicToStorage: Bool
   let deleteReferencedFilesOnRemoval: Bool?
   let preferOnlineArtwork: Bool
@@ -506,6 +511,7 @@ private struct BackupUserPreferences: Codable {
     autoFetchArtistAlbumInfo = preferences.autoFetchArtistAlbumInfo
     autoFetchLyrics = preferences.autoFetchLyrics
     wordSyncedLyricsEnabled = preferences.wordSyncedLyricsEnabled
+    animatedArtworkEnabled = preferences.animatedArtworkEnabled
     copyMusicToStorage = preferences.copyMusicToStorage
     deleteReferencedFilesOnRemoval = preferences.deleteReferencedFilesOnRemoval
     preferOnlineArtwork = preferences.preferOnlineArtwork
