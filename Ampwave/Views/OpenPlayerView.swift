@@ -27,6 +27,9 @@ struct OpenPlayerView: View {
   @State private var showingTechnicalInfo = false
   @State private var showingEqualizer = false
   @State private var showingSleepTimerOptions = false
+  @State private var sonicRecommendations: [LibrarySong] = []
+  @State private var isLoadingSonicRecommendations = false
+  @State private var sonicRecommendationSeedID: UUID?
   @State private var artworkColor: Color = .clear
   @State private var rawArtworkColor: Color = .clear
   /// Measured height of the whole controls block (track info through the
@@ -675,8 +678,54 @@ struct OpenPlayerView: View {
         onExpand: {
           isLyricsExpanded = true
         }
-      ).padding(.top, 15)
+      )
+      .padding(.top, 15)
+
+      if playback.currentItem != nil {
+        SonicRecommendationsView(
+          songs: sonicRecommendations,
+          isLoading: isLoadingSonicRecommendations,
+          onRefresh: {
+            Task { await loadSonicRecommendations(force: true) }
+          },
+          onSelect: playSonicRecommendation
+        )
+        .task(id: playback.currentItem?.id) {
+          await loadSonicRecommendations(force: false)
+        }
+      }
     }
+  }
+
+  @MainActor
+  private func loadSonicRecommendations(force: Bool) async {
+    guard let seed = playback.currentItem else {
+      sonicRecommendations = []
+      sonicRecommendationSeedID = nil
+      return
+    }
+    if sonicRecommendationSeedID != seed.id {
+      sonicRecommendationSeedID = seed.id
+      sonicRecommendations = []
+    }
+    if !force, !sonicRecommendations.isEmpty { return }
+    isLoadingSonicRecommendations = true
+    if force { sonicRecommendations = [] }
+    let recommendations = await RecommendationEngine.shared.buildSonicQueue(
+      seed: seed,
+      limit: 12
+    )
+    guard playback.currentItem?.id == seed.id else { return }
+    sonicRecommendations = recommendations
+    isLoadingSonicRecommendations = false
+  }
+
+  private func playSonicRecommendation(_ song: LibrarySong) {
+    guard let index = sonicRecommendations.firstIndex(where: { $0.id == song.id }) else {
+      playback.play(song, from: .recommendation)
+      return
+    }
+    playback.playQueue(sonicRecommendations, startingAt: index, from: .recommendation)
   }
 
   private func playerUtilityButton(

@@ -121,6 +121,13 @@ struct SettingsView: View {
           }
         }
 
+        settingsCategoryLink(
+          title: "Home",
+          systemImage: "house"
+        ) {
+          HomeCustomizationView()
+        }
+
       }
       .listRowBackground(themeManager.cardBackgroundColor)
 
@@ -131,7 +138,6 @@ struct SettingsView: View {
         ) {
           settingsPage("Online & Metadata") {
             onlineFeaturesSection.listRowBackground(themeManager.cardBackgroundColor)
-            dataSourcesSection.listRowBackground(themeManager.cardBackgroundColor)
           }
         }
 
@@ -167,6 +173,7 @@ struct SettingsView: View {
         ) {
           settingsPage("About") {
             aboutSection.listRowBackground(themeManager.cardBackgroundColor)
+            dataSourcesSection.listRowBackground(themeManager.cardBackgroundColor)
           }
         }
       }
@@ -1346,6 +1353,10 @@ struct SettingsView: View {
       // SyncedLyric — depends on LibrarySong.id, must go first
       deleteAll(SyncedLyric.self)
 
+      // Audio fingerprints belong to the library files and should be rebuilt
+      // after a reset/reimport.
+      deleteAll(SonicAnalysisRecord.self)
+
       // Radio stations retain song relationships and otherwise survive as
       // empty Home cards after the songs are removed.
       deleteAll(RadioStation.self)
@@ -1493,6 +1504,95 @@ struct SettingsView: View {
     } else {
       return "\(minutes)m"
     }
+  }
+}
+
+private struct HomeCustomizationView: View {
+  @Environment(ThemeManager.self) private var themeManager
+  @AppStorage(HomeSection.greetingKey) private var showGreeting = true
+  @AppStorage(HomeSection.orderKey) private var savedOrder = HomeSection.defaultOrderRaw
+  @AppStorage(HomeSection.hiddenKey) private var hiddenSectionsRaw = ""
+  @State private var sections = HomeSection.defaultOrder
+
+  var body: some View {
+    List {
+      Section {
+        Toggle("Show Greeting Card", isOn: $showGreeting)
+      } header: {
+        Text("Greeting")
+      } footer: {
+        Text("Hides the Good morning, afternoon, or evening card while keeping the rest of Home unchanged.")
+      }
+
+      Section {
+        ForEach(sections) { section in
+          Toggle(isOn: visibilityBinding(for: section)) {
+            Label(section.title, systemImage: section.systemImage)
+          }
+          .disabled(isOnlyVisibleSection(section))
+        }
+        .onMove { source, destination in
+          sections.move(fromOffsets: source, toOffset: destination)
+          saveOrder()
+        }
+      } header: {
+        Text("Home Sections")
+      } footer: {
+        Text("Turn off shelves you do not use. At least one section must remain visible. Tap Edit and drag rows to choose the order shown on Home.")
+      }
+
+      Section {
+        Button("Restore Default Layout") {
+          sections = HomeSection.defaultOrder
+          hiddenSectionsRaw = ""
+          showGreeting = true
+          saveOrder()
+        }
+      }
+    }
+    .listRowBackground(themeManager.cardBackgroundColor)
+    .background(themeManager.backgroundColor)
+    .scrollContentBackground(.hidden)
+    .tint(themeManager.accentColor)
+    .navigationTitle("Home")
+    .toolbar { EditButton() }
+    .onAppear {
+      sections = HomeSection.decode(savedOrder)
+      ensureAtLeastOneVisibleSection()
+    }
+  }
+
+  private func visibilityBinding(for section: HomeSection) -> Binding<Bool> {
+    Binding(
+      get: { !HomeSection.hiddenSet(from: hiddenSectionsRaw).contains(section) },
+      set: { isVisible in
+        var hidden = HomeSection.hiddenSet(from: hiddenSectionsRaw)
+        if isVisible {
+          hidden.remove(section)
+        } else {
+          guard sections.filter({ !hidden.contains($0) }).count > 1 else { return }
+          hidden.insert(section)
+        }
+        hiddenSectionsRaw = hidden.map(\.rawValue).sorted().joined(separator: ",")
+      }
+    )
+  }
+
+  private func isOnlyVisibleSection(_ section: HomeSection) -> Bool {
+    let hidden = HomeSection.hiddenSet(from: hiddenSectionsRaw)
+    return !hidden.contains(section)
+      && sections.filter { !hidden.contains($0) }.count == 1
+  }
+
+  private func ensureAtLeastOneVisibleSection() {
+    var hidden = HomeSection.hiddenSet(from: hiddenSectionsRaw)
+    guard sections.allSatisfy({ hidden.contains($0) }), let first = sections.first else { return }
+    hidden.remove(first)
+    hiddenSectionsRaw = hidden.map(\.rawValue).sorted().joined(separator: ",")
+  }
+
+  private func saveOrder() {
+    savedOrder = HomeSection.encode(sections)
   }
 }
 

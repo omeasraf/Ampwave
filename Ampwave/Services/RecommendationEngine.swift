@@ -70,6 +70,21 @@ final class RecommendationEngine {
     self.modelContext = context
   }
 
+  /// Refreshes the history-driven shelf immediately while invalidating the
+  /// broader cache for the next normal Home refresh. Rebuilding every
+  /// recommendation family at each track boundary is unnecessary work for a
+  /// large local library.
+  func listeningHistoryDidChange() async {
+    lastGenerationTime = nil
+    guard let modelContext,
+      UserPreferences.getOrCreate(in: modelContext).enableRecommendations
+    else {
+      genreRecommendations = []
+      return
+    }
+    genreRecommendations = await generateGenreRecommendations()
+  }
+
   // MARK: - Generate All Recommendations
 
   func generateAllRecommendations(forceRefresh: Bool = false) async {
@@ -218,6 +233,143 @@ final class RecommendationEngine {
   func buildRadioQueue(seeds: [LibrarySong], limit: Int = 25) -> [LibrarySong] {
     guard !seeds.isEmpty else { return [] }
     return findSimilarSongs(to: seeds, exclude: seeds, limit: limit)
+  }
+
+  /// Builds a queue from locally analyzed audio characteristics. The first
+  /// request analyzes a bounded, diverse candidate pool; later requests reuse
+  /// the on-device file-hash cache. Metadata radio fills any gaps when a file
+  /// format or referenced URL cannot be decoded.
+  func buildSonicQueue(seed: LibrarySong, limit: Int = 25) async -> [LibrarySong] {
+    guard limit > 0 else { return [] }
+    if library.songs.isEmpty { await library.loadSongs() }
+
+    let stats = statisticsBySongID()
+    let eligible = library.songs.filter {
+      $0.id != seed.id && stats[$0.id]?.isDisliked != true
+    }
+    guard !eligible.isEmpty else { return [] }
+
+    // Preserve strong metadata candidates, then add a deterministic slice of
+    // the wider library so audio similarity can surface tracks from another
+    // artist, year, or genre. Keeping this bounded prevents a large FLAC
+    // library from being decoded all at once on first use.
+    let metadataCandidates = findSimilarSongs(
+      to: [seed],
+      exclude: [seed],
+      limit: min(40, eligible.count)
+    )
+    let metadataIDs = Set(metadataCandidates.map(\.id))
+    let broadCandidates = deterministicSonicSample(
+      eligible.filter { !metadataIDs.contains($0.id) },
+      seedID: seed.id,
+      limit: 48
+    )
+    let candidates = metadataCandidates + broadCandidates
+
+    func snapshot(_ song: LibrarySong) -> SonicTrackSnapshot {
+      SonicTrackSnapshot(
+        id: song.id,
+        fileHash: song.fileHash.isEmpty ? "\(song.id)-\(song.size)" : song.fileHash,
+        url: library.getFileURL(for: song),
+        requiresSecurityScope: song.storageMode == .referenced
+      )
+    }
+
+    let rankedIDs = await SonicRecommendationService.shared.rank(
+      seed: snapshot(seed),
+      candidates: candidates.map(snapshot),
+      limit: limit
+    )
+    let songsByID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
+
+    var result = rankedIDs.compactMap { songsByID[$0] }
+    var includedIDs = Set(result.map(\.id))
+
+    // A corrupt/unsupported file should never leave the action doing nothing.
+    // The normal private radio matcher is the graceful fallback.
+    if result.count < limit {
+      for fallback in findSimilarSongs(to: [seed], exclude: [seed], limit: limit * 2)
+      where !includedIDs.contains(fallback.id) {
+        result.append(fallback)
+        includedIDs.insert(fallback.id)
+        if result.count == limit { break }
+      }
+    }
+
+    return Array(result.prefix(limit))
+  }
+
+  /// Songs outside a playlist ranked against the playlist's aggregate sound.
+  /// A representative seed sample avoids overweighting very large playlists.
+  func buildSonicRecommendations(for playlist: Playlist, limit: Int = 20) async
+    -> [LibrarySong]
+  {
+    guard limit > 0 else { return [] }
+    if library.songs.isEmpty { await library.loadSongs() }
+
+    let playlistSongs = playlist.orderedSongs
+    guard !playlistSongs.isEmpty else { return [] }
+    let playlistIDs = Set(playlistSongs.map(\.id))
+    let stats = statisticsBySongID()
+    let eligible = library.songs.filter {
+      !playlistIDs.contains($0.id) && stats[$0.id]?.isDisliked != true
+    }
+    guard !eligible.isEmpty else { return [] }
+
+    let seeds = representativeSonicSeeds(from: playlistSongs, limit: 12)
+    let metadataCandidates = findSimilarSongs(
+      to: seeds,
+      exclude: playlistSongs,
+      limit: min(48, eligible.count)
+    )
+    let metadataIDs = Set(metadataCandidates.map(\.id))
+    let broadCandidates = deterministicSonicSample(
+      eligible.filter { !metadataIDs.contains($0.id) },
+      seedID: playlist.id,
+      limit: 52
+    )
+    let candidates = metadataCandidates + broadCandidates
+    let service = SonicRecommendationService.shared
+    let rankedIDs = await service.rank(
+      seeds: seeds.map { service.snapshot(for: $0, library: library) },
+      candidates: candidates.map { service.snapshot(for: $0, library: library) },
+      limit: limit
+    )
+    let songsByID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
+    var result = rankedIDs.compactMap { songsByID[$0] }
+    var includedIDs = Set(result.map(\.id))
+
+    if result.count < limit {
+      for fallback in findSimilarSongs(
+        to: seeds,
+        exclude: playlistSongs,
+        limit: limit * 2
+      ) where !includedIDs.contains(fallback.id) {
+        result.append(fallback)
+        includedIDs.insert(fallback.id)
+        if result.count == limit { break }
+      }
+    }
+    return Array(result.prefix(limit))
+  }
+
+  private func representativeSonicSeeds(from songs: [LibrarySong], limit: Int) -> [LibrarySong] {
+    guard songs.count > limit, limit > 0 else { return Array(songs.prefix(max(limit, 0))) }
+    let step = Double(songs.count) / Double(limit)
+    return (0..<limit).map { songs[min(Int(Double($0) * step), songs.count - 1)] }
+  }
+
+  private func deterministicSonicSample(
+    _ songs: [LibrarySong],
+    seedID: UUID,
+    limit: Int
+  ) -> [LibrarySong] {
+    guard songs.count > limit, limit > 0 else { return Array(songs.prefix(max(limit, 0))) }
+    let sorted = songs.sorted { $0.id.uuidString < $1.id.uuidString }
+    let bytes = withUnsafeBytes(of: seedID.uuid) { Array($0) }
+    let seedValue = bytes.reduce(0) { (($0 &* 31) &+ Int($1)) & 0x7fff_ffff }
+    let start = seedValue % sorted.count
+    return (0..<limit).map { sorted[(start + $0) % sorted.count] }
   }
 
   /// Library songs ranked for discovery — newly added, rarely played and

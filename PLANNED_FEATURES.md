@@ -4,6 +4,31 @@ Ampwave's product direction is to make owned music feel more personal,
 intelligent, durable, and shareable without requiring an account or internet
 connection.
 
+## Available Today
+
+- [x] Import music by copying files into Ampwave or referencing folders in
+  Files, with optional live folder monitoring.
+- [x] Read embedded metadata and artwork, refresh missing metadata in bulk, and
+  optionally enrich the library from online sources.
+- [x] Import and export playlists, including M3U and M3U8 playlists, and create
+  rule-based smart playlists.
+- [x] Play FLAC and other locally supported formats with queue management,
+  shuffle, repeat, gapless playback, crossfade, ReplayGain normalization,
+  AirPlay, a sleep timer, and reusable queue presets.
+- [x] Display plain, line-synced, and word-synced lyrics with offline caching
+  and manual online refresh.
+- [x] Generate private recommendations and personal radio mixes from local
+  metadata, favorites, ratings, listening history, and skip behavior.
+- [x] Customize themes, player presentation, library layouts, widgets, and
+  playback behavior.
+- [x] Support CarPlay, Apple Watch syncing, and Siri/Shortcuts playback intents.
+- [x] Export and restore library metadata, playlists, listening statistics,
+  preferences, and playback state.
+- [x] Keep shareable, rotating session logs for playback troubleshooting.
+
+Sound-based recommendations complement the existing metadata and listening
+history engine with a private, cached analysis of the audio signal itself.
+
 ## In Progress
 
 - [ ] **Ampwave Capsules** — Create modern offline mixtapes with a title,
@@ -31,6 +56,8 @@ connection.
   - [ ] Let listeners choose a preferred edition without deleting alternatives.
 - [ ] **Library Time Machine** — Preserve file health, metadata revisions,
   artwork changes, and playlist membership.
+  - [x] Export and restore the current library metadata, playlists, listening
+    statistics, settings, and playback state.
   - [ ] Undo library cleanup and bulk metadata operations.
   - [ ] Restore playlist references when files move or are replaced.
 - [ ] **Perfect-Fit Queue** — Build a session for an exact amount of available
@@ -42,18 +69,46 @@ connection.
 
 ## Sonic Intelligence
 
-- [ ] Build and cache a private, on-device sonic analysis index.
-- [ ] Add sound-based “More Like This” recommendations.
+- [x] Build and cache a private, on-device sonic analysis index as songs are
+  imported, with automatic backfill for existing libraries.
+- [ ] **Song DNA** — Turn the private analysis into an attractive, explainable
+  profile for each song.
+  - [x] Store loudness, dynamics, zero-crossing activity, brightness, crest
+    factor, and stereo width in the on-device analysis database.
+  - [ ] Expand analysis with BPM, musical key and mode, energy, danceability,
+    acoustic/electronic character, and vocal/instrumental estimates.
+  - [ ] Add a polished Song DNA view with friendly descriptions such as Warm,
+    Energetic, Wide Stereo, and Highly Dynamic, alongside exact measurements
+    only where confidence is high.
+  - [ ] Supplement local analysis with Apple Music genre, release, composer,
+    Lossless, and Dolby Atmos metadata when a catalog match is available.
+- [x] **Sound-based More Like This** — Recommend tracks using similarities in
+  the audio itself instead of relying only on artist, album, genre, or history.
+  - [x] Extract a compact on-device feature vector for each supported song.
+  - [x] Cache analysis by file identity so unchanged songs are never re-scanned.
+  - [x] Rank acoustically similar tracks while respecting dislikes and library
+    availability.
+  - [x] Add a More Like This player section that starts a sound-matched queue
+    from the recommendation the listener chooses.
+  - [x] Show sound-matched recommendations for playlists with explicit add
+    controls.
+  - [x] Fall back to the existing private metadata/history radio when a track
+    cannot be analyzed.
 - [ ] Add intelligent shuffle with warm-up, peak, and cool-down arcs.
 - [ ] Add phrase-aware crossfades and transitions.
 - [ ] Add search and filtering by tempo, key, energy, instrumentation, and song
   structure.
 - [ ] Add a visual map of related music in the local library.
 - [ ] Add Flow Mode, an offline personal DJ that sequences compatible songs.
+- [ ] Add an optional, clearly labeled Apple Music discovery shelf using
+  MusicKit personal recommendations for authorized subscribers, without
+  replacing Ampwave's offline recommendations or implying catalog tracks are
+  already part of the local library.
 
 ## Listening and Practice
 
 - [ ] Expand Vocal Slider into **Sing & Practice Studio**.
+  - [x] Ship the current Vocal Slider and remember its playback state.
   - [ ] Loop a detected section, phrase, or custom time range.
   - [ ] Change tempo without changing pitch.
   - [ ] Transpose into the listener's vocal or instrumental range.
@@ -64,8 +119,14 @@ connection.
   automatic loudness matching, loops, and blind preference tests.
 - [ ] **Concept Album Mode** — Preserve gapless sequences, multi-disc structure,
   movements, liner notes, and intentional album flow.
+  - [x] Preserve disc and track-number ordering from embedded metadata.
+  - [x] Support gapless album playback.
+  - [x] Display reusable expandable album and artist descriptions.
+  - [ ] Model movements and authored album-level playback behavior.
 - [ ] **Offline Voice Library** — Support natural playback requests through Siri,
   Spotlight, Shortcuts, and on-device library search.
+  - [x] Add Siri and Shortcuts playback intents.
+  - [ ] Add Spotlight indexing and broader natural-language library requests.
 
 ## Ownership and Reliability
 
@@ -91,6 +152,8 @@ connection.
 
 ## Interface and Customization
 
+- [x] **Customizable Home** — Let listeners hide the greeting card and choose
+  which Home shelves appear and in what order.
 - [ ] **Customizable Library Tabs** — Let listeners choose which sections appear
   in the Library picker and in what order, so a library browsed by album and
   artist isn't fronted by sections its owner never opens.

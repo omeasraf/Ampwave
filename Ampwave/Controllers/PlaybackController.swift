@@ -16,80 +16,6 @@ import MusicKit
 import SwiftData
 internal import SwiftUI
 
-/// Finds unusually long, effectively-silent tails without changing the audio
-/// file. This is deliberately conservative: short pauses and normal mastering
-/// space remain intact, while multi-second digital-silence tails can be skipped
-/// by the existing Gapless Playback feature.
-private enum GaplessSilenceAnalyzer {
-  nonisolated private static let analysisWindow: TimeInterval = 12
-  nonisolated private static let minimumTailToTrim: TimeInterval = 1
-  nonisolated private static let retainedTail: TimeInterval = 0.18
-  nonisolated private static let windowDuration: TimeInterval = 0.02
-  // -32 dBFS. This catches the effectively silent five-second tail in the
-  // reported FLAC while leaving audible fades and room tone alone.
-  nonisolated private static let audibleRMS: Float = 0.025
-
-  nonisolated static func trailingPlaybackEnd(for url: URL) async -> TimeInterval? {
-    await Task.detached(priority: .utility) {
-      do {
-        let file = try AVAudioFile(forReading: url)
-        let format = file.processingFormat
-        let sampleRate = format.sampleRate
-        guard sampleRate > 0, file.length > 0 else { return nil }
-
-        let framesToRead = min(
-          file.length,
-          AVAudioFramePosition((analysisWindow * sampleRate).rounded(.up))
-        )
-        let startFrame = max(0, file.length - framesToRead)
-        file.framePosition = startFrame
-
-        guard let buffer = AVAudioPCMBuffer(
-          pcmFormat: format,
-          frameCapacity: AVAudioFrameCount(framesToRead)
-        ) else { return nil }
-        try file.read(into: buffer, frameCount: AVAudioFrameCount(framesToRead))
-        guard buffer.frameLength > 0, let channels = buffer.floatChannelData else { return nil }
-
-        let frameCount = Int(buffer.frameLength)
-        let channelCount = Int(format.channelCount)
-        let windowFrames = max(1, Int((windowDuration * sampleRate).rounded()))
-        var lastAudibleFrame: Int?
-        var windowEnd = frameCount
-
-        while windowEnd > 0 {
-          let windowStart = max(0, windowEnd - windowFrames)
-          var sumSquares: Float = 0
-          var sampleCount = 0
-          for channel in 0..<channelCount {
-            let samples = channels[channel]
-            for frame in windowStart..<windowEnd {
-              let sample = samples[frame]
-              sumSquares += sample * sample
-              sampleCount += 1
-            }
-          }
-          let rms = sampleCount > 0 ? sqrt(sumSquares / Float(sampleCount)) : 0
-          if rms >= audibleRMS {
-            lastAudibleFrame = windowEnd
-            break
-          }
-          windowEnd = windowStart
-        }
-
-        guard let lastAudibleFrame else { return nil }
-        let fullDuration = Double(file.length) / sampleRate
-        let lastAudibleTime = Double(startFrame + AVAudioFramePosition(lastAudibleFrame)) / sampleRate
-        let silentTail = fullDuration - lastAudibleTime
-        guard silentTail >= minimumTailToTrim else { return nil }
-        return min(fullDuration, lastAudibleTime + retainedTail)
-      } catch {
-        return nil
-      }
-    }.value
-  }
-}
-
 /// A deliberately tiny observable clock for karaoke rendering.
 ///
 /// General playback UI only needs a few updates per second, while word-synced
@@ -135,8 +61,9 @@ final class PlaybackController {
   private var itemObservers: [ObjectIdentifier: [NSKeyValueObservation]] = [:]
   private var itemSongIDs: [ObjectIdentifier: UUID] = [:]
   private var authoritativeItemDurations: [ObjectIdentifier: TimeInterval] = [:]
-  private var gaplessPlaybackEndTimes: [ObjectIdentifier: TimeInterval] = [:]
   private var itemSecurityScopedURLs: [ObjectIdentifier: URL] = [:]
+  private var gaplessPreloadToken: UUID?
+  private var gaplessPreloadSongID: UUID?
   private let library = SongLibrary.shared
   private let historyTracker = ListeningHistoryTracker.shared
   private var audioSessionConfigured = false
@@ -336,9 +263,8 @@ final class PlaybackController {
 
     if repeatMode == .one {
       player.actionAtItemEnd = .none
-      // Silence trimming is a transition behavior. Repeat One must play the
-      // complete file before starting it again.
-      player.currentItem?.forwardPlaybackEndTime = .invalid
+      gaplessPreloadToken = nil
+      gaplessPreloadSongID = nil
       cleanupCrossfade()
       applyPlayerOutputVolume()
 
@@ -352,12 +278,6 @@ final class PlaybackController {
       }
     } else {
       player.actionAtItemEnd = .advance
-      if let currentItem = player.currentItem,
-        let end = gaplessPlaybackEndTimes[ObjectIdentifier(currentItem)],
-        shouldTrimGaplessEnding(at: currentQueueIndex, songID: self.currentItem?.id)
-      {
-        currentItem.forwardPlaybackEndTime = CMTime(seconds: end, preferredTimescale: 600)
-      }
       prepareNextItem()
     }
   }
@@ -419,7 +339,8 @@ final class PlaybackController {
     itemObservers.removeAll()
     itemSongIDs.removeAll()
     authoritativeItemDurations.removeAll()
-    gaplessPlaybackEndTimes.removeAll()
+    gaplessPreloadToken = nil
+    gaplessPreloadSongID = nil
     releaseAllSecurityScopes()
   }
 
@@ -428,13 +349,14 @@ final class PlaybackController {
     itemObservers.removeValue(forKey: key)?.forEach { $0.invalidate() }
     itemSongIDs.removeValue(forKey: key)
     authoritativeItemDurations.removeValue(forKey: key)
-    gaplessPlaybackEndTimes.removeValue(forKey: key)
     if let url = itemSecurityScopedURLs.removeValue(forKey: key) {
       url.stopAccessingSecurityScopedResource()
     }
   }
 
   private func releaseResourcesForQueuedItems() {
+    gaplessPreloadToken = nil
+    gaplessPreloadSongID = nil
     player?.items().forEach { releaseResources(for: $0) }
   }
 
@@ -450,16 +372,6 @@ final class PlaybackController {
     (preferences?.gaplessPlayback ?? true)
       && !(preferences?.crossfadeEnabled ?? false)
       && !VocalIsolator.shared.requiresProcessing
-  }
-
-  private func shouldTrimGaplessEnding(at index: Int, songID: UUID?) -> Bool {
-    guard usesNativeGaplessPlayback,
-      repeatMode != .one,
-      index >= 0,
-      index < queue.count,
-      queue[index].id == songID
-    else { return false }
-    return index < queue.count - 1 || repeatMode == .all
   }
 
   func setModelContext(_ context: ModelContext) {
@@ -737,6 +649,12 @@ final class PlaybackController {
       return
     }
 
+    if let finishedSongID,
+      let finishedSong = queue.first(where: { $0.id == finishedSongID })
+    {
+      historyTracker.songFinished(finishedSong)
+    }
+
     // Ensure we are talking about the currently playing item that actually finished
     // AVQueuePlayer may have already moved currentItem forward, but 'item' is what just finished
 
@@ -751,6 +669,15 @@ final class PlaybackController {
     if repeatMode == .one {
       item.seek(to: .zero, completionHandler: nil)
       player.play()
+      if let finishedSongID,
+        let repeatedSong = queue.first(where: { $0.id == finishedSongID })
+      {
+        historyTracker.songStarted(
+          repeatedSong,
+          source: currentSource,
+          playlistId: currentPlaylistId
+        )
+      }
     } else if queue.count > resolvedFinishedIndex + 1 {
       // Automatic advance is handled by KVO (observePlayerItemChange)
       if !usesNativeGaplessPlayback {
@@ -1078,13 +1005,7 @@ final class PlaybackController {
     }
 
     Task {
-      let item = await createPlayerItem(
-        for: song,
-        trimTrailingSilence: shouldTrimGaplessEnding(
-          at: currentQueueIndex,
-          songID: song.id
-        )
-      )
+      let item = await createPlayerItem(for: song)
 
       await MainActor.run {
         print(
@@ -1148,8 +1069,7 @@ final class PlaybackController {
 
   private func createPlayerItem(
     for song: LibrarySong,
-    includeAudioProcessing: Bool? = nil,
-    trimTrailingSilence: Bool = false
+    includeAudioProcessing: Bool? = nil
   ) async -> AVPlayerItem {
     let url = library.getFileURL(for: song)
 
@@ -1168,31 +1088,8 @@ final class PlaybackController {
     let item = AVPlayerItem(asset: asset)
     let itemKey = ObjectIdentifier(item)
     let songID = song.id
-    let songTitle = song.title
-    let storedSongDuration = song.duration
     itemSongIDs[itemKey] = songID
     if secured { itemSecurityScopedURLs[itemKey] = url }
-
-    if trimTrailingSilence {
-      // Do not delay initial playback while inspecting the tail. A queued
-      // successor gives this utility task almost the entire song to finish.
-      Task { @MainActor [weak self, weak item] in
-        guard let playbackEnd = await GaplessSilenceAnalyzer.trailingPlaybackEnd(for: url),
-          let self,
-          let item,
-          self.itemSongIDs[itemKey] == songID,
-          self.usesNativeGaplessPlayback,
-          self.repeatMode != .one
-        else { return }
-
-        self.gaplessPlaybackEndTimes[itemKey] = playbackEnd
-        item.forwardPlaybackEndTime = CMTime(seconds: playbackEnd, preferredTimescale: 600)
-        DiagnosticLog.shared.log(
-          "transition",
-          "Smart gapless ending title=\(songTitle) playbackEnd=\(playbackEnd) originalDuration=\(storedSongDuration)"
-        )
-      }
-    }
 
     // Resolve duration from both the asset and its audio-track time range.
     // Some FLAC containers initially report a tag-derived duration through
@@ -1359,7 +1256,15 @@ final class PlaybackController {
       let expectedCurrentItem = player.currentItem
       let expectedCurrentSongID = currentItem?.id
       let expectedNextSongID = nextSong.id
+      if gaplessPreloadSongID == expectedNextSongID, gaplessPreloadToken != nil {
+        return
+      }
+      let preloadToken = UUID()
+      gaplessPreloadToken = preloadToken
+      gaplessPreloadSongID = expectedNextSongID
       guard library.fileExists(for: nextSong) else {
+        gaplessPreloadToken = nil
+        gaplessPreloadSongID = nil
         print("[ERROR] PlaybackController: Skipping gapless preload, file missing for \(nextSong.title)")
         return
       }
@@ -1368,10 +1273,16 @@ final class PlaybackController {
       Task {
         let nextItem = await createPlayerItem(
           for: nextSong,
-          includeAudioProcessing: false,
-          trimTrailingSilence: nextIndex < queue.count - 1 || repeatMode == .all
+          includeAudioProcessing: false
         )
         await MainActor.run {
+          guard self.gaplessPreloadToken == preloadToken else {
+            self.releaseResources(for: nextItem)
+            return
+          }
+          self.gaplessPreloadToken = nil
+          self.gaplessPreloadSongID = nil
+
           // Item creation loads tracks asynchronously. Do not let an old task
           // insert its result after a skip, shuffle, or automatic handoff.
           guard self.player === player,
@@ -1828,10 +1739,7 @@ final class PlaybackController {
 
     // Insert into AVQueuePlayer
     if let player = player {
-      let item = await createPlayerItem(
-        for: song,
-        trimTrailingSilence: insertIndex < queue.count - 1 || repeatMode == .all
-      )
+      let item = await createPlayerItem(for: song)
       player.insert(item, after: player.currentItem)
     }
     saveState()
@@ -2289,13 +2197,7 @@ final class PlaybackController {
           self.isPlaying = false
 
           // Prepare player but don't play
-          let item = await createPlayerItem(
-            for: song,
-            trimTrailingSilence: shouldTrimGaplessEnding(
-              at: currentQueueIndex,
-              songID: song.id
-            )
-          )
+          let item = await createPlayerItem(for: song)
           self.player = AVQueuePlayer(items: [item])
           self.player?.automaticallyWaitsToMinimizeStalling = false
           self.applyRepeatModeToPlayer()

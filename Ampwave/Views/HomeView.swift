@@ -33,6 +33,10 @@ struct HomeView: View {
   @State private var showError = false
   @State private var errorMessage = ""
   @State private var hasLoadedInitialData = false
+  @AppStorage(HomeSection.greetingKey) private var showGreeting = true
+  @AppStorage(HomeSection.orderKey) private var homeSectionOrderRaw =
+    HomeSection.defaultOrderRaw
+  @AppStorage(HomeSection.hiddenKey) private var hiddenHomeSectionsRaw = ""
 
   private var recentlyAdded: [LibrarySong] {
     Array(library.songs.prefix(10))
@@ -87,11 +91,21 @@ struct HomeView: View {
     }
   }
 
+  private var visibleHomeSections: [HomeSection] {
+    let hidden = HomeSection.hiddenSet(from: hiddenHomeSectionsRaw)
+    let ordered = HomeSection.decode(homeSectionOrderRaw)
+    let visible = ordered.filter { !hidden.contains($0) }
+    // Repair an invalid layout saved by an older build instead of presenting
+    // an empty Home screen.
+    return visible.isEmpty ? Array(ordered.prefix(1)) : visible
+  }
+
   var body: some View {
     ScrollView {
       VStack(spacing: 28) {
-        // Welcome header
-        welcomeHeader
+        if showGreeting {
+          welcomeHeader
+        }
 
         if library.songs.isEmpty
           && (isLoading || library.indexingStatus != .complete)
@@ -111,62 +125,8 @@ struct HomeView: View {
         } else if library.songs.isEmpty {
           emptyState
         } else {
-          // Recently Played section
-          if !recentlyPlayedSongs.isEmpty {
-            HorizontalSongSection(
-              title: "Recently Played",
-              songs: recentlyPlayedSongs,
-              onSongPlayed: refreshHomeSections
-            )
-          }
-
-          // For You recommendations
-          if !forYouRecommendations.isEmpty {
-            RecommendationsSection(
-              recommendations: forYouRecommendations,
-              onSongPlayed: refreshHomeSections
-            )
-          }
-
-          // Radio Mixes section
-          if !radioMixes.isEmpty {
-            RadioMixesSection(mixes: radioMixes)
-          }
-
-          if !genreRecommendations.isEmpty {
-            GenrePicksSection(recommendations: genreRecommendations)
-          }
-
-          // Most Played section
-          if !mostPlayedSongs.isEmpty {
-            HorizontalSongSection(
-              title: "Your Top Songs",
-              songs: mostPlayedSongs.map { $0.song },
-              onSongPlayed: refreshHomeSections
-            )
-          }
-
-          // Recently Added section
-          if !recentlyAdded.isEmpty {
-            HorizontalSongSection(
-              title: "Recently Added",
-              songs: recentlyAdded,
-              onSongPlayed: refreshHomeSections
-            )
-          }
-
-          // Quick access playlists
-          QuickAccessSection()
-
-          // Music the user loved but hasn't returned to in a while. Every
-          // other shelf here surfaces either what's new or what's already in
-          // rotation; this is the only one that reaches back.
-          if !rediscoverSongs.isEmpty {
-            HorizontalSongSection(
-              title: "Rediscover",
-              songs: rediscoverSongs,
-              onSongPlayed: refreshHomeSections
-            )
+          ForEach(visibleHomeSections) { section in
+            homeSection(section)
           }
         }
       }
@@ -219,6 +179,13 @@ struct HomeView: View {
       let albumIDs = notification.userInfo?["albumIDs"] as? Set<UUID> ?? []
       removeDeletedContentImmediately(songIDs: ids, albumIDs: albumIDs)
     }
+    .onReceive(NotificationCenter.default.publisher(for: .listeningHistoryDidChange)) { _ in
+      refreshHomeSections()
+      Task {
+        await recommendationEngine.listeningHistoryDidChange()
+        genreRecommendations = recommendationEngine.genreRecommendations
+      }
+    }
     .onChange(of: scenePhase) {
       if scenePhase == .active {
         refreshHomeSections()
@@ -232,6 +199,61 @@ struct HomeView: View {
       Button("OK") {}
     } message: {
       Text(errorMessage)
+    }
+  }
+
+  @ViewBuilder
+  private func homeSection(_ section: HomeSection) -> some View {
+    switch section {
+    case .recentlyPlayed:
+      if !recentlyPlayedSongs.isEmpty {
+        HorizontalSongSection(
+          title: "Recently Played",
+          songs: recentlyPlayedSongs,
+          onSongPlayed: refreshHomeSections
+        )
+      }
+    case .forYou:
+      if !forYouRecommendations.isEmpty {
+        RecommendationsSection(
+          recommendations: forYouRecommendations,
+          onSongPlayed: refreshHomeSections
+        )
+      }
+    case .radioMixes:
+      if !radioMixes.isEmpty {
+        RadioMixesSection(mixes: radioMixes)
+      }
+    case .genrePicks:
+      if !genreRecommendations.isEmpty {
+        GenrePicksSection(recommendations: genreRecommendations)
+      }
+    case .topSongs:
+      if !mostPlayedSongs.isEmpty {
+        HorizontalSongSection(
+          title: "Your Top Songs",
+          songs: mostPlayedSongs.map(\.song),
+          onSongPlayed: refreshHomeSections
+        )
+      }
+    case .recentlyAdded:
+      if !recentlyAdded.isEmpty {
+        HorizontalSongSection(
+          title: "Recently Added",
+          songs: recentlyAdded,
+          onSongPlayed: refreshHomeSections
+        )
+      }
+    case .quickAccess:
+      QuickAccessSection()
+    case .rediscover:
+      if !rediscoverSongs.isEmpty {
+        HorizontalSongSection(
+          title: "Rediscover",
+          songs: rediscoverSongs,
+          onSongPlayed: refreshHomeSections
+        )
+      }
     }
   }
 

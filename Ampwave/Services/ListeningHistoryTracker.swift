@@ -7,6 +7,14 @@ import Foundation
 import Observation
 import SwiftData
 
+extension Notification.Name {
+  /// Posted after play, skip, like, dislike, or rating statistics change so
+  /// recommendation and ranking surfaces can refresh immediately.
+  static let listeningHistoryDidChange = Notification.Name(
+    "com.ampwave.listeningHistoryDidChange"
+  )
+}
+
 @MainActor
 @Observable
 final class ListeningHistoryTracker {
@@ -121,6 +129,15 @@ final class ListeningHistoryTracker {
     currentPlaylistId = nil
   }
 
+  /// Completes a specific track only if it is still the one being tracked.
+  /// AVQueuePlayer may announce its next item before or after the old item's
+  /// end notification; matching by ID prevents that ordering race from ending
+  /// the newly-started song instead.
+  func songFinished(_ song: LibrarySong) {
+    guard currentSong?.id == song.id else { return }
+    songEnded(skipped: false)
+  }
+
   /// Drops model references without writing a play. Used before the entire
   /// library is deleted, when retaining the current song would leave a
   /// detached SwiftData model in this long-lived singleton.
@@ -162,6 +179,7 @@ final class ListeningHistoryTracker {
 
     // Save
     try? modelContext.save()
+    notifyStatisticsChanged()
   }
 
   /// Records a skip
@@ -172,6 +190,7 @@ final class ListeningHistoryTracker {
     stats.recordSkip()
 
     try? modelContext.save()
+    notifyStatisticsChanged()
   }
 
   // MARK: - Statistics index
@@ -250,6 +269,7 @@ final class ListeningHistoryTracker {
     }
 
     try? modelContext?.save()
+    notifyStatisticsChanged()
   }
 
   func setDisliked(_ isDisliked: Bool, for song: LibrarySong) {
@@ -262,6 +282,7 @@ final class ListeningHistoryTracker {
     }
 
     try? modelContext?.save()
+    notifyStatisticsChanged()
   }
 
   func isDisliked(song: LibrarySong) -> Bool {
@@ -279,6 +300,11 @@ final class ListeningHistoryTracker {
     }
 
     try? modelContext?.save()
+    notifyStatisticsChanged()
+  }
+
+  private func notifyStatisticsChanged() {
+    NotificationCenter.default.post(name: .listeningHistoryDidChange, object: nil)
   }
 
   func rating(for song: LibrarySong) -> Int? {
@@ -323,7 +349,7 @@ final class ListeningHistoryTracker {
     guard let stats = try? modelContext.fetch(descriptor) else { return [] }
 
     let library = SongLibrary.shared
-    return stats.prefix(limit).compactMap { stat in
+    return stats.lazy.filter { $0.playCount > 0 }.prefix(limit).compactMap { stat in
       guard let song = library.song(id: stat.songId) else { return nil }
       return (song: song, count: stat.playCount)
     }

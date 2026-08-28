@@ -19,6 +19,8 @@ struct PlaylistView: View {
   @State private var showingCreateCapsuleSheet = false
   @State private var playlistJSONShareURL: URL?
   @State private var playlistM3UShareURL: URL?
+  @State private var sonicRecommendations: [LibrarySong] = []
+  @State private var isLoadingSonicRecommendations = false
   @Environment(ThemeManager.self) private var themeManager
 
   private var isSmartPlaylist: Bool { playlist.playlistType == .smart }
@@ -31,6 +33,10 @@ struct PlaylistView: View {
     "\(playlist.id.uuidString)-\(playlist.songCount)"
   }
 
+  private var playlistRecommendationStamp: String {
+    "\(playlist.id.uuidString)-\(playlist.songCount)-\(playlist.lastModifiedDate.timeIntervalSinceReferenceDate)"
+  }
+
   var body: some View {
     List {
       Section {
@@ -40,6 +46,10 @@ struct PlaylistView: View {
       .listRowInsets(EdgeInsets())
 
       songSection
+
+      if !playlist.orderedSongs.isEmpty {
+        sonicRecommendationSection
+      }
     }
     .listStyle(platformListStyle)
     .background(themeManager.backgroundColor)
@@ -95,6 +105,94 @@ struct PlaylistView: View {
         library: library
       )
     }
+    .task(id: playlistRecommendationStamp) {
+      await loadSonicRecommendations()
+    }
+  }
+
+  private var sonicRecommendationSection: some View {
+    Section {
+      if isLoadingSonicRecommendations && sonicRecommendations.isEmpty {
+        HStack(spacing: 10) {
+          ProgressView()
+          Text("Matching songs to this playlist…")
+            .foregroundStyle(.secondary)
+        }
+      } else if sonicRecommendations.isEmpty {
+        Text("No matching songs are available yet.")
+          .foregroundStyle(.secondary)
+      } else {
+        ForEach(sonicRecommendations) { song in
+          HStack(spacing: 10) {
+            SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
+              .contentShape(Rectangle())
+              .onTapGesture { playRecommendation(song) }
+
+            if canAddRecommendedSongs {
+              Button { addRecommendation(song) } label: {
+                Image(systemName: "plus.circle.fill")
+                  .font(.title2)
+                  .foregroundStyle(themeManager.accentColor)
+              }
+              .buttonStyle(.borderless)
+              .accessibilityLabel("Add \(song.title) to \(playlist.name)")
+            }
+          }
+        }
+      }
+    } header: {
+      HStack {
+        Label("Recommended for This Playlist", systemImage: "waveform.path")
+        Spacer()
+        Button {
+          Task { await loadSonicRecommendations(force: true) }
+        } label: {
+          Image(systemName: "arrow.clockwise")
+        }
+        .disabled(isLoadingSonicRecommendations)
+        .accessibilityLabel("Refresh playlist recommendations")
+      }
+    } footer: {
+      Text("Matched privately from the sound of the songs already in this playlist.")
+    }
+    .listRowBackground(Color.clear)
+  }
+
+  private var canAddRecommendedSongs: Bool {
+    playlist.playlistType == .custom || playlist.playlistType == .likedSongs
+  }
+
+  @MainActor
+  private func loadSonicRecommendations(force: Bool = false) async {
+    guard !playlist.orderedSongs.isEmpty else {
+      sonicRecommendations = []
+      return
+    }
+    if !force, !sonicRecommendations.isEmpty { return }
+    isLoadingSonicRecommendations = true
+    if force { sonicRecommendations = [] }
+    sonicRecommendations = await RecommendationEngine.shared.buildSonicRecommendations(
+      for: playlist,
+      limit: 12
+    )
+    isLoadingSonicRecommendations = false
+  }
+
+  private func playRecommendation(_ song: LibrarySong) {
+    guard let index = sonicRecommendations.firstIndex(where: { $0.id == song.id }) else {
+      playback.play(song, from: .recommendation)
+      return
+    }
+    playback.playQueue(sonicRecommendations, startingAt: index, from: .recommendation)
+  }
+
+  private func addRecommendation(_ song: LibrarySong) {
+    if playlist.playlistType == .likedSongs {
+      if !playlistManager.isLiked(song: song) { _ = playlistManager.toggleLike(song: song) }
+    } else {
+      playlistManager.addSong(song, to: playlist)
+    }
+    sonicRecommendations.removeAll { $0.id == song.id }
   }
 
   @ViewBuilder

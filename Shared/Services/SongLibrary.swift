@@ -31,6 +31,13 @@ extension Notification.Name {
     /// unavailable; it stays nil there and the work simply isn't extended.
     @ObservationIgnored
     static var beginBackgroundAssertion: ((String) -> (() -> Void))?
+
+    /// App-target hooks for persistent sonic analysis. Kept injectable because
+    /// this shared service also compiles into extensions and the watch target.
+    @ObservationIgnored
+    static var songWasImported: ((LibrarySong) -> Void)?
+    @ObservationIgnored
+    static var libraryDidLoad: (([LibrarySong]) -> Void)?
   
     private let fileManager = FileManager.default
     private(set) var songs: [LibrarySong] = [] {
@@ -544,6 +551,7 @@ extension Notification.Name {
     await loadAlbums(performMaintenance: performMaintenance)
     await Task.yield()
     artists = await allArtists()
+    Self.libraryDidLoad?(songs)
     print("[DEBUG] SongLibrary.loadSongs: Finished loading songs, albums, and artists")
   }
 
@@ -1243,6 +1251,7 @@ extension Notification.Name {
       songToRepair.bookmarkData = bookmarkData
       invalidateResolvedURLCache(for: songToRepair.id)
       await refreshEmbeddedMetadata(for: songToRepair)
+      Self.songWasImported?(songToRepair)
       print("[DEBUG] SongLibrary.importFile: Repaired existing LibrarySong \(songToRepair.id)")
       return songToRepair
     }
@@ -1342,6 +1351,7 @@ extension Notification.Name {
     }
 
     print("[DEBUG] SongLibrary.importFile: Finished successfully for \(url.lastPathComponent)")
+    Self.songWasImported?(song)
     return song
   }
 
@@ -1477,6 +1487,7 @@ extension Notification.Name {
       if album.songs.count == 1 { artist.albumCount += 1 }
     }
 
+    Self.songWasImported?(song)
     return song
   }
 

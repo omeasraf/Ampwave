@@ -63,6 +63,7 @@ struct AmpwaveApp: App {
       PlaybackState.self,
       PendingScrobble.self,
       AmpwaveCapsule.self,
+      SonicAnalysisRecord.self,
     ])
 
     // Configure storage in App Group for sharing with extensions
@@ -90,6 +91,13 @@ struct AmpwaveApp: App {
         configurations: [modelConfiguration]
       )
       print("[DEBUG] ModelContainer created successfully")
+      SonicRecommendationService.shared.setModelContext(modelContainer.mainContext)
+      SongLibrary.songWasImported = { song in
+        SonicRecommendationService.shared.enqueueAnalysis(for: song)
+      }
+      SongLibrary.libraryDidLoad = { songs in
+        SonicRecommendationService.shared.enqueueMissingAnalysis(for: songs)
+      }
 
       // Update Siri App Shortcuts
       if #available(iOS 17.0, macOS 14.0, *) {
