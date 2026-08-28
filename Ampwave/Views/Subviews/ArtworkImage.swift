@@ -36,9 +36,8 @@ struct ArtworkImage: View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
           .fill(.gray.opacity(0.15))
           .overlay(
-            Image(systemName: "music.note")
-              .font(.system(size: size * 0.35))
-              .foregroundStyle(.secondary)
+            AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+              .frame(width: size * 0.46, height: size * 0.31)
           )
       }
     }

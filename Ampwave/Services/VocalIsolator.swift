@@ -106,6 +106,13 @@ final class VocalIsolator {
         }
     }
 
+    /// Avoid installing an audio-processing tap when it would be a no-op.
+    /// Besides saving a considerable amount of work for lossless files, this
+    /// keeps ordinary and gapless playback on AVFoundation's native path.
+    var requiresProcessing: Bool {
+        targetVocalLevelPtr.pointee < 0.999 || eqEnabledPtr.pointee
+    }
+
     func setEQEnabled(_ enabled: Bool) {
         eqEnabledPtr.pointee = enabled
     }

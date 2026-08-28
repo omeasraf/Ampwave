@@ -771,15 +771,15 @@ private struct PlayerProgressView: View {
     let duration = playback.duration
     let liveProgress = duration > 0 ? min(max(playback.currentTime / duration, 0), 1) : 0.0
     let displayedProgress = scrubProgress ?? liveProgress
+    let displayedTime = scrubProgress.map { $0 * duration }
+      ?? playback.interpolatedCurrentTime()
 
     VStack(spacing: 8) {
       Group {
         if usesWavySlider {
-          WavyPlayerSlider(
-            value: displayedProgress,
-            isWavy: playback.isPlaying,
-            onChanged: updateScrubProgress,
-            onEditingChanged: updateScrubbing
+          animatedWavySlider(
+            duration: duration,
+            displayedProgress: displayedProgress
           )
         } else {
           Slider(
@@ -797,7 +797,7 @@ private struct PlayerProgressView: View {
       .padding(.top, 2)
 
       HStack {
-        Text(formatTime(displayedProgress * duration))
+        Text(formatTime(displayedTime))
           .font(.system(size: 12, design: .monospaced))
           .foregroundStyle(.secondary)
 
@@ -808,6 +808,33 @@ private struct PlayerProgressView: View {
           .foregroundStyle(.secondary)
       }
     }
+  }
+
+  private func animatedWavySlider(
+    duration: TimeInterval,
+    displayedProgress: Double
+  ) -> some View {
+    TimelineView(
+      .animation(
+        minimumInterval: 1.0 / 60.0,
+        paused: !playback.isPlaying || isScrubbing
+      )
+    ) { _ in
+      WavyPlayerSlider(
+        value: smoothProgress(
+          duration: duration,
+          fallback: displayedProgress
+        ),
+        isWavy: playback.isPlaying,
+        onChanged: updateScrubProgress,
+        onEditingChanged: updateScrubbing
+      )
+    }
+  }
+
+  private func smoothProgress(duration: TimeInterval, fallback: Double) -> Double {
+    guard scrubProgress == nil, duration > 0 else { return fallback }
+    return min(max(playback.interpolatedCurrentTime() / duration, 0), 1)
   }
 
   private func updateScrubProgress(_ progress: Double) {
@@ -961,7 +988,7 @@ private struct WavySliderProgressShape: Shape {
 
     let wavelength: CGFloat = 18
     let amplitude = min(4, max(1.5, length / 8))
-    let step = max(1, wavelength / 12)
+    let step: CGFloat = 0.5
 
     let initialPhase = CGFloat(phase)
     let initialY = centerY + sin(initialPhase) * amplitude

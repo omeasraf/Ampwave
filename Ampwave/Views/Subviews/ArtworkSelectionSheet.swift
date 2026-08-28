@@ -10,6 +10,7 @@ internal import SwiftUI
 struct ArtworkSelectionSheet: View {
   let title: String
   let artist: String
+  var album: String? = nil
   @Binding var isPresented: Bool
   var onSelect: (URL) -> Void
 
@@ -72,7 +73,11 @@ struct ArtworkSelectionSheet: View {
   private func searchArtwork() {
     isLoading = true
     Task {
-      let urls = await MetadataService.shared.searchArtworkOptions(title: title, artist: artist)
+      let urls = await MetadataService.shared.searchArtworkOptions(
+        title: title,
+        artist: artist,
+        album: album
+      )
       await MainActor.run {
         self.artworkURLs = urls
         self.isLoading = false

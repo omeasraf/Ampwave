@@ -587,12 +587,27 @@ final class MetadataService {
   }
 
   /// Searches for multiple artwork options for a song or album
-  func searchArtworkOptions(title: String, artist: String) async -> [URL] {
+  func searchArtworkOptions(title: String, artist: String, album: String? = nil) async -> [URL] {
     print("[DEBUG] MetadataService.searchArtworkOptions: Searching for \(title) by \(artist)")
 
-    // 1. Search for releases on MusicBrainz
+    // MusicKit produces the most consistent covers. Its service deliberately
+    // returns nothing unless access was already granted, so denial immediately
+    // falls through to the open providers without another permission prompt.
+    var artworkURLs = await AppleMusicMetadataService.shared.searchArtworkURLs(
+      title: title,
+      artist: artist,
+      album: album
+    )
+
+    // A song title is not normally a MusicBrainz release title. Prefer the
+    // embedded album when this request came from SongEditSheet.
+    let releaseTitle = album?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+      ? album!
+      : title
+
+    // Search exact releases on MusicBrainz, then use Cover Art Archive.
     let query =
-      "release:\"\(title.replacingOccurrences(of: "\"", with: "\\\""))\" AND artist:\"\(artist.replacingOccurrences(of: "\"", with: "\\\""))\""
+      "release:\"\(releaseTitle.replacingOccurrences(of: "\"", with: "\\\""))\" AND artist:\"\(artist.replacingOccurrences(of: "\"", with: "\\\""))\""
     var components = URLComponents(string: "\(musicBrainzDefaultURL)/release")
     components?.queryItems = [
       URLQueryItem(name: "query", value: query),
@@ -600,15 +615,27 @@ final class MetadataService {
       URLQueryItem(name: "limit", value: "10"),
     ]
 
-    guard let url = components?.url else { return [] }
+    guard let url = components?.url else { return artworkURLs }
 
-    var artworkURLs: [URL] = []
     if let data = await performRequest(url: url) {
       do {
         let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
         if let releases = response.releases {
-          // Fetch artwork for each release ID
-          for release in releases {
+          // MusicBrainz can return compilations and similarly named releases
+          // even for a fielded query. Filter them before fetching any images.
+          let targetTitle = normalizedSearchText(releaseTitle)
+          let targetArtist = normalizedSearchText(artist)
+          let matchingReleases = releases.filter { release in
+            let titleScore = stringSimilarityScore(
+              normalizedSearchText(release.title), targetTitle
+            )
+            let artistScore = release.artistCredit?.first.map {
+              stringSimilarityScore(normalizedSearchText($0.name), targetArtist)
+            } ?? 0
+            return titleScore >= 0.85 && artistScore >= 0.8
+          }
+
+          for release in matchingReleases {
             if let artworkURL = await fetchArtworkURL(forRelease: release.id) {
               if !artworkURLs.contains(artworkURL) {
                 artworkURLs.append(artworkURL)
@@ -619,35 +646,6 @@ final class MetadataService {
         }
       } catch {
         print("[DEBUG] MetadataService.searchArtworkOptions: Decoding error: \(error)")
-      }
-    }
-
-    // 2. If we have very few results, try a broader search
-    if artworkURLs.count < 3 {
-      let fallbackQuery = "\(title) \(artist)"
-      var fallbackComponents = URLComponents(string: "\(musicBrainzDefaultURL)/release")
-      fallbackComponents?.queryItems = [
-        URLQueryItem(name: "query", value: fallbackQuery),
-        URLQueryItem(name: "fmt", value: "json"),
-        URLQueryItem(name: "limit", value: "10"),
-      ]
-
-      if let fallbackUrl = fallbackComponents?.url,
-        let data = await performRequest(url: fallbackUrl)
-      {
-        do {
-          let response = try JSONDecoder().decode(MusicBrainzReleaseSearchResponse.self, from: data)
-          if let releases = response.releases {
-            for release in releases {
-              if let artworkURL = await fetchArtworkURL(forRelease: release.id) {
-                if !artworkURLs.contains(artworkURL) {
-                  artworkURLs.append(artworkURL)
-                }
-              }
-              if artworkURLs.count >= 12 { break }
-            }
-          }
-        } catch {}
       }
     }
 

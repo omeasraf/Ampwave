@@ -61,6 +61,9 @@ struct MetadataQueueView: View {
     .onAppear {
       refreshQueue()
     }
+    .onChange(of: library.libraryVersion) {
+      refreshQueue()
+    }
     .sheet(item: $selectedSong) { song in
       SongEditSheet(
         song: song,
@@ -112,8 +115,8 @@ struct IncompleteSongRow: View {
             .fill(.secondary.opacity(0.2))
             .frame(width: 50, height: 50)
             .overlay {
-              Image(systemName: "music.note")
-                .foregroundStyle(.secondary)
+              AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+                .frame(width: 25, height: 17)
             }
         }
 

@@ -580,8 +580,12 @@ extension Notification.Name {
   // MARK: - Indexing
 
   private var isIndexing = false
+  private let embeddedMetadataRepairKey = "Ampwave.embeddedMetadataRepair.v3"
+  // Files imported before this extractor generation may have lost FLAC/Vorbis
+  // tags and PICTURE blocks. New imports already use the repaired extractor.
+  private let embeddedMetadataRepairCutoff = Date(timeIntervalSince1970: 1_787_702_400)
 
-  func indexOnStartup() async {
+  func indexOnStartup(performAutomaticMetadataFetch: Bool = true) async {
     guard !isIndexing else {
       print("[DEBUG] indexOnStartup - already indexing, skipping")
       return
@@ -607,10 +611,18 @@ extension Notification.Name {
       if modDate < lastScanDate {
         print("[DEBUG] indexOnStartup: Directory hasn't changed since last scan (\(lastScanDate)). Skipping scan.")
         await repairStoredFilePathsIfNeeded(in: modelContext)
+        let repairedLegacyMetadata = await repairLegacyEmbeddedMetadataIfNeeded()
+        if repairedLegacyMetadata {
+          await pruneEmptyAlbums()
+          await loadSongs(force: true)
+        }
         indexingStatus = .complete
         isIndexing = false
-        // Still run metadata backfill check just in case
-        await fetchAutomaticMetadata()
+        // Online enrichment is optional during app launch so local indexing
+        // can finish behind the splash without holding it on network calls.
+        if performAutomaticMetadataFetch {
+          await fetchAutomaticMetadata()
+        }
         return
       }
     }
@@ -756,8 +768,9 @@ extension Notification.Name {
     }
 
     saveContext()
-    await pruneEmptyAlbums()
     await reindexMissingTechnicalMetadata()
+    _ = await repairLegacyEmbeddedMetadataIfNeeded()
+    await pruneEmptyAlbums()
     // Cleanup may have deleted rows from models already published to the UI.
     // Always replace the array with fresh, attached instances.
     await loadSongs(force: true)
@@ -768,8 +781,12 @@ extension Notification.Name {
     // 5. Update last scan time
     UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "com.ampwave.lastDiskScanTime")
     
-    // 6. Check for missing metadata
-    await fetchAutomaticMetadata()
+    // 6. Check for missing metadata. The iOS launch path defers this network
+    // work until after the app is visible; manual and macOS callers keep the
+    // existing behavior by using the default argument.
+    if performAutomaticMetadataFetch {
+      await fetchAutomaticMetadata()
+    }
   }
 
   private func repairStoredFilePathsIfNeeded(in modelContext: ModelContext) async {
@@ -1215,13 +1232,17 @@ extension Notification.Name {
 
     if let songToRepair {
       print("[DEBUG] SongLibrary.importFile: Repairing existing LibrarySong storage")
-      // Preserve identity and user state; only replace fields that locate the audio file.
+      // Preserve identity and user state, but re-read embedded metadata after
+      // restoring the file. The old path only repaired storage, leaving stale
+      // rows without the artwork and tags the new extractor had just found.
       songToRepair.fileName = uniqueFileName
       updateStoredFilePath(for: songToRepair, to: destinationURL)
       songToRepair.fileHash = fileHash
       songToRepair.size = fileSize
       songToRepair.storageMode = storageMode
       songToRepair.bookmarkData = bookmarkData
+      invalidateResolvedURLCache(for: songToRepair.id)
+      await refreshEmbeddedMetadata(for: songToRepair)
       print("[DEBUG] SongLibrary.importFile: Repaired existing LibrarySong \(songToRepair.id)")
       return songToRepair
     }
@@ -1344,7 +1365,9 @@ extension Notification.Name {
       return nil
     }
 
-    let metadata = await AudioMetadataExtractor.extract(from: url)
+    let metadata = await Task.detached(priority: .userInitiated) {
+      await AudioMetadataExtractor.extract(from: url)
+    }.value
 
     // Check for companion .lrc file
     var songLyrics = metadata.lyrics
@@ -1459,6 +1482,68 @@ extension Notification.Name {
 
   // MARK: - Reindexing
 
+  /// Runs the upgraded local extractor over legacy rows that still look
+  /// incomplete. This is deliberately versioned and one-shot: it repairs old
+  /// imports without turning every launch into a full library rescan.
+  @discardableResult
+  private func repairLegacyEmbeddedMetadataIfNeeded() async -> Bool {
+    guard !UserDefaults.standard.bool(forKey: embeddedMetadataRepairKey),
+      let modelContext
+    else { return false }
+
+    let allSongs = (try? modelContext.fetch(FetchDescriptor<LibrarySong>())) ?? []
+    let candidates = allSongs.filter { song in
+      guard song.importedDate < embeddedMetadataRepairCutoff else { return false }
+
+      let album = song.album?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let genre = song.genre?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let unknownArtist = song.artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        .localizedCaseInsensitiveCompare("Unknown Artist") == .orderedSame
+      let likelyLegacyFLAC = song.fileName.lowercased().hasSuffix(".flac")
+        && (song.metadataSourceAlbum != "embedded"
+          || song.metadataSourceArtist != "embedded"
+          || song.metadataSourceTitle != "embedded")
+
+      return song.embeddedArtworkPath == nil
+        || album.isEmpty
+        || album.localizedCaseInsensitiveCompare("Unknown Album") == .orderedSame
+        || genre.isEmpty
+        || song.trackNumber == nil
+        || unknownArtist
+        || likelyLegacyFLAC
+    }
+
+    guard !candidates.isEmpty else {
+      UserDefaults.standard.set(true, forKey: embeddedMetadataRepairKey)
+      return false
+    }
+
+    print(
+      "[DEBUG] SongLibrary: Repairing embedded metadata for \(candidates.count) legacy songs"
+    )
+    let endBackgroundAssertion = Self.beginBackgroundAssertion?("Repair legacy metadata")
+    defer { endBackgroundAssertion?() }
+
+    let songIDs = candidates.map(\.id)
+    for (index, songID) in songIDs.enumerated() {
+      guard let song = self.song(id: songID) else { continue }
+      indexingStatus = .indexing(
+        "Repairing metadata (\(index + 1)/\(songIDs.count))…"
+      )
+      await refreshEmbeddedMetadata(for: song)
+
+      if index % 20 == 19 {
+        saveContext()
+      }
+      await Task.yield()
+    }
+
+    saveContext()
+    UserDefaults.standard.set(true, forKey: embeddedMetadataRepairKey)
+    print("[DEBUG] SongLibrary: Legacy embedded metadata repair completed")
+    return true
+  }
+
   func reindexMissingTechnicalMetadata() async {
     print(
       "[DEBUG] SongLibrary.reindexMissingTechnicalMetadata: Checking for songs with missing metadata"
@@ -1485,7 +1570,9 @@ extension Notification.Name {
       for (index, song) in missingSongs.enumerated() {
         let url = getFileURL(for: song)
         if fileManager.fileExists(atPath: url.path) {
-          let metadata = await AudioMetadataExtractor.extract(from: url)
+          let metadata = await Task.detached(priority: .utility) {
+            await AudioMetadataExtractor.extract(from: url)
+          }.value
           song.sampleRate = metadata.sampleRate
           song.bitDepth = metadata.bitDepth
           song.bitRate = metadata.bitRate
@@ -1672,13 +1759,12 @@ extension Notification.Name {
   var hasPendingMetadataWork: Bool {
     guard let modelContext = modelContext else { return false }
     let preferences = UserPreferences.getOrCreate(in: modelContext)
-    let descriptor = FetchDescriptor<LibrarySong>(
-      predicate: #Predicate<LibrarySong> { song in
-        song.metadataCheckAttempted == false
-      }
-    )
     if preferences.autoFetchMetadata,
-      ((try? modelContext.fetchCount(descriptor)) ?? 0) > 0
+      songs.contains(where: { song in
+        (!song.metadataCheckAttempted
+          || (song.metadataCheckAttempted && !song.metadataFetchSucceeded))
+          && hasMissingMetadata(song)
+      })
     {
       return true
     }
@@ -1980,7 +2066,9 @@ extension Notification.Name {
       return
     }
 
-    let metadata = await AudioMetadataExtractor.extract(from: url)
+    let metadata = await Task.detached(priority: .utility) {
+      await AudioMetadataExtractor.extract(from: url)
+    }.value
     let cachedEmbeddedArtworkPath: String?
     if let artwork = metadata.artwork {
       cachedEmbeddedArtworkPath = await cacheArtwork(artwork)
@@ -2039,17 +2127,47 @@ extension Notification.Name {
     if let path = cachedEmbeddedArtworkPath {
       song.embeddedArtworkPath = path
       let preferences = modelContext.map { UserPreferences.getOrCreate(in: $0) }
-      if song.artworkSource != .user, preferences?.preferOnlineArtwork != true {
+      let currentSongArtworkExists = song.artworkPath
+        .flatMap(PathManager.resolve)
+        .map { fileManager.fileExists(atPath: $0.path) } ?? false
+      if song.artworkSource != .user,
+        preferences?.preferOnlineArtwork != true || !currentSongArtworkExists
+      {
         song.artworkPath = path
         song.artworkSource = .embedded
         song.isRemoteArtwork = false
       }
       if let album = song.albumReference {
         if album.embeddedArtworkPath == nil { album.embeddedArtworkPath = path }
-        if album.artworkSource != .user, preferences?.preferOnlineArtwork != true {
+        let currentAlbumArtworkExists = album.artworkPath
+          .flatMap(PathManager.resolve)
+          .map { fileManager.fileExists(atPath: $0.path) } ?? false
+        if album.artworkSource != .user,
+          preferences?.preferOnlineArtwork != true || !currentAlbumArtworkExists
+        {
           album.artworkPath = album.embeddedArtworkPath ?? path
           album.artworkSource = .embedded
         }
+      }
+    }
+
+    // A repaired album tag must also repair the persisted relationship. Merely
+    // changing `song.album` leaves the track displayed under its old folder-
+    // derived album until a full reimport.
+    if let modelContext,
+      let repairedAlbum = getOrCreateAlbum(
+      name: song.album,
+      albumArtist: song.albumArtist,
+      trackArtist: song.artist,
+      isCompilation: metadata.isCompilation,
+      year: song.year,
+      artworkPath: song.artworkPath,
+      embeddedArtworkPath: song.embeddedArtworkPath,
+      in: modelContext
+    ), song.albumReference?.id != repairedAlbum.id {
+      song.albumReference = repairedAlbum
+      if !repairedAlbum.songs.contains(where: { $0.id == song.id }) {
+        repairedAlbum.songs.append(song)
       }
     }
 
@@ -2482,9 +2600,17 @@ extension Notification.Name {
     }
 
     do {
+      // The directory can disappear after a cache reset or app-group
+      // migration. Recreate it at the point of use instead of silently losing
+      // otherwise valid embedded artwork.
+      try fileManager.createDirectory(
+        at: artworkCacheDirectory,
+        withIntermediateDirectories: true
+      )
       try artworkData.write(to: artworkURL)
       return PathManager.relativePath(from: artworkURL.path)
     } catch {
+      print("[DEBUG] SongLibrary.cacheArtwork: Failed to cache artwork: \(error)")
       return nil
     }
   }
@@ -2674,27 +2800,34 @@ extension Notification.Name {
   func deleteSong(_ song: LibrarySong) {
     guard let modelContext = modelContext else { return }
 
-    // 1. Delete file only if it was copied into our internal library
-    if song.storageMode == .copied {
-      let url = getFileURL(for: song)
-      if fileManager.fileExists(atPath: url.path) {
-        print("[DEBUG] SongLibrary.deleteSong: Deleting copied file: \(url.path)")
-        try? fileManager.removeItem(at: url)
-      }
-    } else {
-      print("[DEBUG] SongLibrary.deleteSong: Skipping file deletion for referenced song")
+    // 1. Internal copies are always deleted. Referenced originals are only
+    // deleted after the user explicitly opts in from Settings.
+    deleteAudioFileIfRequested(for: song, modelContext: modelContext)
+    if song.storageMode == .referenced {
+      print("[DEBUG] SongLibrary.deleteSong: Recording referenced removal for live monitoring")
       ignoreForLiveMonitoring([song.fileHash])
     }
 
-    // 2. Remove from observable state before detaching its SwiftData backing.
-    removeSongsFromMemory(ids: Set([song.id]))
+    let deletedID = song.id
+    let albumRef = song.albumReference
+    let artistName = song.albumArtist ?? song.artist
+
+    // 2. Remove from the owning album and observable library before detaching
+    // the SwiftData backing. AlbumView can otherwise keep its old relationship
+    // snapshot until it is reopened.
+    albumRef?.songs.removeAll { $0.id == deletedID }
+    removeSongsFromMemory(ids: Set([deletedID]))
 
     // 3. Drop rows that reference the song by loose UUID. These have no
     // SwiftData relationship, so nothing cascades — without this they linger
     // forever and the deleted track keeps appearing in history and most-played.
-    let albumRef = song.albumReference
-    let artistName = song.albumArtist ?? song.artist
-    purgeSongReferences(ids: Set([song.id]))
+    let emptiedAlbumIDs: Set<UUID>
+    if let albumRef, albumRef.songs.isEmpty {
+      emptiedAlbumIDs = Set([albumRef.id])
+    } else {
+      emptiedAlbumIDs = []
+    }
+    purgeSongReferences(ids: Set([deletedID]), albumIDs: emptiedAlbumIDs)
 
     // 4. Remove from database
     modelContext.delete(song)
@@ -2704,10 +2837,64 @@ extension Notification.Name {
     pruneEmptyContainers(album: albumRef, artistName: artistName)
   }
 
+  private func deleteAudioFileIfRequested(
+    for song: LibrarySong,
+    modelContext: ModelContext
+  ) {
+    let shouldDelete = song.storageMode == .copied
+      || UserPreferences.getOrCreate(in: modelContext).deleteReferencedFilesOnRemoval
+    guard shouldDelete else { return }
+
+    let url = getFileURL(for: song)
+    let secured = song.storageMode == .referenced && url.startAccessingSecurityScopedResource()
+    defer { if secured { url.stopAccessingSecurityScopedResource() } }
+
+    guard fileManager.fileExists(atPath: url.path) else { return }
+    do {
+      try fileManager.removeItem(at: url)
+      print("[DEBUG] SongLibrary: Deleted audio file: \(url.path)")
+    } catch {
+      // The library entry can still be removed if an external provider denies
+      // deletion. The original remains intact and the failure is visible in
+      // development/TestFlight console diagnostics.
+      print("[ERROR] SongLibrary: Could not delete audio file at \(url.path): \(error)")
+    }
+  }
+
   /// Deletes rows keyed to `ids` that SwiftData won't cascade, because they
   /// store a bare `songId` rather than a relationship.
-  private func purgeSongReferences(ids: Set<UUID>) {
+  private func purgeSongReferences(ids: Set<UUID>, albumIDs: Set<UUID> = []) {
     guard let modelContext = modelContext, !ids.isEmpty else { return }
+
+    // Remove the songs from every relationship explicitly before SwiftData
+    // detaches their backing objects. Relying on `.nullify` alone updates the
+    // database, but views holding an already-fetched Playlist or RadioStation
+    // can keep rendering the old relationship until their next fetch.
+    if let playlists = try? modelContext.fetch(FetchDescriptor<Playlist>()) {
+      for playlist in playlists
+      where playlist.songOrder.contains(where: ids.contains)
+        || playlist.songs.contains(where: { ids.contains($0.id) })
+      {
+        playlist.songs.removeAll { ids.contains($0.id) }
+        playlist.songOrder.removeAll(where: ids.contains)
+      }
+    }
+    if let stations = try? modelContext.fetch(FetchDescriptor<RadioStation>()) {
+      for station in stations
+      where station.songOrder.contains(where: ids.contains)
+        || station.songs.contains(where: { ids.contains($0.id) })
+      {
+        station.songs.removeAll { ids.contains($0.id) }
+        station.songOrder.removeAll(where: ids.contains)
+
+        // Keep Home's radio artwork in sync with the surviving tracks too.
+        var seenArtwork = Set<String>()
+        station.artworkPaths = station.orderedSongs.compactMap(\.effectiveArtworkPath)
+          .filter { seenArtwork.insert($0).inserted }
+          .prefix(4)
+          .map { $0 }
+      }
+    }
 
     if let history = try? modelContext.fetch(FetchDescriptor<ListeningHistory>()) {
       for entry in history where ids.contains(entry.songId) {
@@ -2728,7 +2915,11 @@ extension Notification.Name {
     // The history tracker caches statistics by song id and lives in the app
     // target, which this file can't reference (it also compiles into the watch
     // app and the Lyrics extension). Tell it to drop its cache instead.
-    NotificationCenter.default.post(name: .songsWereDeleted, object: ids)
+    NotificationCenter.default.post(
+      name: .songsWereDeleted,
+      object: ids,
+      userInfo: ["albumIDs": albumIDs]
+    )
   }
 
   /// Removes an album or artist that the deletion just emptied, and refreshes
@@ -2777,37 +2968,31 @@ extension Notification.Name {
   func deleteAlbum(_ album: Album) {
     guard let modelContext = modelContext else { return }
 
+    let albumID = album.id
     let deletedSongIDs = Set(album.songs.map(\.id))
     ignoreReferencedSongsForLiveMonitoring(album.songs)
 
-    // 1. Delete all song files in the album only if they were copied
+    // 1. Delete internal copies, plus referenced originals only when the
+    // destructive opt-in is enabled.
     for song in album.songs {
-      if song.storageMode == .copied {
-        let url = getFileURL(for: song)
-        if fileManager.fileExists(atPath: url.path) {
-          try? fileManager.removeItem(at: url)
-        }
-      }
+      deleteAudioFileIfRequested(for: song, modelContext: modelContext)
     }
 
-    // 2. Remove cascaded songs from observable state before SwiftData detaches
-    // them, then remove the album from the database.
+    // 2. Remove cascaded songs and the album from observable state before
+    // SwiftData detaches them. Any grid currently showing this album then
+    // receives a library-version update with only live model objects left.
     let artistName = album.artist
+    albums.removeAll { $0.id == albumID }
     removeSongsFromMemory(ids: deletedSongIDs)
     // The album's songs cascade, but their history/stats/lyrics rows are keyed
     // by bare UUID and would otherwise survive the album.
-    purgeSongReferences(ids: deletedSongIDs)
+    purgeSongReferences(ids: deletedSongIDs, albumIDs: Set([albumID]))
     modelContext.delete(album)
     saveContext()
 
     pruneEmptyContainers(album: nil, artistName: artistName)
 
-    // 3. Update local state
-    if let index = albums.firstIndex(where: { $0.id == album.id }) {
-      albums.remove(at: index)
-    }
-
-    // Reload songs to reflect deletions
+    // 3. Reload songs to reconcile any provider-side relationship changes.
     Task {
       await loadSongs(force: true)
     }
@@ -2852,7 +3037,9 @@ extension Notification.Name {
     }
 
     // Songs never attempted yet (new imports from a previous session).
-    let neverAttempted = songs.filter { !$0.metadataCheckAttempted }
+    let neverAttempted = songs.filter {
+      !$0.metadataCheckAttempted && hasMissingMetadata($0)
+    }
 
     let targets = incompleteAttempted + neverAttempted
     guard !targets.isEmpty else {

@@ -11,6 +11,7 @@ struct AmpwaveEqualizerMark: View {
   var isAnimated: Bool
   var showsGlow: Bool = false
   var showsSheen: Bool = false
+  var monochromeColor: Color? = nil
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var beatIsHigh = false
@@ -29,7 +30,7 @@ struct AmpwaveEqualizerMark: View {
       HStack(alignment: .center, spacing: gap) {
         ForEach(barHeights.indices, id: \.self) { index in
           Capsule(style: .continuous)
-            .fill(barGradient)
+            .fill(barFill)
             .overlay(alignment: .top) {
               if showsSheen {
                 Capsule(style: .continuous)
@@ -72,16 +73,22 @@ struct AmpwaveEqualizerMark: View {
     .onChange(of: reduceMotion) { _, _ in updateAnimationState() }
   }
 
-  private var barGradient: LinearGradient {
-    LinearGradient(
-      colors: [
-        Color(red: 1.0, green: 0.43, blue: 0.71),
-        Color(red: 0.91, green: 0.24, blue: 0.54),
-        Color(red: 0.75, green: 0.13, blue: 0.42),
-      ],
-      startPoint: .topLeading,
-      endPoint: .bottomTrailing
-    )
+  private var barFill: AnyShapeStyle {
+    if let monochromeColor {
+      AnyShapeStyle(monochromeColor)
+    } else {
+      AnyShapeStyle(
+        LinearGradient(
+          colors: [
+            Color(red: 1.0, green: 0.43, blue: 0.71),
+            Color(red: 0.91, green: 0.24, blue: 0.54),
+            Color(red: 0.75, green: 0.13, blue: 0.42),
+          ],
+          startPoint: .topLeading,
+          endPoint: .bottomTrailing
+        )
+      )
+    }
   }
 
   private func updateAnimationState() {

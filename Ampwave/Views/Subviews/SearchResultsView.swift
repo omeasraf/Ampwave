@@ -18,6 +18,7 @@ struct SearchResultsView: View {
   @State private var searchTask: Task<Void, Never>?
 
   private var searchManager = SearchManager.shared
+  private var library: SongLibrary { SongLibrary.shared }
 
   init(query: String, filter: SearchView.SearchFilter, onResultTapped: @escaping () -> Void) {
     self.query = query
@@ -45,6 +46,7 @@ struct SearchResultsView: View {
     .background(themeManager.backgroundColor)
     .onChange(of: query) { _, _ in refreshResults() }
     .onChange(of: filter) { _, _ in refreshResults() }
+    .onChange(of: library.libraryVersion) { refreshResults() }
     .onAppear { refreshResults() }
     .onDisappear { searchTask?.cancel() }
   }

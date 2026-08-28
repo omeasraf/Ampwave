@@ -56,11 +56,16 @@ struct PlaylistArtworkView: View {
 
     return RoundedRectangle(cornerRadius: 8, style: .continuous)
       .fill(color.opacity(0.15))
-      .overlay(
-        Image(systemName: iconName)
-          .font(.system(size: size * 0.35))
-          .foregroundStyle(color)
-      )
+      .overlay {
+        if iconName == "music.note" {
+          AmpwaveEqualizerMark(isAnimated: false, monochromeColor: color)
+            .frame(width: size * 0.46, height: size * 0.31)
+        } else {
+          Image(systemName: iconName)
+            .font(.system(size: size * 0.35))
+            .foregroundStyle(color)
+        }
+      }
   }
 }
 

@@ -272,16 +272,17 @@ struct LibrarySortMenu: View {
 
 struct GenresGridView: View {
   @Environment(ThemeManager.self) private var themeManager
+  @AppStorage("com.ampwave.genreGridSize.v1") private var genreGridSizeRaw: String = "medium"
+  @State private var gridWidth: CGFloat = 400
   private var library: SongLibrary { SongLibrary.shared }
+
+  private var gridSize: LibraryGridSize {
+    LibraryGridSize(rawValue: genreGridSizeRaw) ?? .medium
+  }
 
   private var entries: [(name: String, count: Int)] {
     library.genreEntriesSortedByPopularity()
   }
-
-  private let columns = [
-    GridItem(.flexible(), spacing: 14),
-    GridItem(.flexible(), spacing: 14),
-  ]
 
   var body: some View {
     Group {
@@ -298,74 +299,128 @@ struct GenresGridView: View {
         .padding(.top, 48)
       } else {
         ScrollView {
-          LazyVGrid(columns: columns, spacing: 14) {
+          LazyVGrid(columns: gridSize.gridColumns, spacing: gridSize.rowSpacing) {
             ForEach(entries, id: \.name) { entry in
               NavigationLink {
                 GenreSongsView(genre: entry.name)
               } label: {
-                genreCell(name: entry.name, count: entry.count)
+                genreCell(
+                  name: entry.name,
+                  count: entry.count,
+                  width: gridSize.cellWidth(in: gridWidth)
+                )
               }
               .buttonStyle(.plain)
             }
           }
-          .padding(.horizontal, 20)
-          .padding(.top, 12)
+          .padding(.horizontal, gridSize.horizontalPadding)
+          .padding(.top, 16)
+          .padding(.bottom, 24)
         }
       }
     }
+    .background {
+      GeometryReader { geo in
+        Color.clear
+          .onChange(of: geo.size.width, initial: true) { _, width in
+            gridWidth = width
+          }
+      }
+    }
     .background(themeManager.backgroundColor)
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        GridSizePicker(selection: $genreGridSizeRaw, options: LibraryGridSize.pickerOptions)
+      }
+    }
   }
 
-  private func genreCell(name: String, count: Int) -> some View {
-    let colors = GenrePalette.gradient(for: name)
-    let icon = GenrePalette.icon(for: name)
-    return ZStack(alignment: .bottomLeading) {
-      // Main gradient
-      LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+  private func genreCell(name: String, count: Int, width: CGFloat) -> some View {
+    let artworkPath = representativeArtworkPath(for: name)
+    let compact = width < 120
+    return GeometryReader { proxy in
+      ZStack(alignment: .bottomLeading) {
+        if let artworkPath {
+          ArtworkImage(
+            artworkPath: artworkPath,
+            size: max(proxy.size.width, proxy.size.height),
+            cornerRadius: 0
+          )
+          .frame(width: proxy.size.width, height: proxy.size.height)
+          .clipped()
+        } else {
+          LinearGradient(
+            colors: [.gray.opacity(0.35), .gray.opacity(0.12)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+          )
+        }
 
-      // Specular highlight blob (top-right)
-      Circle()
-        .fill(Color.white.opacity(0.18))
-        .frame(width: 100, height: 100)
-        .blur(radius: 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .offset(x: 24, y: -28)
+        // A restrained accent wash keeps the artwork recognizable while giving
+        // the browse grid the cohesive, editorial look of Apple Music's cards.
+        LinearGradient(
+          colors: [
+            themeManager.accentColor.opacity(0.88),
+            themeManager.accentColor.opacity(0.42),
+            themeManager.accentColor.opacity(0.08),
+          ],
+          startPoint: .topLeading,
+          endPoint: .bottomTrailing
+        )
 
-      // Bottom scrim for text legibility
-      LinearGradient(
-        colors: [.clear, .black.opacity(0.55)],
-        startPoint: .center,
-        endPoint: .bottom
-      )
+        // Bottom scrim for text legibility
+        LinearGradient(
+          colors: [.clear, .black.opacity(0.62)],
+          startPoint: .center,
+          endPoint: .bottom
+        )
 
-      // Decorative genre icon (top-right, watermark style)
-      Image(systemName: icon)
-        .font(.system(size: 52, weight: .bold))
-        .foregroundStyle(.white.opacity(0.16))
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .padding(.trailing, 14)
-        .padding(.top, 12)
-
-      // Text
-      VStack(alignment: .leading, spacing: 4) {
-        Text(name)
-          .font(.title2.weight(.bold))
-          .foregroundStyle(.white)
-          .lineLimit(3)
-          .minimumScaleFactor(0.72)
-        Text("\(count) songs")
-          .font(.subheadline.weight(.medium))
-          .foregroundStyle(.white.opacity(0.9))
+        VStack(alignment: .leading, spacing: 3) {
+          Text(name)
+            .font(.system(size: compact ? 15 : 19, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .lineLimit(2)
+            .minimumScaleFactor(0.72)
+          Text("\(count) songs")
+            .font(.system(size: compact ? 10 : 12, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.88))
+        }
+        .padding(compact ? 10 : 14)
       }
-      .padding(16)
     }
-    .frame(maxWidth: .infinity, minHeight: 140)
+    .frame(width: width, height: width / 1.52)
     .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-    // Colored shadow — tinted with the genre's own palette color
-    .shadow(color: (colors.first ?? .black).opacity(0.42), radius: 14, x: 0, y: 7)
+    .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("\(name), \(count) songs")
     .accessibilityHint("View songs in this genre")
+  }
+
+  private func representativeArtworkPath(for genre: String) -> String? {
+    let needle = genre.lowercased()
+    let stats = ListeningHistoryTracker.shared.statisticsBySongId()
+    return library.songs
+      .filter { song in
+        guard let rawGenre = song.genre?.lowercased(), !rawGenre.isEmpty else {
+          return false
+        }
+        let parts = rawGenre
+          .components(separatedBy: CharacterSet(charactersIn: "/;,"))
+          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return parts.contains(needle) || rawGenre.contains(needle)
+      }
+      .sorted { lhs, rhs in
+        let lhsStats = stats[lhs.id]
+        let rhsStats = stats[rhs.id]
+        let lhsScore = Double(lhsStats?.userRating ?? 0) * 100
+          + Double(lhsStats?.playCount ?? 0)
+        let rhsScore = Double(rhsStats?.userRating ?? 0) * 100
+          + Double(rhsStats?.playCount ?? 0)
+        if lhsScore != rhsScore { return lhsScore > rhsScore }
+        return (lhs.effectiveArtworkPath != nil) && (rhs.effectiveArtworkPath == nil)
+      }
+      .compactMap(\.effectiveArtworkPath)
+      .first
   }
 }
 
@@ -657,7 +712,7 @@ struct ArtistsGridView: View {
       }
     }
     .background(themeManager.backgroundColor)
-    .task {
+    .task(id: library.libraryVersion) {
       await loadArtists()
     }
     .toolbar {

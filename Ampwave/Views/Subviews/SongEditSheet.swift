@@ -248,7 +248,7 @@ struct SongEditSheet: View {
         } header: {
           Text("Metadata Discovery")
         } footer: {
-          Text("Fetches title, artist, album, and year from MusicBrainz.")
+          Text("Uses Apple Music when access is available, then falls back to MusicBrainz.")
         }
         .listRowBackground(themeManager.cardBackgroundColor)
 
@@ -366,7 +366,12 @@ struct SongEditSheet: View {
       .tint(themeManager.accentColor)
       .navigationTitle("Edit Song")
       .sheet(isPresented: $isShowingArtworkSelection) {
-        ArtworkSelectionSheet(title: title, artist: artist, isPresented: $isShowingArtworkSelection)
+        ArtworkSelectionSheet(
+          title: title,
+          artist: artist,
+          album: album,
+          isPresented: $isShowingArtworkSelection
+        )
         { url in
           Task {
             if let data = await MetadataService.shared.performRequest(url: url) {
@@ -376,6 +381,7 @@ struct SongEditSheet: View {
                     artworkData = data
                     artworkImage = Image(uiImage: uiImage)
                     isRemoteArtwork = true
+                    artworkSource = .online
                     artworkPath = nil  // Clear current path since we have new data
                   }
                 }
@@ -385,6 +391,7 @@ struct SongEditSheet: View {
                     artworkData = data
                     artworkImage = Image(nsImage: nsImage)
                     isRemoteArtwork = true
+                    artworkSource = .online
                     artworkPath = nil
                   }
                 }
@@ -403,12 +410,14 @@ struct SongEditSheet: View {
                 artworkData = data
                 artworkImage = Image(uiImage: uiImage)
                 isRemoteArtwork = false
+                artworkSource = .user
               }
             #else
               if let nsImage = NSImage(data: data) {
                 artworkData = data
                 artworkImage = Image(nsImage: nsImage)
                 isRemoteArtwork = false
+                artworkSource = .user
               }
             #endif
           }
@@ -445,12 +454,14 @@ struct SongEditSheet: View {
                   artworkData = data
                   artworkImage = Image(uiImage: uiImage)
                   isRemoteArtwork = false
+                  artworkSource = .user
                 }
               #else
                 if let nsImage = NSImage(data: data) {
                   artworkData = data
                   artworkImage = Image(nsImage: nsImage)
                   isRemoteArtwork = false
+                  artworkSource = .user
                 }
               #endif
           }
@@ -504,15 +515,15 @@ struct SongEditSheet: View {
       .fill(Color.secondary.opacity(0.2))
       .frame(width: 80, height: 80)
       .overlay {
-        Image(systemName: "music.note")
-          .foregroundStyle(.secondary)
+        AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+          .frame(width: 34, height: 23)
       }
   }
 
   private var artworkSourceLabel: String {
     switch artworkSource {
     case .embedded: return "Embedded Artwork"
-    case .online: return "MusicBrainz Artwork"
+    case .online: return "Online Artwork"
     case .user: return "User Selected Artwork"
     }
   }
@@ -591,14 +602,14 @@ struct SongEditSheet: View {
     if artworkData != nil {
       if let newPath = cachedArtworkPath {
         song.artworkPath = newPath
-        song.artworkSource = .user
+        song.artworkSource = artworkSource
 
         // Update album artwork if primary
         if let album = song.albumReference,
           album.artworkPath == nil || album.songs.first?.id == song.id
         {
           album.artworkPath = newPath
-          album.artworkSource = .user
+          album.artworkSource = Album.ArtworkSource(rawValue: artworkSource.rawValue) ?? .user
         }
       }
     } else {

@@ -23,6 +23,7 @@ final class LyricsService {
   var modelContext: ModelContext?
   private let lrclibBaseURL = "https://lrclib.net/api"
   private let lyricsOvhBaseURL = "https://api.lyrics.ovh/v1"
+  private let amllBaseURL = "https://api.amll.dev/v1/lyrics"
   private let biniLyricsBaseURL = "https://lyrics-api.binimum.org"
   private let lyricsPlusBaseURLs = [
     "https://lyricsplus.binimum.org",
@@ -51,6 +52,10 @@ final class LyricsService {
   /// dead endpoint and pays the timeout each time.
   private var providerCooldowns: [String: Date] = [:]
   private let providerCooldownInterval: TimeInterval = 10 * 60
+  /// Attempts before the AMLL rollout did not query the current provider
+  /// chain, so let each affected song retry once instead of honoring an old
+  /// seven-day miss.
+  private let currentProviderGenerationStartedAt = Date(timeIntervalSince1970: 1_787_616_000)
 
   private init() {}
 
@@ -190,8 +195,9 @@ final class LyricsService {
     // Otherwise we try exactly once, then not again for a week. Without this,
     // a song with no lyrics upstream would hit every provider on every play.
     let recheckInterval: TimeInterval = 7 * 24 * 60 * 60
-    let triedRecently =
-      cached?.lastFetchAttemptAt.map { Date().timeIntervalSince($0) < recheckInterval } ?? false
+    let triedRecently = cached?.lastFetchAttemptAt.map {
+      $0 >= currentProviderGenerationStartedAt && Date().timeIntervalSince($0) < recheckInterval
+    } ?? false
 
     let canGoOnline =
       (forceRefresh || preferences.autoFetchLyrics)
@@ -339,11 +345,167 @@ final class LyricsService {
   }
 
   private func fetchFromWordSyncedProviders(song: LibrarySong) async -> SyncedLyric? {
+    // AMLL is an actively maintained, open TTML database with native
+    // word-level timing, so it gets first chance at new lyrics.
+    if let amllLyrics = await fetchFromAMLL(song: song) {
+      return amllLyrics
+    }
+
+    // Binimum still serves existing files, so retain its coverage as a
+    // fallback instead of making it Ampwave's primary catalog.
     if let biniLyrics = await fetchFromBiniLyrics(song: song) {
       return biniLyrics
     }
 
     return await fetchFromLyricsPlus(song: song)
+  }
+
+  private func fetchFromAMLL(song: LibrarySong) async -> SyncedLyric? {
+    // Native catalog IDs are exact and avoid fuzzy text matching entirely.
+    if let isrc = song.isrc?.trimmingCharacters(in: .whitespacesAndNewlines), !isrc.isEmpty,
+      let lines = await fetchAMLLLines(queryName: "isrc", value: isrc)
+    {
+      return SyncedLyric(songId: song.id, lines: lines, source: .amll, language: nil)
+    }
+    if let appleMusicId = appleMusicSongID(from: song.appleMusicURL),
+      let lines = await fetchAMLLLines(queryName: "appleMusicId", value: appleMusicId)
+    {
+      return SyncedLyric(songId: song.id, lines: lines, source: .amll, language: nil)
+    }
+
+    var searches: [URL] = []
+
+    // Album is a useful discriminator, but AMLL's search terms are combined
+    // with AND. Retry without it so a single/album naming difference does not
+    // hide otherwise exact title and artist matches.
+    for includeAlbum in [true, false] {
+      var components = URLComponents(string: "\(amllBaseURL)/search")!
+      var queryItems = [
+        URLQueryItem(name: "musicName", value: song.title),
+        URLQueryItem(name: "artistName", value: song.artist),
+        URLQueryItem(name: "pageSize", value: "10"),
+      ]
+      if includeAlbum, let album = song.album?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !album.isEmpty
+      {
+        queryItems.append(URLQueryItem(name: "albumName", value: album))
+      }
+      components.queryItems = queryItems
+      if let url = components.url, !searches.contains(url) { searches.append(url) }
+    }
+
+    var candidates: [AMLLSong] = []
+    for url in searches {
+      guard let result = await providerData(from: url), result.response.statusCode == 200,
+        let response = try? JSONDecoder().decode(AMLLSearchResponse.self, from: result.data),
+        response.status == 200
+      else { continue }
+      candidates.append(contentsOf: response.data?.items ?? [])
+      if !candidates.isEmpty { break }
+    }
+
+    let uniqueCandidates = Dictionary(grouping: candidates, by: \.id).compactMap(\.value.first)
+    let ranked = uniqueCandidates
+      .compactMap { candidate -> (AMLLSong, Double)? in
+        let score = amllMatchScore(candidate, song: song)
+        return score >= 1.25 ? (candidate, score) : nil
+      }
+      .sorted { $0.1 > $1.1 }
+
+    for (candidate, _) in ranked {
+      if let lines = await fetchAMLLLines(queryName: "id", value: String(candidate.id)) {
+        return SyncedLyric(songId: song.id, lines: lines, source: .amll, language: nil)
+      }
+    }
+
+    return nil
+  }
+
+  private func fetchAMLLLines(queryName: String, value: String) async -> [LyricLine]? {
+    var components = URLComponents(string: "\(amllBaseURL)/get")!
+    components.queryItems = [URLQueryItem(name: queryName, value: value)]
+    guard let url = components.url,
+      let result = await providerData(from: url),
+      result.response.statusCode == 200,
+      let response = try? JSONDecoder().decode(AMLLGetResponse.self, from: result.data),
+      response.status == 200,
+      let ttml = response.data?.lyrics
+    else { return nil }
+
+    let lines = TTMLLyricParser.parse(ttml)
+    return lines.contains(where: { ($0.wordOffsets?.count ?? 0) > 1 }) ? lines : nil
+  }
+
+  private func appleMusicSongID(from urlString: String?) -> String? {
+    guard let urlString, let components = URLComponents(string: urlString) else { return nil }
+    return components.queryItems?.first(where: { $0.name == "i" })?.value
+  }
+
+  private func amllMatchScore(_ candidate: AMLLSong, song: LibrarySong) -> Double {
+    let localISRC = song.isrc?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    if let localISRC, !localISRC.isEmpty,
+      (candidate.isrcs ?? []).contains(where: { $0.uppercased() == localISRC })
+    {
+      return 10
+    }
+    let titleScore = bestAMLLSimilarity(song.title, values: candidate.musicNames ?? [])
+    let listedArtists = candidate.artistNames ?? []
+    let artistValues = listedArtists
+      + (listedArtists.count > 1 ? [listedArtists.joined(separator: " ")] : [])
+    let artistScore = bestAMLLSimilarity(song.artist, values: artistValues)
+    guard titleScore >= 0.7, artistScore >= 0.55 else { return 0 }
+
+    var score = titleScore + artistScore
+    if let album = song.album, !album.isEmpty {
+      score += bestAMLLSimilarity(album, values: candidate.albumNames ?? []) * 0.35
+    }
+    return score
+  }
+
+  private func bestAMLLSimilarity(_ value: String, values: [String]) -> Double {
+    let target = normalizedLyricSearchText(value)
+    guard !target.isEmpty else { return 0 }
+    return values.map { candidate in
+      let normalized = normalizedLyricSearchText(candidate)
+      if normalized == target { return 1.0 }
+      if normalized.contains(target) || target.contains(normalized) { return 0.8 }
+      let lhs = Set(target.split(separator: " "))
+      let rhs = Set(normalized.split(separator: " "))
+      let union = lhs.union(rhs).count
+      return union == 0 ? 0 : Double(lhs.intersection(rhs).count) / Double(union)
+    }.max() ?? 0
+  }
+
+  private func normalizedLyricSearchText(_ value: String) -> String {
+    value
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(of: "[^a-z0-9 ]", with: " ", options: .regularExpression)
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+  }
+
+  private struct AMLLSearchResponse: Decodable {
+    let status: Int
+    let data: AMLLSearchData?
+  }
+
+  private struct AMLLSearchData: Decodable {
+    let items: [AMLLSong]
+  }
+
+  private struct AMLLGetResponse: Decodable {
+    let status: Int
+    let data: AMLLSong?
+  }
+
+  private struct AMLLSong: Decodable {
+    let id: Int64
+    let musicNames: [String]?
+    let artistNames: [String]?
+    let albumNames: [String]?
+    let isrcs: [String]?
+    let lyrics: String?
   }
 
   private func fetchFromBiniLyrics(song: LibrarySong) async -> SyncedLyric? {
@@ -352,9 +514,7 @@ final class LyricsService {
     if let isrc = song.isrc, !isrc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       var components = URLComponents(string: biniLyricsBaseURL)!
       components.queryItems = [URLQueryItem(name: "isrc", value: isrc)]
-      if let url = components.url {
-        queryURLs.append(url)
-      }
+      if let url = components.url { queryURLs.append(url) }
     }
 
     var components = URLComponents(string: biniLyricsBaseURL)!
@@ -362,41 +522,34 @@ final class LyricsService {
       URLQueryItem(name: "track", value: song.title),
       URLQueryItem(name: "artist", value: song.artist),
     ]
-
     if let album = song.album, !album.isEmpty {
       queryItems.append(URLQueryItem(name: "album", value: album))
     }
-
     if song.duration > 0 {
       queryItems.append(URLQueryItem(name: "duration", value: String(Int(song.duration))))
     }
-
     components.queryItems = queryItems
-    if let url = components.url {
-      queryURLs.append(url)
-    }
+    if let url = components.url { queryURLs.append(url) }
 
     for queryURL in queryURLs {
-      guard let result = await providerData(from: queryURL),
-        result.response.statusCode != 404
-      else { continue }
-
-      guard
+      guard let result = await providerData(from: queryURL), result.response.statusCode == 200,
         let object = try? JSONSerialization.jsonObject(with: result.data) as? [String: Any],
-        let results = object["results"] as? [[String: Any]],
-        let firstResult = results.first,
-        let lyricsURLString = firstResult["lyricsUrl"] as? String,
-        let lyricsURL = URL(string: lyricsURLString)
+        let results = object["results"] as? [[String: Any]]
       else { continue }
 
-      guard let ttmlResult = await providerData(from: lyricsURL),
-        ttmlResult.response.statusCode != 404,
+      // Prefer a word-timed result and do not blindly trust the first fuzzy
+      // match returned by the service.
+      let candidate = results.first(where: { ($0["timing_type"] as? String) == "word" })
+        ?? results.first
+      guard let lyricsURLString = candidate?["lyricsUrl"] as? String,
+        let lyricsURL = URL(string: lyricsURLString),
+        let ttmlResult = await providerData(from: lyricsURL),
+        ttmlResult.response.statusCode == 200,
         let ttml = String(data: ttmlResult.data, encoding: .utf8)
       else { continue }
 
       let lines = TTMLLyricParser.parse(ttml)
-      guard !lines.isEmpty else { continue }
-
+      guard lines.contains(where: { ($0.wordOffsets?.count ?? 0) > 1 }) else { continue }
       return SyncedLyric(songId: song.id, lines: lines, source: .biniLyrics, language: nil)
     }
 

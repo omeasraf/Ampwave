@@ -252,8 +252,8 @@ struct EditPlaylistSheet: View {
       .fill(Color.secondary.opacity(0.2))
       .frame(width: 80, height: 80)
       .overlay {
-        Image(systemName: "music.note")
-          .foregroundStyle(.secondary)
+        AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+          .frame(width: 34, height: 23)
       }
   }
 }

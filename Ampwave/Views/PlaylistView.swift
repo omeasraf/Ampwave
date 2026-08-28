@@ -391,8 +391,10 @@ struct PlaylistView: View {
 struct RadioStationView: View {
   let station: RadioStation
   @Environment(ThemeManager.self) private var themeManager
+  @State private var visibleSongs: [LibrarySong] = []
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
+  private var library: SongLibrary { SongLibrary.shared }
 
   var body: some View {
     List {
@@ -403,12 +405,12 @@ struct RadioStationView: View {
       .listRowInsets(EdgeInsets())
 
       Section {
-        ForEach(station.orderedSongs) { song in
+        ForEach(visibleSongs) { song in
           SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
             .contentShape(Rectangle())
             .onTapGesture {
-              let idx = station.orderedSongs.firstIndex(where: { $0.id == song.id }) ?? 0
-              playback.playQueue(station.orderedSongs, startingAt: idx, from: .radio)
+              let idx = visibleSongs.firstIndex(where: { $0.id == song.id }) ?? 0
+              playback.playQueue(visibleSongs, startingAt: idx, from: .radio)
             }
         }
       }
@@ -418,6 +420,12 @@ struct RadioStationView: View {
     .background(themeManager.backgroundColor)
     .scrollContentBackground(.hidden)
     .navigationTitle(station.name)
+    .onAppear { refreshVisibleSongs() }
+    .onChange(of: library.libraryVersion) { refreshVisibleSongs() }
+    .onReceive(NotificationCenter.default.publisher(for: .songsWereDeleted)) { notification in
+      guard let ids = notification.object as? Set<UUID> else { return }
+      visibleSongs.removeAll { ids.contains($0.id) }
+    }
     #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
     #endif
@@ -457,10 +465,10 @@ struct RadioStationView: View {
           .foregroundStyle(.tertiary)
       }
 
-      if !station.orderedSongs.isEmpty {
+      if !visibleSongs.isEmpty {
         HStack(spacing: 16) {
           Button {
-            playback.playQueue(station.orderedSongs, from: .radio)
+            playback.playQueue(visibleSongs, from: .radio)
           } label: {
             HStack {
               Image(systemName: "play.fill")
@@ -476,7 +484,7 @@ struct RadioStationView: View {
 
           Button {
             playback.shuffleMode = .on
-            playback.playQueue(station.orderedSongs.shuffled(), from: .radio)
+            playback.playQueue(visibleSongs.shuffled(), from: .radio)
           } label: {
             HStack {
               Image(systemName: "shuffle")
@@ -513,8 +521,13 @@ struct RadioStationView: View {
     playlistManager.createPlaylist(
       name: station.name + " (Radio)",
       description: "Saved from your personal radio station on \(Date().formatted(date: .numeric, time: .omitted))",
-      songs: station.orderedSongs
+      songs: visibleSongs
     )
+  }
+
+  private func refreshVisibleSongs() {
+    let liveIDs = Set(library.songs.map(\.id))
+    visibleSongs = station.orderedSongs.filter { liveIDs.contains($0.id) }
   }
 }
 

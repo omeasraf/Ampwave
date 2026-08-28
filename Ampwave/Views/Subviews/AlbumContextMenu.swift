@@ -5,6 +5,7 @@
 //  Reusable context menu actions for album-based views.
 //
 
+import SwiftData
 internal import SwiftUI
 
 struct AlbumContextMenuModifier: ViewModifier {
@@ -15,6 +16,7 @@ struct AlbumContextMenuModifier: ViewModifier {
   @State private var isDeletingShown = false
   @State private var showArtist = false
   @State private var showAlbum = false
+  @Query private var userPreferences: [UserPreferences]
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -118,17 +120,21 @@ struct AlbumContextMenuModifier: ViewModifier {
         isPresented: $isDeletingShown,
         titleVisibility: .visible
       ) {
-        Button(albumHasCopiedFiles ? "Delete Album" : "Remove from Library", role: .destructive) {
+        Button(albumDeletesAudioFiles ? "Delete Album" : "Remove from Library", role: .destructive) {
           library.deleteAlbum(album)
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        // An album can mix storage modes, so only promise file deletion when
-        // at least one track actually lives in the app's own storage.
         let count = album.songs.count
-        if albumHasCopiedFiles {
+        let copiedCount = album.songs.count { $0.storageMode == .copied }
+        let referencedCount = count - copiedCount
+        if deletesReferencedOriginals && referencedCount > 0 {
           Text(
-            "\(count) song\(count == 1 ? "" : "s") will be removed from Ampwave, and their audio files deleted from your device."
+            "\(count) song\(count == 1 ? "" : "s") will be removed from Ampwave. Their original referenced files and any Ampwave copies will be permanently deleted."
+          )
+        } else if copiedCount > 0 {
+          Text(
+            "\(count) song\(count == 1 ? "" : "s") will be removed from Ampwave. \(copiedCount) copied audio file\(copiedCount == 1 ? "" : "s") will be deleted; referenced originals will stay where they are."
           )
         } else {
           Text(
@@ -142,6 +148,15 @@ struct AlbumContextMenuModifier: ViewModifier {
   /// so has a file that deletion will actually remove.
   private var albumHasCopiedFiles: Bool {
     album.songs.contains { $0.storageMode == .copied }
+  }
+
+  private var deletesReferencedOriginals: Bool {
+    userPreferences.first?.deleteReferencedFilesOnRemoval ?? false
+  }
+
+  private var albumDeletesAudioFiles: Bool {
+    albumHasCopiedFiles
+      || (deletesReferencedOriginals && album.songs.contains { $0.storageMode == .referenced })
   }
 
   private func toggleAlbumFavorite() {
@@ -171,6 +186,7 @@ struct SongContextMenuModifier: ViewModifier {
   @State private var isDeletingShown = false
   @State private var showArtist = false
   @State private var showAlbum = false
+  @Query private var userPreferences: [UserPreferences]
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -327,7 +343,7 @@ struct SongContextMenuModifier: ViewModifier {
         isPresented: $isDeletingShown,
         titleVisibility: .visible
       ) {
-        Button(song.storageMode == .copied ? "Delete Song" : "Remove from Library",
+        Button(songDeletesAudioFile ? "Delete Song" : "Remove from Library",
           role: .destructive
         ) {
           if let onDelete {
@@ -338,14 +354,13 @@ struct SongContextMenuModifier: ViewModifier {
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        // The wording has to follow the storage mode. Deletion only touches
-        // the audio file for songs copied into the app; a referenced song's
-        // file lives in the user's own storage and is deliberately left alone.
-        // Claiming "from your library and device" either way was wrong in one
-        // direction and alarming in the other.
         if song.storageMode == .copied {
           Text(
             "The audio file will be deleted from your device, along with this song's play history and lyrics."
+          )
+        } else if deletesReferencedOriginals {
+          Text(
+            "This removes the song from Ampwave and permanently deletes the original referenced audio file, along with its play history and lyrics."
           )
         } else {
           Text(
@@ -353,6 +368,14 @@ struct SongContextMenuModifier: ViewModifier {
           )
         }
       }
+  }
+
+  private var deletesReferencedOriginals: Bool {
+    userPreferences.first?.deleteReferencedFilesOnRemoval ?? false
+  }
+
+  private var songDeletesAudioFile: Bool {
+    song.storageMode == .copied || deletesReferencedOriginals
   }
 }
 

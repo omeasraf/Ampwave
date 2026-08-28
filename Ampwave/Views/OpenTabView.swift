@@ -134,16 +134,27 @@ struct OpenTabView: View {
     .onChange(of: AppNavigator.shared.libraryPath) { oldPath, newPath in
       if newPath.count > oldPath.count { selectedTab = .library }
     }
-    .onReceive(NotificationCenter.default.publisher(for: .libraryDidReset)) { _ in
+    .onReceive(NotificationCenter.default.publisher(for: .libraryDidReset)) { notification in
+      let isPreparingForReset =
+        (notification.object as? [String: String])?["phase"] == "willReset"
+
       // 1. Tear down every tab's NavigationStack and jump to Home.
       //    Incrementing the ID forces SwiftUI to recreate all tab content views,
       //    clearing navigation stacks and flushing any stale @State referencing old data.
-      libraryResetID += 1
-      selectedTab = .home
       // The path holds references to deleted models; recreating the tab isn't
-      // enough because the navigator outlives it.
+      // enough because the navigator outlives it. During the preparation phase
+      // clear that path but keep the current Settings view alive so its
+      // non-dismissible reset progress overlay remains visible.
       AppNavigator.shared.reset()
 
+      guard !isPreparingForReset else { return }
+
+      libraryResetID += 1
+      selectedTab = .home
+
+      // The reset posts once before deleting SwiftData rows and once after the
+      // new empty library has been loaded. Only the completion notification
+      // should present onboarding.
       // 2. Show onboarding after a short delay so the tab recreation animation
       //    completes first. Presenting it here (on the stable OpenTabView) is
       //    reliable; setting it on SettingsView fails because SettingsView itself

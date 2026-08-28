@@ -92,9 +92,9 @@ struct ContentView: View {
     try? await Task.sleep(nanoseconds: nanoseconds)
   }
 
-  /// Loads only the state needed to reveal the app. Keeping the tab hierarchy
-  /// unmounted prevents Home recommendation tasks from competing with the
-  /// splash animation during launch.
+  /// Loads and reconciles the local library before revealing the app. Keeping
+  /// the tab hierarchy unmounted prevents Home recommendation tasks from
+  /// competing with the splash animation during launch.
   private func initializeServices() async {
     guard !servicesInitialized else { return }
     servicesInitialized = true
@@ -109,32 +109,29 @@ struct ContentView: View {
     LyricsService.shared.setModelContext(modelContext)
     MetadataService.shared.setModelContext(modelContext)
     RecommendationEngine.shared.setModelContext(modelContext)
+    RadioMixGenerator.shared.setModelContext(modelContext)
     UserPreferences.sharedContextForNetworkCheck = modelContext
     LastFMScrobbler.shared.setModelContext(modelContext)
     WatchSyncService.shared.setModelContext(modelContext)
     _ = UserPreferences.getOrCreate(in: modelContext)
     WidgetSyncService.shared.refreshTheme()
 
-    // Fetch the visible library without running duplicate-maintenance passes;
-    // those are deferred until after the splash transition.
+    // Fetch the visible library, reconcile Ampwave's managed directory, then
+    // reconcile live-monitored folders while the launch animation remains on
+    // screen. Network metadata is deliberately deferred below.
     await SongLibrary.shared.loadSongs(performMaintenance: false)
+    await SongLibrary.shared.indexOnStartup(performAutomaticMetadataFetch: false)
+    await LibraryMonitorService.shared.startAndWaitForInitialReconciliation()
     PlaybackController.shared.setModelContext(modelContext)
+    PlaybackController.shared.restoreStateAfterLoading()
   }
 
   private func startDeferredServices() {
     Task {
-      // Let the splash fade finish before starting maintenance that publishes
-      // large library changes back to SwiftUI.
+      // Let the splash fade finish before beginning optional online work.
       try? await Task.sleep(nanoseconds: 500_000_000)
 
-      // Finish the managed-folder reconciliation before the monitor performs
-      // its foreground fallback. This avoids two import passes racing over the
-      // same newly copied files at launch.
-      await Task.detached(priority: .background) {
-        await SongLibrary.shared.indexOnStartup()
-      }.value
-      LibraryMonitorService.shared.start()
-
+      guard SongLibrary.shared.hasPendingMetadataWork else { return }
       Task.detached(priority: .background) {
         await SongLibrary.shared.resumeIncompleteMetadataFetches()
       }

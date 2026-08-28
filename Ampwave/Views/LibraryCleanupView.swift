@@ -78,7 +78,7 @@ struct MissingFilesView: View {
     #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
     #endif
-    .task { scan() }
+    .task(id: library.libraryVersion) { scan() }
   }
 
   private func scan() {

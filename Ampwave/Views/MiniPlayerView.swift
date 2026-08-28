@@ -68,9 +68,8 @@ struct MiniPlayerView: View {
           }
           .buttonStyle(.plain)
         } else {
-          Image(systemName: "music.note")
-            .font(.system(size: 18))
-            .foregroundStyle(.secondary)
+          AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+            .frame(width: 20, height: 14)
             .frame(width: 36, height: 36)
         }
       }

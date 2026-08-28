@@ -341,6 +341,10 @@ final class UserPreferences: Identifiable {
   var autoFetchLyrics: Bool
   var wordSyncedLyricsEnabled: Bool = false
   var copyMusicToStorage: Bool = true
+  /// When enabled, removing a referenced song from Ampwave also deletes the
+  /// external audio file. Defaults to false because this is destructive and
+  /// may affect folders synchronized with another device.
+  var deleteReferencedFilesOnRemoval: Bool = false
   var preferOnlineArtwork: Bool
   var organizeByAlbum: Bool
 
@@ -616,6 +620,7 @@ final class UserPreferences: Identifiable {
     self.autoFetchLyrics = onboardingBool("com.ampwave.onboarding.autoFetchLyrics", default: true)
     self.wordSyncedLyricsEnabled = true
     self.copyMusicToStorage = onboardingBool("com.ampwave.onboarding.copyToStorage", default: true)
+    self.deleteReferencedFilesOnRemoval = false
     self.preferOnlineArtwork = false
     self.organizeByAlbum = true
     self.isOfflineMode = false

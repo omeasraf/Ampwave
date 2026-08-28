@@ -188,9 +188,8 @@ struct NowPlayingWidgetView: View {
         startPoint: .topLeading,
         endPoint: .bottomTrailing
       )
-      Image(systemName: "music.note")
-        .font(.system(size: 42, weight: .medium))
-        .foregroundStyle(.white.opacity(0.9))
+      WidgetAmpwaveMark(color: .white.opacity(0.9))
+        .frame(width: 64, height: 42)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .accessibilityHidden(true)
@@ -284,8 +283,8 @@ struct NowPlayingWidgetView: View {
   private func artworkThumbnailPlaceholder(_ info: SharedPlaybackInfo, size: CGFloat) -> some View {
     ZStack {
       WidgetPalette.accent(info).opacity(0.3)
-      Image(systemName: "music.note")
-        .font(.system(size: 22, weight: .semibold))
+      WidgetAmpwaveMark(color: .primary.opacity(0.82))
+        .frame(width: size * 0.54, height: size * 0.34)
     }
     .frame(width: size, height: size)
     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -583,6 +582,27 @@ struct NowPlayingWidgetView: View {
   #endif
 }
 
+private struct WidgetAmpwaveMark: View {
+  let color: Color
+  private let heights: [CGFloat] = [0.40, 0.64, 0.85, 1.00, 0.75, 0.55, 0.80, 0.60, 0.35]
+
+  var body: some View {
+    GeometryReader { geometry in
+      let gap = max(geometry.size.width * 0.025, 0.5)
+      let barWidth = (geometry.size.width - gap * CGFloat(heights.count - 1))
+        / CGFloat(heights.count)
+      HStack(alignment: .center, spacing: gap) {
+        ForEach(heights.indices, id: \.self) { index in
+          Capsule(style: .continuous)
+            .fill(color)
+            .frame(width: barWidth, height: geometry.size.height * heights[index])
+        }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+  }
+}
+
 private struct WidgetWavyProgressShape: Shape {
   let endX: CGFloat
   let phase: TimeInterval
@@ -600,7 +620,7 @@ private struct WidgetWavyProgressShape: Shape {
 
     let wavelength: CGFloat = 14
     let amplitude: CGFloat = 2.5
-    let step: CGFloat = 1
+    let step: CGFloat = 0.5
     let initialPhase = CGFloat(phase)
 
     path.move(to: CGPoint(x: 0, y: centerY + sin(initialPhase) * amplitude))

@@ -201,18 +201,23 @@ struct HomeView: View {
     .refreshable {
       await loadData(forceRefresh: true)
     }
-    .onChange(of: library.songs) {
+    .onChange(of: library.libraryVersion) {
       print(
-        "[DEBUG] HomeView.onChange(library.songs) - Updating recommendations"
+        "[DEBUG] HomeView.onChange(libraryVersion) - Updating recommendations"
       )
       refreshHomeSections()
       Task {
-        await recommendationEngine.generateAllRecommendations()
+        await recommendationEngine.generateAllRecommendations(forceRefresh: true)
         forYouRecommendations =
           recommendationEngine.forYouRecommendations
         genreRecommendations =
           recommendationEngine.genreRecommendations
       }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .songsWereDeleted)) { notification in
+      guard let ids = notification.object as? Set<UUID> else { return }
+      let albumIDs = notification.userInfo?["albumIDs"] as? Set<UUID> ?? []
+      removeDeletedContentImmediately(songIDs: ids, albumIDs: albumIDs)
     }
     .onChange(of: scenePhase) {
       if scenePhase == .active {
@@ -368,6 +373,34 @@ struct HomeView: View {
     radioMixes = RadioMixGenerator.shared.fetchOrCreateMixes()
     rediscoverSongs = computeRediscover()
   }
+
+  /// The deletion notification is posted before SwiftData detaches the song,
+  /// letting every cached Home shelf drop it safely in the same run-loop turn.
+  /// The library-version handler above then rebuilds recommendations from the
+  /// surviving library.
+  private func removeDeletedContentImmediately(
+    songIDs: Set<UUID>,
+    albumIDs: Set<UUID>
+  ) {
+    recentlyPlayedSongs.removeAll { songIDs.contains($0.id) }
+    mostPlayedSongs.removeAll { songIDs.contains($0.song.id) }
+    rediscoverSongs.removeAll { songIDs.contains($0.id) }
+    forYouRecommendations.removeAll { recommendation in
+      switch recommendation.item {
+      case .song(let song): return songIDs.contains(song.id)
+      case .album(let album): return albumIDs.contains(album.id)
+      default: return false
+      }
+    }
+    genreRecommendations.removeAll { recommendation in
+      switch recommendation.item {
+      case .song(let song): return songIDs.contains(song.id)
+      case .album(let album): return albumIDs.contains(album.id)
+      default: return false
+      }
+    }
+    refreshHomeSections()
+  }
 }
 
 // MARK: - Horizontal Song Section
@@ -409,7 +442,6 @@ struct HorizontalSongSection: View {
       }
     }
     .padding(.vertical, 8)
-    .background(themeManager.backgroundColor)
   }
 }
 
@@ -436,33 +468,13 @@ struct SongCard: View {
       }
       .frame(width: 140, alignment: .leading)
     }
-    .padding(themeManager.coloredSurfaces ? 10 : 4)
-    .background {
-      if themeManager.coloredSurfaces {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
-          .fill(songCardBackground)
-          .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-              .stroke(.white.opacity(0.06), lineWidth: 1)
-          }
-      }
-    }
+    .padding(4)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(song.title), \(song.artist)")
     .accessibilityHint("Plays this song")
     .songContextMenu(song: song)
   }
 
-  private var songCardBackground: some ShapeStyle {
-    LinearGradient(
-      colors: [
-        themeManager.cardBackgroundColor.opacity(0.94),
-        themeManager.backgroundColor.opacity(0.82),
-      ],
-      startPoint: .topLeading,
-      endPoint: .bottomTrailing
-    )
-  }
 }
 
 // MARK: - Recommendations Section
@@ -605,8 +617,7 @@ struct RecommendationCard: View {
       }
       .frame(width: 160, height: 60, alignment: .topLeading)
     }
-    .padding(10)
-    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    .padding(4)
   }
 }
 
@@ -647,7 +658,6 @@ struct RadioMixesSection: View {
       }
     }
     .padding(.vertical, 8)
-    .background(themeManager.backgroundColor)
   }
 }
 
@@ -690,6 +700,7 @@ struct RadioMixCard: View {
 struct GenrePicksSection: View {
   let recommendations: [Recommendation]
   @Environment(ThemeManager.self) private var themeManager
+  private let library = SongLibrary.shared
 
   private var genreRows: [(display: String, key: String)] {
     var seen = Set<String>()
@@ -733,19 +744,33 @@ struct GenrePicksSection: View {
       }
     }
     .padding(.vertical, 8)
-    .background(themeManager.backgroundColor)
   }
 
   private func genreTile(title: String) -> some View {
-    let colors = GenrePalette.gradient(for: title)
+    let artworkSongs = topSongs(for: title)
     return ZStack(alignment: .bottomLeading) {
+      if let artworkPath = artworkSongs.first?.effectiveArtworkPath {
+        ArtworkImage(artworkPath: artworkPath, size: 168, cornerRadius: 0)
+          .frame(width: 168, height: 112)
+          .clipped()
+      } else {
+        LinearGradient(
+          colors: [.gray.opacity(0.35), .gray.opacity(0.12)],
+          startPoint: .topLeading,
+          endPoint: .bottomTrailing
+        )
+      }
       LinearGradient(
-        colors: colors,
+        colors: [
+          themeManager.accentColor.opacity(0.88),
+          themeManager.accentColor.opacity(0.42),
+          themeManager.accentColor.opacity(0.08),
+        ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
       )
       LinearGradient(
-        colors: [.black.opacity(0.05), .black.opacity(0.38)],
+        colors: [.black.opacity(0.02), .black.opacity(0.72)],
         startPoint: .top,
         endPoint: .bottom
       )
@@ -761,6 +786,36 @@ struct GenrePicksSection: View {
     .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
     .accessibilityLabel("\(title), genre")
     .accessibilityHint("View songs in this genre")
+  }
+
+  /// Prefer artwork from the user's own library. Ranking by rating and play
+  /// history gives each genre the album art that feels most representative,
+  /// without requiring a network request or MusicKit authorization.
+  private func topSongs(for genre: String) -> [LibrarySong] {
+    let needle = genre.lowercased()
+    let stats = ListeningHistoryTracker.shared.statisticsBySongId()
+    return library.songs
+      .filter { song in
+        guard let songGenre = song.genre?.lowercased(), !songGenre.isEmpty else {
+          return false
+        }
+        let parts = songGenre
+          .components(separatedBy: CharacterSet(charactersIn: "/;,"))
+          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return parts.contains(needle) || songGenre.contains(needle)
+      }
+      .sorted { lhs, rhs in
+        let lhsStats = stats[lhs.id]
+        let rhsStats = stats[rhs.id]
+        let lhsScore = Double(lhsStats?.userRating ?? 0) * 100
+          + Double(lhsStats?.playCount ?? 0)
+        let rhsScore = Double(rhsStats?.userRating ?? 0) * 100
+          + Double(rhsStats?.playCount ?? 0)
+        if lhsScore != rhsScore { return lhsScore > rhsScore }
+        return (lhs.effectiveArtworkPath != nil) && (rhs.effectiveArtworkPath == nil)
+      }
+      .prefix(4)
+      .map { $0 }
   }
 }
 
@@ -868,7 +923,6 @@ struct QuickAccessButton: View {
         Spacer()
       }
       .padding(16)
-      .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
     .buttonStyle(.plain)
   }

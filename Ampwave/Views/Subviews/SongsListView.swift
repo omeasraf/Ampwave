@@ -62,7 +62,7 @@ struct SongsListView: View {
 
   /// Changes when sort order or library size changes — triggers a re-sort.
   private var sortCacheKey: String {
-    "\(appSettings.songSortOrder.rawValue)-\(library.songs.count)"
+    "\(appSettings.songSortOrder.rawValue)-\(library.libraryVersion)"
   }
 
   var body: some View {

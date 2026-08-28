@@ -31,9 +31,8 @@ struct AlbumArtworkView: View {
             )
           )
           .overlay(
-            Image(systemName: "music.note")
-              .font(.system(size: size * 0.25))
-              .foregroundStyle(.secondary)
+            AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+              .frame(width: size * 0.42, height: size * 0.28)
           )
       }
     }

@@ -36,11 +36,14 @@ final class RadioMixGenerator {
     let descriptor = FetchDescriptor<RadioStation>()
     let existing = (try? context.fetch(descriptor)) ?? []
     
-    // If we have existing stations, check if they need refresh
+    // A library reset or song cleanup can nullify every relationship while
+    // leaving the station row itself behind. Such a station still renders a
+    // Home card but opens to an empty list, so treat it as stale immediately.
     if !existing.isEmpty {
       let now = Date()
       let needsRefresh = existing.contains { station in
-        now.timeIntervalSince(station.lastUpdated) > refreshThreshold
+        station.orderedSongs.isEmpty
+          || now.timeIntervalSince(station.lastUpdated) > refreshThreshold
       }
       
       if !needsRefresh {
@@ -144,6 +147,11 @@ final class RadioMixGenerator {
       stations.append(station)
     }
 
+    do {
+      try context.save()
+    } catch {
+      print("[DEBUG] RadioMixGenerator: Failed to save generated stations: \(error)")
+    }
     return stations
   }
 

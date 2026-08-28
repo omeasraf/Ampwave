@@ -16,6 +16,80 @@ import MusicKit
 import SwiftData
 internal import SwiftUI
 
+/// Finds unusually long, effectively-silent tails without changing the audio
+/// file. This is deliberately conservative: short pauses and normal mastering
+/// space remain intact, while multi-second digital-silence tails can be skipped
+/// by the existing Gapless Playback feature.
+private enum GaplessSilenceAnalyzer {
+  nonisolated private static let analysisWindow: TimeInterval = 12
+  nonisolated private static let minimumTailToTrim: TimeInterval = 1
+  nonisolated private static let retainedTail: TimeInterval = 0.18
+  nonisolated private static let windowDuration: TimeInterval = 0.02
+  // -32 dBFS. This catches the effectively silent five-second tail in the
+  // reported FLAC while leaving audible fades and room tone alone.
+  nonisolated private static let audibleRMS: Float = 0.025
+
+  nonisolated static func trailingPlaybackEnd(for url: URL) async -> TimeInterval? {
+    await Task.detached(priority: .utility) {
+      do {
+        let file = try AVAudioFile(forReading: url)
+        let format = file.processingFormat
+        let sampleRate = format.sampleRate
+        guard sampleRate > 0, file.length > 0 else { return nil }
+
+        let framesToRead = min(
+          file.length,
+          AVAudioFramePosition((analysisWindow * sampleRate).rounded(.up))
+        )
+        let startFrame = max(0, file.length - framesToRead)
+        file.framePosition = startFrame
+
+        guard let buffer = AVAudioPCMBuffer(
+          pcmFormat: format,
+          frameCapacity: AVAudioFrameCount(framesToRead)
+        ) else { return nil }
+        try file.read(into: buffer, frameCount: AVAudioFrameCount(framesToRead))
+        guard buffer.frameLength > 0, let channels = buffer.floatChannelData else { return nil }
+
+        let frameCount = Int(buffer.frameLength)
+        let channelCount = Int(format.channelCount)
+        let windowFrames = max(1, Int((windowDuration * sampleRate).rounded()))
+        var lastAudibleFrame: Int?
+        var windowEnd = frameCount
+
+        while windowEnd > 0 {
+          let windowStart = max(0, windowEnd - windowFrames)
+          var sumSquares: Float = 0
+          var sampleCount = 0
+          for channel in 0..<channelCount {
+            let samples = channels[channel]
+            for frame in windowStart..<windowEnd {
+              let sample = samples[frame]
+              sumSquares += sample * sample
+              sampleCount += 1
+            }
+          }
+          let rms = sampleCount > 0 ? sqrt(sumSquares / Float(sampleCount)) : 0
+          if rms >= audibleRMS {
+            lastAudibleFrame = windowEnd
+            break
+          }
+          windowEnd = windowStart
+        }
+
+        guard let lastAudibleFrame else { return nil }
+        let fullDuration = Double(file.length) / sampleRate
+        let lastAudibleTime = Double(startFrame + AVAudioFramePosition(lastAudibleFrame)) / sampleRate
+        let silentTail = fullDuration - lastAudibleTime
+        guard silentTail >= minimumTailToTrim else { return nil }
+        return min(fullDuration, lastAudibleTime + retainedTail)
+      } catch {
+        return nil
+      }
+    }.value
+  }
+}
+
 /// A deliberately tiny observable clock for karaoke rendering.
 ///
 /// General playback UI only needs a few updates per second, while word-synced
@@ -57,7 +131,12 @@ final class PlaybackController {
   private var player: AVQueuePlayer?
   private var timeObserver: (observer: Any, player: AVPlayer)?
   private var lyricTimeObserver: (observer: Any, player: AVPlayer)?
-  private var itemObservers: [NSKeyValueObservation] = []
+  private var playerObservers: [NSKeyValueObservation] = []
+  private var itemObservers: [ObjectIdentifier: [NSKeyValueObservation]] = [:]
+  private var itemSongIDs: [ObjectIdentifier: UUID] = [:]
+  private var authoritativeItemDurations: [ObjectIdentifier: TimeInterval] = [:]
+  private var gaplessPlaybackEndTimes: [ObjectIdentifier: TimeInterval] = [:]
+  private var itemSecurityScopedURLs: [ObjectIdentifier: URL] = [:]
   private let library = SongLibrary.shared
   private let historyTracker = ListeningHistoryTracker.shared
   private var audioSessionConfigured = false
@@ -70,12 +149,28 @@ final class PlaybackController {
   // MARK: - Playback State
 
   private(set) var currentItem: LibrarySong?
-  var currentTime: TimeInterval = 0
+  var currentTime: TimeInterval = 0 {
+    didSet {
+      currentTimeAnchorUptime = ProcessInfo.processInfo.systemUptime
+    }
+  }
+  @ObservationIgnored
+  private var currentTimeAnchorUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
   private(set) var duration: TimeInterval = 0
   private(set) var isPlaying: Bool = false
   private(set) var isLoading: Bool = false
   var isScrubbing: Bool = false
   private(set) var isSeeking: Bool = false
+
+  /// Smooth UI-only playback time between AVPlayer's lower-frequency samples.
+  /// The authoritative `currentTime` is still replaced by each real player
+  /// sample, so interpolation can never drift over time.
+  func interpolatedCurrentTime() -> TimeInterval {
+    guard isPlaying, !isScrubbing, !isSeeking else { return currentTime }
+    let elapsed = ProcessInfo.processInfo.systemUptime - currentTimeAnchorUptime
+    let projected = currentTime + min(max(elapsed, 0), 0.75)
+    return projected
+  }
 
   var volume: Float = 1.0 {
     didSet {
@@ -157,11 +252,32 @@ final class PlaybackController {
     get { currentVocalLevel }
     set {
       let clamped = min(max(newValue, 0), 1)
+      let needsTap = currentVocalLevel >= 0.999 && clamped < 0.999
       currentVocalLevel = clamped
       VocalIsolator.shared.vocalLevel = clamped
 
+      if needsTap {
+        attachAudioProcessingToCurrentItemIfNeeded()
+      }
+
       if isVocalSliderVisible {
         resetVocalSliderTimer()
+      }
+    }
+  }
+
+  private func attachAudioProcessingToCurrentItemIfNeeded() {
+    guard let item = player?.currentItem, item.audioMix == nil else { return }
+    Task { @MainActor [weak self, weak item] in
+      guard let self, let item else { return }
+      do {
+        guard let track = try await item.asset.loadTracks(withMediaType: .audio).first,
+          self.player?.currentItem === item
+        else { return }
+        item.audioMix = VocalIsolator.shared.createAudioMix(for: track)
+        DiagnosticLog.shared.log("audio-processing", "Attached processing tap on demand")
+      } catch {
+        DiagnosticLog.shared.log("error", "Could not attach processing tap: \(error)")
       }
     }
   }
@@ -205,7 +321,44 @@ final class PlaybackController {
 
   var repeatMode: RepeatMode = .off {
     didSet {
+      applyRepeatModeToPlayer()
       saveState()
+    }
+  }
+
+  /// Keeps AVQueuePlayer's own end-of-item behavior in sync with Ampwave's
+  /// repeat setting. With its default `.advance` behavior, AVQueuePlayer moves
+  /// to a gapless-preloaded successor before `AVPlayerItemDidPlayToEndTime` is
+  /// delivered, so seeking the finished item for Repeat One is already too
+  /// late and the next song plays instead.
+  private func applyRepeatModeToPlayer() {
+    guard let player else { return }
+
+    if repeatMode == .one {
+      player.actionAtItemEnd = .none
+      // Silence trimming is a transition behavior. Repeat One must play the
+      // complete file before starting it again.
+      player.currentItem?.forwardPlaybackEndTime = .invalid
+      cleanupCrossfade()
+      applyPlayerOutputVolume()
+
+      // A successor may already have been preloaded before Repeat One was
+      // selected. Remove it so there is nothing for the queue to promote.
+      if let currentItem = player.currentItem {
+        for queuedItem in player.items() where queuedItem !== currentItem {
+          releaseResources(for: queuedItem)
+          player.remove(queuedItem)
+        }
+      }
+    } else {
+      player.actionAtItemEnd = .advance
+      if let currentItem = player.currentItem,
+        let end = gaplessPlaybackEndTimes[ObjectIdentifier(currentItem)],
+        shouldTrimGaplessEnding(at: currentQueueIndex, songID: self.currentItem?.id)
+      {
+        currentItem.forwardPlaybackEndTime = CMTime(seconds: end, preferredTimescale: 600)
+      }
+      prepareNextItem()
     }
   }
 
@@ -242,6 +395,7 @@ final class PlaybackController {
   private var currentPlaylistId: UUID?
 
   private init() {
+    DiagnosticLog.shared.log("playback", "PlaybackController initialized")
     setupRemoteCommands()
     setupNotifications()
   }
@@ -259,8 +413,53 @@ final class PlaybackController {
     player = nil
 
     // Invalidate item observers
-    itemObservers.forEach { $0.invalidate() }
+    playerObservers.forEach { $0.invalidate() }
+    playerObservers.removeAll()
+    itemObservers.values.flatMap { $0 }.forEach { $0.invalidate() }
     itemObservers.removeAll()
+    itemSongIDs.removeAll()
+    authoritativeItemDurations.removeAll()
+    gaplessPlaybackEndTimes.removeAll()
+    releaseAllSecurityScopes()
+  }
+
+  private func releaseResources(for item: AVPlayerItem) {
+    let key = ObjectIdentifier(item)
+    itemObservers.removeValue(forKey: key)?.forEach { $0.invalidate() }
+    itemSongIDs.removeValue(forKey: key)
+    authoritativeItemDurations.removeValue(forKey: key)
+    gaplessPlaybackEndTimes.removeValue(forKey: key)
+    if let url = itemSecurityScopedURLs.removeValue(forKey: key) {
+      url.stopAccessingSecurityScopedResource()
+    }
+  }
+
+  private func releaseResourcesForQueuedItems() {
+    player?.items().forEach { releaseResources(for: $0) }
+  }
+
+  private func releaseAllSecurityScopes() {
+    itemSecurityScopedURLs.values.forEach { $0.stopAccessingSecurityScopedResource() }
+    itemSecurityScopedURLs.removeAll()
+  }
+
+  /// Native queue handoff is used only when both items can stay on
+  /// AVFoundation's unmodified playback path. Crossfade and live audio taps
+  /// each own their own transition path and must not race a queued successor.
+  private var usesNativeGaplessPlayback: Bool {
+    (preferences?.gaplessPlayback ?? true)
+      && !(preferences?.crossfadeEnabled ?? false)
+      && !VocalIsolator.shared.requiresProcessing
+  }
+
+  private func shouldTrimGaplessEnding(at index: Int, songID: UUID?) -> Bool {
+    guard usesNativeGaplessPlayback,
+      repeatMode != .one,
+      index >= 0,
+      index < queue.count,
+      queue[index].id == songID
+    else { return false }
+    return index < queue.count - 1 || repeatMode == .all
   }
 
   func setModelContext(_ context: ModelContext) {
@@ -324,6 +523,7 @@ final class PlaybackController {
         try session.setActive(true)
         audioSessionConfigured = true
       } catch {
+        DiagnosticLog.shared.log("audio-session", "Activation failed: \(error)")
         print("Audio session error: \(error)")
       }
     #endif
@@ -484,8 +684,10 @@ final class PlaybackController {
 
       switch type {
       case .began:
+        DiagnosticLog.shared.log("audio-session", "Interruption began")
         pause()
       case .ended:
+        DiagnosticLog.shared.log("audio-session", "Interruption ended userInfo=\(userInfo)")
         if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey]
           as? UInt
         {
@@ -509,7 +711,10 @@ final class PlaybackController {
       else { return }
 
       if reason == .oldDeviceUnavailable {
+        DiagnosticLog.shared.log("audio-session", "Old audio route unavailable; pausing")
         pause()
+      } else {
+        DiagnosticLog.shared.log("audio-session", "Route changed reason=\(reason.rawValue)")
       }
     }
   #endif
@@ -519,6 +724,13 @@ final class PlaybackController {
       let player = player
     else { return }
 
+    let itemKey = ObjectIdentifier(item)
+    let finishedSongID = itemSongIDs[itemKey]
+    let finishedIndex = finishedSongID.flatMap { id in queue.firstIndex { $0.id == id } }
+    DiagnosticLog.shared.log(
+      "transition",
+      "Item ended song=\(finishedSongID?.uuidString ?? "unknown") index=\(finishedIndex.map(String.init) ?? "unknown") currentIndex=\(currentQueueIndex) queuedItems=\(player.items().count)"
+    )
     // If a crossfade is in progress and finished, it already advanced the queue
     if crossfadeStarted {
       completeCrossfade()
@@ -528,7 +740,8 @@ final class PlaybackController {
     // Ensure we are talking about the currently playing item that actually finished
     // AVQueuePlayer may have already moved currentItem forward, but 'item' is what just finished
 
-    let isEndOfQueue = currentQueueIndex >= max(queue.count - 1, 0)
+    let resolvedFinishedIndex = finishedIndex ?? currentQueueIndex
+    let isEndOfQueue = resolvedFinishedIndex >= max(queue.count - 1, 0)
     if SleepTimerService.shared.handleTrackFinished(isEndOfQueue: isEndOfQueue) {
       stopForSleepTimer(resetPosition: false)
       return
@@ -538,41 +751,60 @@ final class PlaybackController {
     if repeatMode == .one {
       item.seek(to: .zero, completionHandler: nil)
       player.play()
-    } else if queue.count > currentQueueIndex + 1 {
+    } else if queue.count > resolvedFinishedIndex + 1 {
       // Automatic advance is handled by KVO (observePlayerItemChange)
-      if !(preferences?.gaplessPlayback ?? true) {
+      if !usesNativeGaplessPlayback {
+        releaseResources(for: item)
         playNext()
       } else {
+        releaseResources(for: item)
         // AVQueuePlayer occasionally consumes the finished item without
         // promoting its preloaded successor (notably around Bluetooth route
         // changes or a stale preload). Reconcile after KVO has had a chance to
         // report a normal handoff; otherwise playback would stop indefinitely.
-        recoverGaplessHandoffIfNeeded(after: item)
+        recoverGaplessHandoffIfNeeded(after: item, finishedIndex: resolvedFinishedIndex)
       }
     } else if repeatMode == .all && !queue.isEmpty {
+      releaseResources(for: item)
       // Repeat the whole queue by starting from 0
       currentQueueIndex = 0
       play(queue[0], from: currentSource, playlistId: currentPlaylistId)
     } else {
+      releaseResources(for: item)
       isPlaying = false
       saveState()
     }
   }
 
-  private func recoverGaplessHandoffIfNeeded(after finishedItem: AVPlayerItem) {
-    let finishedIndex = currentQueueIndex
+  private func recoverGaplessHandoffIfNeeded(
+    after finishedItem: AVPlayerItem,
+    finishedIndex: Int
+  ) {
     let expectedIndex = finishedIndex + 1
     guard expectedIndex < queue.count else { return }
     let expectedSongID = queue[expectedIndex].id
 
-    Task { @MainActor [weak self, weak finishedItem] in
+    Task { @MainActor [weak self] in
       try? await Task.sleep(for: .milliseconds(300))
-      guard let self, let finishedItem else { return }
-      guard self.currentQueueIndex == finishedIndex,
-        finishedIndex >= 0, finishedIndex < self.queue.count,
-        self.currentItem?.id == self.queue[finishedIndex].id,
+      guard let self else { return }
+      guard finishedIndex >= 0, finishedIndex < self.queue.count,
         expectedIndex < self.queue.count,
         self.queue[expectedIndex].id == expectedSongID
+      else { return }
+
+      // A normal AVQueuePlayer handoff may already have been reflected by KVO.
+      if self.currentQueueIndex == expectedIndex,
+        self.currentItem?.id == expectedSongID,
+        self.player?.currentItem !== finishedItem
+      {
+        self.player?.play()
+        self.isPlaying = true
+        DiagnosticLog.shared.log("transition", "Native gapless handoff completed index=\(expectedIndex)")
+        return
+      }
+
+      guard self.currentQueueIndex == finishedIndex,
+        self.currentItem?.id == self.queue[finishedIndex].id
       else { return }
 
       let expectedSong = self.queue[expectedIndex]
@@ -585,6 +817,7 @@ final class PlaybackController {
         self.player?.play()
         self.isPlaying = true
       } else {
+        DiagnosticLog.shared.log("transition", "Gapless handoff recovery started index=\(expectedIndex)")
         print("[ERROR] PlaybackController: Recovering failed gapless handoff")
         self.currentQueueIndex = expectedIndex
         self.play(expectedSong, from: self.currentSource, playlistId: self.currentPlaylistId)
@@ -599,6 +832,11 @@ final class PlaybackController {
         self.player?.currentItem === failedItem || self.player?.currentItem == nil
       else { return }
       print("[ERROR] PlaybackController: Current item failed to reach end; skipping")
+      DiagnosticLog.shared.log(
+        "error",
+        "Item failed to reach end error=\(failedItem.error?.localizedDescription ?? "unknown") errorLog=\(failedItem.errorLog()?.events.count ?? 0)"
+      )
+      self.releaseResources(for: failedItem)
       self.playNext()
     }
   }
@@ -609,6 +847,10 @@ final class PlaybackController {
       guard let self, let stalledItem, self.player?.currentItem === stalledItem,
         self.isPlaying
       else { return }
+      DiagnosticLog.shared.log(
+        "stall",
+        "Playback stalled at \(self.player?.currentTime().seconds ?? -1) status=\(stalledItem.status.rawValue) accessEvents=\(stalledItem.accessLog()?.events.count ?? 0)"
+      )
       // Local/referenced files should recover as soon as their security scope
       // or Bluetooth route is available again.
       self.audioSessionConfigured = false
@@ -626,33 +868,48 @@ final class PlaybackController {
           return
         }
 
-        // Get the URL of the item currently playing in the AVPlayer
-        guard let asset = newItem.asset as? AVURLAsset else { return }
-        let playingURL = asset.url
+        self.reconcileCurrentPlayerItem(newItem, source: "KVO")
+      }
+    }
+    playerObservers.append(obs)
 
-        // Find which song in our queue matches this URL
-        // First check the most likely candidate: the next song
-        if self.currentQueueIndex + 1 < self.queue.count {
-          let nextIndex = self.currentQueueIndex + 1
-          let nextSong = self.queue[nextIndex]
-          if self.library.getFileURL(for: nextSong) == playingURL {
-            self.updateStateForAutoAdvancedSong(nextSong, at: nextIndex)
-            return
+    let timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) {
+      [weak self] player, _ in
+      Task { @MainActor in
+        guard let self, self.player === player else { return }
+        let reason = player.reasonForWaitingToPlay?.rawValue ?? "none"
+        DiagnosticLog.shared.log(
+          "player",
+          "timeControlStatus=\(player.timeControlStatus.rawValue) rate=\(player.rate) reason=\(reason) current=\(self.currentItem?.title ?? "none")"
+        )
+
+        guard player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+          self.isPlaying
+        else { return }
+
+        Task { @MainActor [weak self, weak player] in
+          try? await Task.sleep(for: .seconds(2))
+          guard let self, let player, self.player === player,
+            self.isPlaying,
+            player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+          else { return }
+
+          DiagnosticLog.shared.log("stall", "Recovering player still waiting after 2 seconds")
+          self.audioSessionConfigured = false
+          self.setupAudioSession()
+          if player.currentItem == nil {
+            self.playNext()
+          } else {
+            player.play()
           }
-        }
-
-        // If not the next song, search the whole queue (handles unexpected skips/shuffles)
-        if let index = self.queue.firstIndex(where: {
-          self.library.getFileURL(for: $0) == playingURL
-        }) {
-          self.updateStateForAutoAdvancedSong(self.queue[index], at: index)
         }
       }
     }
-    itemObservers.append(obs)
+    playerObservers.append(timeControlObserver)
   }
 
   private func updateStateForAutoAdvancedSong(_ song: LibrarySong, at index: Int) {
+    DiagnosticLog.shared.log("transition", "Player advanced to index=\(index) title=\(song.title)")
     print("[DEBUG] PlaybackController: Auto-advanced to \(song.title) at index \(index)")
     self.currentQueueIndex = index
     self.currentItem = song
@@ -660,9 +917,53 @@ final class PlaybackController {
     // normalization gain has to be re-applied here too.
     self.applyPlayerOutputVolume()
     self.updateUIForNewItem()
+    if let activeItem = player?.currentItem,
+      let fixedDuration = authoritativeItemDurations[ObjectIdentifier(activeItem)]
+    {
+      applyResolvedDuration(fixedDuration, source: "handoff asset timeline")
+    }
     self.historyTracker.songStarted(
       song, source: self.currentSource, playlistId: self.currentPlaylistId)
     self.saveState()
+  }
+
+  /// Reconciles Ampwave's model with the item AVQueuePlayer is actually
+  /// decoding. KVO is normally immediate, but a seek near the end can race the
+  /// queue's automatic promotion. The periodic observer also calls this so a
+  /// missed/delayed callback cannot leave the old title and duration onscreen
+  /// while the next track's clock and audio are already running.
+  private func reconcileCurrentPlayerItem(_ playerItem: AVPlayerItem, source: String) {
+    let key = ObjectIdentifier(playerItem)
+    var resolvedIndex: Int?
+
+    if let songID = itemSongIDs[key] {
+      resolvedIndex = queue.firstIndex { $0.id == songID }
+    }
+
+    if resolvedIndex == nil, let asset = playerItem.asset as? AVURLAsset {
+      resolvedIndex = queue.firstIndex {
+        library.getFileURL(for: $0) == asset.url
+      }
+    }
+
+    guard let index = resolvedIndex, index >= 0, index < queue.count else {
+      DiagnosticLog.shared.log(
+        "transition",
+        "Could not map current player item source=\(source) url=\((playerItem.asset as? AVURLAsset)?.url.lastPathComponent ?? "unknown")"
+      )
+      return
+    }
+
+    let song = queue[index]
+    if currentItem?.id != song.id || currentQueueIndex != index {
+      DiagnosticLog.shared.log(
+        "transition",
+        "Reconciled missed handoff source=\(source) old=\(currentItem?.title ?? "none") new=\(song.title) oldIndex=\(currentQueueIndex) newIndex=\(index) playerTime=\(playerItem.currentTime().seconds)"
+      )
+      updateStateForAutoAdvancedSong(song, at: index)
+    } else if let fixedDuration = authoritativeItemDurations[key] {
+      applyResolvedDuration(fixedDuration, source: "reconciled asset timeline")
+    }
   }
 
   func playArtist(_ artistName: String) {
@@ -747,6 +1048,10 @@ final class PlaybackController {
     from source: PlaySource = .library,
     playlistId: UUID? = nil
   ) {
+    DiagnosticLog.shared.log(
+      "playback",
+      "Play requested title=\(song.title) format=\(library.getFileURL(for: song).pathExtension.lowercased()) storage=\(song.storageMode) queueIndex=\(currentQueueIndex)/\(queue.count)"
+    )
     print("[VALIDATION] PlaybackController: play triggered for \(song.title)")
 
     if let current = currentItem {
@@ -773,7 +1078,13 @@ final class PlaybackController {
     }
 
     Task {
-      let item = await createPlayerItem(for: song)
+      let item = await createPlayerItem(
+        for: song,
+        trimTrailingSilence: shouldTrimGaplessEnding(
+          at: currentQueueIndex,
+          songID: song.id
+        )
+      )
 
       await MainActor.run {
         print(
@@ -798,9 +1109,12 @@ final class PlaybackController {
           self.observePlayerItemChange()
         } else {
           self.player?.pause()
+          self.releaseResourcesForQueuedItems()
           self.player?.removeAllItems()
           self.player?.insert(item, after: nil)
         }
+
+        self.applyRepeatModeToPlayer()
 
         self.currentItem = song
         self.duration = song.duration > 0 ? song.duration : 0
@@ -832,18 +1146,88 @@ final class PlaybackController {
     updateNowPlaying()
   }
 
-  private func createPlayerItem(for song: LibrarySong) async -> AVPlayerItem {
+  private func createPlayerItem(
+    for song: LibrarySong,
+    includeAudioProcessing: Bool? = nil,
+    trimTrailingSilence: Bool = false
+  ) async -> AVPlayerItem {
     let url = library.getFileURL(for: song)
 
-    if song.storageMode == .referenced {
-      _ = url.startAccessingSecurityScopedResource()
+    let secured = song.storageMode == .referenced && url.startAccessingSecurityScopedResource()
+
+    // Several valid FLAC files omit an optional SEEKTABLE metadata block.
+    // AVFoundation's default approximate-timing mode then reports that an
+    // exact seek landed at the requested timestamp while decoding from an
+    // earlier frame, and AVQueuePlayer can run past the advertised duration
+    // without advancing. Precise timing makes AVFoundation build the timing
+    // information it needs from the stream itself.
+    let asset = AVURLAsset(
+      url: url,
+      options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+    )
+    let item = AVPlayerItem(asset: asset)
+    let itemKey = ObjectIdentifier(item)
+    let songID = song.id
+    let songTitle = song.title
+    let storedSongDuration = song.duration
+    itemSongIDs[itemKey] = songID
+    if secured { itemSecurityScopedURLs[itemKey] = url }
+
+    if trimTrailingSilence {
+      // Do not delay initial playback while inspecting the tail. A queued
+      // successor gives this utility task almost the entire song to finish.
+      Task { @MainActor [weak self, weak item] in
+        guard let playbackEnd = await GaplessSilenceAnalyzer.trailingPlaybackEnd(for: url),
+          let self,
+          let item,
+          self.itemSongIDs[itemKey] == songID,
+          self.usesNativeGaplessPlayback,
+          self.repeatMode != .one
+        else { return }
+
+        self.gaplessPlaybackEndTimes[itemKey] = playbackEnd
+        item.forwardPlaybackEndTime = CMTime(seconds: playbackEnd, preferredTimescale: 600)
+        DiagnosticLog.shared.log(
+          "transition",
+          "Smart gapless ending title=\(songTitle) playbackEnd=\(playbackEnd) originalDuration=\(storedSongDuration)"
+        )
+      }
     }
 
-    let asset = AVURLAsset(url: url)
-    let item = AVPlayerItem(asset: asset)
+    // Resolve duration from both the asset and its audio-track time range.
+    // Some FLAC containers initially report a tag-derived duration through
+    // AVPlayerItem that is shorter than the actual playable timeline.
+    Task { @MainActor [weak self, weak item] in
+      guard let self, let item else { return }
+      do {
+        let assetDuration = try await asset.load(.duration).seconds
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        var trackDurations: [TimeInterval] = []
+        for track in tracks {
+          let range = try await track.load(.timeRange)
+          trackDurations.append(range.end.seconds)
+        }
+        let resolved = ([assetDuration] + trackDurations)
+          .filter { $0.isFinite && $0 > 0 }
+          .max() ?? 0
+        self.authoritativeItemDurations[itemKey] = resolved
+        DiagnosticLog.shared.log(
+          "duration",
+          "Resolved asset=\(assetDuration) tracks=\(trackDurations) fixed=\(resolved) song=\(song.title)"
+        )
+        guard self.player?.currentItem === item else { return }
+        self.applyResolvedDuration(resolved, source: "asset timeline")
+      } catch {
+        DiagnosticLog.shared.log("duration", "Resolution failed: \(error)")
+      }
+    }
 
-    // Vocal Isolation - Attach tap synchronously once tracks are loaded
-    do {
+    // A processing tap is expensive and has historically been the least
+    // reliable part of long-running FLAC playback. Do not install a no-op tap,
+    // and never analyze a native gapless preload.
+    let shouldProcess = includeAudioProcessing ?? VocalIsolator.shared.requiresProcessing
+    if shouldProcess {
+      do {
       let tracks = try await asset.loadTracks(withMediaType: .audio)
       if let audioTrack = tracks.first {
         if let audioMix = VocalIsolator.shared.createAudioMix(for: audioTrack) {
@@ -857,10 +1241,16 @@ final class PlaybackController {
       } else {
         print("[ERROR] PlaybackController: No audio track found for \(song.title)")
       }
-    } catch {
-      print("[ERROR] PlaybackController: Failed to load tracks: \(error)")
+      } catch {
+        DiagnosticLog.shared.log("error", "Audio processing setup failed title=\(song.title): \(error)")
+        print("[ERROR] PlaybackController: Failed to load tracks: \(error)")
+      }
     }
 
+    DiagnosticLog.shared.log(
+      "player-item",
+      "Created title=\(song.title) preciseTiming=true processing=\(shouldProcess) referencedScope=\(secured)"
+    )
     observePlayerItem(item)
     return item
   }
@@ -870,6 +1260,7 @@ final class PlaybackController {
       [weak self] item, _ in
       Task { @MainActor in
         if item.status == .readyToPlay {
+          DiagnosticLog.shared.log("player-item", "Ready song=\(self?.itemSongIDs[ObjectIdentifier(item)]?.uuidString ?? "unknown")")
           print("[VALIDATION] PlaybackController: AVPlayerItem status .readyToPlay")
           // Only the item actually playing may set the duration. Gapless
           // preloads the *next* track while this one is still going, and it
@@ -877,12 +1268,13 @@ final class PlaybackController {
           // current track's duration with the next one's, so the scrubber hit
           // the end early and playback appeared to run past it.
           guard self?.player?.currentItem === item else { return }
-          let itemDuration = CMTimeGetSeconds(item.duration)
-          if itemDuration.isFinite, itemDuration > 0 {
-            self?.duration = itemDuration
-            self?.updateNowPlaying()
-          }
+          self?.applyDurationReportedByPlayer(
+            CMTimeGetSeconds(item.duration),
+            for: item,
+            source: "player item"
+          )
         } else if item.status == .failed {
+          DiagnosticLog.shared.log("error", "Player item failed: \(item.error?.localizedDescription ?? "unknown")")
           print(
             "[ERROR] PlaybackController: AVPlayerItem failed: \(String(describing: item.error))")
           // Only the actively-playing item failing needs a response — a
@@ -890,15 +1282,71 @@ final class PlaybackController {
           // play() reaches it. Skip ahead rather than sitting on a dead item.
           if self?.player?.currentItem === item {
             self?.playNext()
+          } else if let self, self.player?.items().contains(where: { $0 === item }) == true {
+            self.player?.remove(item)
+            self.releaseResources(for: item)
+            self.prepareNextItem()
           }
         }
       }
     }
-    itemObservers.append(statusObs)
+    let durationObs = item.observe(\.duration, options: [.new]) {
+      [weak self] item, _ in
+      Task { @MainActor in
+        guard let self, self.player?.currentItem === item else { return }
+        self.applyDurationReportedByPlayer(
+          item.duration.seconds,
+          for: item,
+          source: "duration change"
+        )
+      }
+    }
+    itemObservers[ObjectIdentifier(item)] = [statusObs, durationObs]
+  }
+
+  private func applyResolvedDuration(_ candidate: TimeInterval, source: String) {
+    guard candidate.isFinite, candidate > 0 else { return }
+    // A duration behind the actual player clock is demonstrably stale.
+    guard candidate + 0.25 >= currentTime else {
+      DiagnosticLog.shared.log(
+        "duration",
+        "Rejected stale \(source)=\(candidate), playerTime=\(currentTime) title=\(currentItem?.title ?? "unknown")"
+      )
+      return
+    }
+    guard abs(candidate - duration) > 0.05 else { return }
+    duration = candidate
+    DiagnosticLog.shared.log(
+      "duration",
+      "Updated from \(source) value=\(candidate) title=\(currentItem?.title ?? "unknown")"
+    )
+    updateNowPlaying()
+  }
+
+  private func applyDurationReportedByPlayer(
+    _ candidate: TimeInterval,
+    for item: AVPlayerItem,
+    source: String
+  ) {
+    let key = ObjectIdentifier(item)
+    if let fixedDuration = authoritativeItemDurations[key] {
+      if candidate.isFinite, abs(candidate - fixedDuration) > 0.1 {
+        DiagnosticLog.shared.log(
+          "duration",
+          "Ignored changing \(source)=\(candidate); fixed=\(fixedDuration) playerTime=\(currentTime)"
+        )
+      }
+      applyResolvedDuration(fixedDuration, source: "fixed asset timeline")
+    } else {
+      applyResolvedDuration(candidate, source: source)
+    }
   }
 
   private func prepareNextItem() {
-    guard let player = player, preferences?.gaplessPlayback ?? true else {
+    guard repeatMode != .one,
+      let player = player,
+      usesNativeGaplessPlayback
+    else {
       return
     }
 
@@ -918,21 +1366,33 @@ final class PlaybackController {
       print("[VALIDATION] PlaybackController: preparing next item \(nextSong.title)")
 
       Task {
-        let nextItem = await createPlayerItem(for: nextSong)
+        let nextItem = await createPlayerItem(
+          for: nextSong,
+          includeAudioProcessing: false,
+          trimTrailingSilence: nextIndex < queue.count - 1 || repeatMode == .all
+        )
         await MainActor.run {
           // Item creation loads tracks asynchronously. Do not let an old task
           // insert its result after a skip, shuffle, or automatic handoff.
           guard self.player === player,
+            self.repeatMode != .one,
+            self.usesNativeGaplessPlayback,
             player.currentItem === expectedCurrentItem,
             self.currentItem?.id == expectedCurrentSongID,
             self.currentQueueIndex + 1 == nextIndex,
             nextIndex < self.queue.count,
             self.queue[nextIndex].id == expectedNextSongID
-          else { return }
+          else {
+            self.releaseResources(for: nextItem)
+            return
+          }
 
           if player.items().count < 2 {
             player.insert(nextItem, after: player.currentItem)
+            DiagnosticLog.shared.log("transition", "Preloaded next item index=\(nextIndex) title=\(nextSong.title)")
             print("[VALIDATION] PlaybackController: Inserted next item into player")
+          } else {
+            self.releaseResources(for: nextItem)
           }
         }
       }
@@ -1030,6 +1490,7 @@ final class PlaybackController {
     }
 
     player.play()
+    DiagnosticLog.shared.log("playback", "Resume title=\(currentItem?.title ?? "unknown") at=\(currentTime)")
     isPlaying = true
     historyTracker.songResumed()
     updateNowPlaying()
@@ -1037,7 +1498,14 @@ final class PlaybackController {
 
   func pause() {
     player?.pause()
+    if let playerTime = player?.currentTime().seconds,
+      playerTime.isFinite, playerTime >= 0
+    {
+      currentTime = playerTime
+      lyricsClock.currentTime = playerTime
+    }
     isPlaying = false
+    DiagnosticLog.shared.log("playback", "Pause title=\(currentItem?.title ?? "unknown") at=\(currentTime)")
     historyTracker.songPaused()
     updateNowPlaying()
   }
@@ -1079,9 +1547,15 @@ final class PlaybackController {
     // Never target past the end: a stale or mis-read duration would otherwise
     // strand playback beyond the last sample.
     let target = duration > 0 ? min(time, duration) : time
+    cleanupCrossfade()
+    DiagnosticLog.shared.log(
+      "seek",
+      "Requested from=\(player?.currentTime().seconds ?? currentTime) to=\(target) duration=\(duration) playing=\(isPlaying)"
+    )
 
     self.currentTime = target
     self.lyricsClock.currentTime = target
+    self.updateNowPlaying()
 
     if isScrubbing {
       debouncedUpdateLyric()
@@ -1092,6 +1566,19 @@ final class PlaybackController {
     let token = UUID()
     seekToken = token
     let cmTime = CMTime(seconds: target, preferredTimescale: 600)
+    guard let seekingPlayer = player, let seekingItem = seekingPlayer.currentItem else {
+      isSeeking = false
+      return
+    }
+    let shouldResumeAfterSeek = isPlaying
+    let itemKey = ObjectIdentifier(seekingItem)
+    let fixedDuration = authoritativeItemDurations[itemKey]
+    DiagnosticLog.shared.log(
+      "seek",
+      "State before seek itemDuration=\(seekingItem.duration.seconds) fixedDuration=\(fixedDuration.map { String($0) } ?? "pending") seekable=\(timeRangesDescription(seekingItem.seekableTimeRanges)) loaded=\(timeRangesDescription(seekingItem.loadedTimeRanges))"
+    )
+    seekingPlayer.pause()
+    seekingItem.cancelPendingSeeks()
 
     // Watchdog for a seek completion that never arrives — AVPlayer drops it
     // when the item is swapped mid-seek (gapless hand-off, crossfade), and
@@ -1112,13 +1599,22 @@ final class PlaybackController {
       self.lyricsClock.currentTime = target
       self.updateCurrentLyric(at: target)
       self.updateNowPlaying()
+      if shouldResumeAfterSeek { seekingPlayer.play() }
+      DiagnosticLog.shared.log("seek", "Watchdog resumed player at=\(seekingPlayer.currentTime().seconds)")
     }
 
-    player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) {
+    seekingPlayer.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) {
       [weak self] finished in
       Task { @MainActor in
         // A newer seek has superseded this one; its own handler owns the state.
         guard let self, self.seekToken == token else { return }
+        guard self.player === seekingPlayer,
+          seekingPlayer.currentItem === seekingItem
+        else {
+          self.isSeeking = false
+          DiagnosticLog.shared.log("seek", "Ignored completion after player item changed")
+          return
+        }
         self.isSeeking = false
 
         // AVPlayer can land slightly away from the requested timestamp,
@@ -1140,12 +1636,52 @@ final class PlaybackController {
         self.updateCurrentLyric(at: resolvedTime)
         self.updateNowPlaying()
         self.saveState()
+        if shouldResumeAfterSeek { seekingPlayer.play() }
+        DiagnosticLog.shared.log(
+          "seek",
+          "Completed target=\(target) actual=\(resolvedTime) finished=\(finished)"
+        )
 
         if !finished {
           print("[DEBUG] PlaybackController: seek reconciled after cancellation")
         }
+        self.scheduleSeekProbes(
+          token: token,
+          player: seekingPlayer,
+          item: seekingItem,
+          target: target
+        )
       }
     }
+  }
+
+  private func scheduleSeekProbes(
+    token: UUID,
+    player: AVQueuePlayer,
+    item: AVPlayerItem,
+    target: TimeInterval
+  ) {
+    Task<Void, Never> { @MainActor [weak self, weak player, weak item] in
+      let probeDelays: [TimeInterval] = [0.25, 1.0, 3.0, 6.0]
+      for delay in probeDelays {
+        try? await Task.sleep(for: .seconds(delay))
+        guard let self, let player, let item, self.player === player,
+          player.currentItem === item, self.seekToken == token
+        else { return }
+        let fixed = self.authoritativeItemDurations[ObjectIdentifier(item)]
+        DiagnosticLog.shared.log(
+          "seek-probe",
+          "after=\(delay)s target=\(target) playerTime=\(player.currentTime().seconds) modelTime=\(self.currentTime) displayedDuration=\(self.duration) itemDuration=\(item.duration.seconds) fixedDuration=\(fixed.map { String($0) } ?? "pending") rate=\(player.rate) status=\(player.timeControlStatus.rawValue) seekable=\(self.timeRangesDescription(item.seekableTimeRanges))"
+        )
+      }
+    }
+  }
+
+  private func timeRangesDescription(_ values: [NSValue]) -> String {
+    values.map { value in
+      let range = value.timeRangeValue
+      return "\(range.start.seconds)-\(range.end.seconds)"
+    }.joined(separator: ",")
   }
 
   private var lyricUpdateTask: Task<Void, Never>?
@@ -1292,7 +1828,10 @@ final class PlaybackController {
 
     // Insert into AVQueuePlayer
     if let player = player {
-      let item = await createPlayerItem(for: song)
+      let item = await createPlayerItem(
+        for: song,
+        trimTrailingSilence: insertIndex < queue.count - 1 || repeatMode == .all
+      )
       player.insert(item, after: player.currentItem)
     }
     saveState()
@@ -1326,6 +1865,7 @@ final class PlaybackController {
             pause()
             currentItem = nil
             currentQueueIndex = 0
+            releaseResourcesForQueuedItems()
             player?.removeAllItems()
             saveState()
             return
@@ -1344,6 +1884,7 @@ final class PlaybackController {
       if let player = player {
         let items = player.items()
         if items.count > 1 {
+          releaseResources(for: items[1])
           player.remove(items[1])
           prepareNextItem()
         }
@@ -1404,6 +1945,7 @@ final class PlaybackController {
       if let player = player {
         let items = player.items()
         if items.count > 1 {
+          releaseResources(for: items[1])
           player.remove(items[1])
         }
         prepareNextItem()
@@ -1444,6 +1986,7 @@ final class PlaybackController {
     if let player = player {
       let items = player.items()
       if items.count > 1 {
+        releaseResources(for: items[1])
         player.remove(items[1])
       }
       prepareNextItem()
@@ -1746,9 +2289,16 @@ final class PlaybackController {
           self.isPlaying = false
 
           // Prepare player but don't play
-          let item = await createPlayerItem(for: song)
+          let item = await createPlayerItem(
+            for: song,
+            trimTrailingSilence: shouldTrimGaplessEnding(
+              at: currentQueueIndex,
+              songID: song.id
+            )
+          )
           self.player = AVQueuePlayer(items: [item])
           self.player?.automaticallyWaitsToMinimizeStalling = false
+          self.applyRepeatModeToPlayer()
           self.applyEQPresetForPlayback()
           self.applyPlayerOutputVolume()
           item.seek(
@@ -1792,13 +2342,16 @@ final class PlaybackController {
   private var crossfadeStarted = false
 
   private func startCrossfade(to nextSong: LibrarySong) {
-    guard !crossfadeStarted else { return }
+    guard repeatMode != .one, !crossfadeStarted else { return }
     crossfadeStarted = true
     crossfadeNextSong = nextSong
 
     Task {
       let item = await createPlayerItem(for: nextSong)
       await MainActor.run {
+        guard self.repeatMode != .one, self.crossfadeStarted,
+          self.crossfadeNextSong?.id == nextSong.id
+        else { return }
         let cf = AVPlayer(playerItem: item)
         cf.volume = 0
         self.crossfadePlayer = cf
@@ -1851,6 +2404,7 @@ final class PlaybackController {
     newPlayer.automaticallyWaitsToMinimizeStalling = false
     newPlayer.volume = effectiveOutputVolume
     self.player = newPlayer
+    applyRepeatModeToPlayer()
     self.addTimeObserver()
     self.observePlayerItemChange()
     newPlayer.play()
@@ -1878,6 +2432,7 @@ final class PlaybackController {
   // MARK: - Observers
 
   private var lastStateSaveTime: TimeInterval = -999
+  private var lastDiagnosticHeartbeat = Date.distantPast
 
   private func addTimeObserver() {
     guard let player = player else { return }
@@ -1921,22 +2476,26 @@ final class PlaybackController {
       [weak self] time in
       MainActor.assumeIsolated {
         guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
+        if let activeItem = player.currentItem {
+          self.reconcileCurrentPlayerItem(activeItem, source: "periodic clock")
+        }
         self.currentTime = time.seconds
 
         // Keep duration tied to whatever is actually playing. A gapless
         // hand-off reuses an item that became ready while it was still
         // queued, so its status observer never fires again — and stored tag
         // durations are unreliable on some formats.
-        if let itemDuration = self.player?.currentItem?.duration.seconds,
-          itemDuration.isFinite, itemDuration > 0,
-          abs(itemDuration - self.duration) > 0.5
-        {
-          self.duration = itemDuration
-          self.updateNowPlaying()
+        if let activeItem = self.player?.currentItem {
+          self.applyDurationReportedByPlayer(
+            activeItem.duration.seconds,
+            for: activeItem,
+            source: "periodic player item"
+          )
         }
 
         // Crossfade tick
-        if let prefs = self.preferences, prefs.crossfadeEnabled,
+        if self.repeatMode != .one,
+          let prefs = self.preferences, prefs.crossfadeEnabled,
           prefs.crossfadeDuration > 0, self.isPlaying, self.duration > 0
         {
           let remaining = self.duration - self.currentTime
@@ -1958,6 +2517,16 @@ final class PlaybackController {
         if self.currentTime - self.lastStateSaveTime >= 5 {
           self.lastStateSaveTime = self.currentTime
           self.saveState()
+        }
+
+
+        let now = Date()
+        if now.timeIntervalSince(self.lastDiagnosticHeartbeat) >= 30 {
+          self.lastDiagnosticHeartbeat = now
+          DiagnosticLog.shared.log(
+            "heartbeat",
+            "title=\(self.currentItem?.title ?? "none") time=\(self.currentTime)/\(self.duration) rate=\(player.rate) status=\(player.timeControlStatus.rawValue) queuedItems=\(player.items().count)"
+          )
         }
       }
     }

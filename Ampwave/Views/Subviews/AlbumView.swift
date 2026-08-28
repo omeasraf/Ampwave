@@ -11,7 +11,6 @@ struct AlbumView: View {
   let album: Album
 
   @State private var showingAddToPlaylist = false
-  @State private var isDescriptionExpanded = false
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -59,19 +58,8 @@ struct AlbumView: View {
 
       if let description = album.albumDescription, !description.isEmpty {
         Section("About") {
-          VStack(alignment: .leading, spacing: 8) {
-            Text(description)
-              .font(.body)
-              .foregroundStyle(.secondary)
-              .lineLimit(isDescriptionExpanded ? nil : 4)
-
-            Button(isDescriptionExpanded ? "Show Less" : "Read More") {
-              withAnimation { isDescriptionExpanded.toggle() }
-            }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(themeManager.accentColor)
-          }
-          .padding(.vertical, 4)
+          ExpandableDescriptionView(text: description)
+            .padding(.vertical, 4)
         }
         .listRowBackground(themeManager.cardBackgroundColor)
       }

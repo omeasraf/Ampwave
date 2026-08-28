@@ -28,7 +28,43 @@ final class RecommendationEngine {
   private var lastGenerationTime: Date?
   private let cacheValidityDuration: TimeInterval = 300  // 5 minutes
 
-  private init() {}
+  private init() {
+    NotificationCenter.default.addObserver(
+      forName: .songsWereDeleted,
+      object: nil,
+      queue: .main
+    ) { notification in
+      guard let ids = notification.object as? Set<UUID> else { return }
+      let albumIDs = notification.userInfo?["albumIDs"] as? Set<UUID> ?? []
+      MainActor.assumeIsolated {
+        RecommendationEngine.shared.removeDeletedContentFromCache(
+          songIDs: ids,
+          albumIDs: albumIDs
+        )
+      }
+    }
+  }
+
+  private func removeDeletedContentFromCache(
+    songIDs: Set<UUID>,
+    albumIDs: Set<UUID>
+  ) {
+    func keepingLiveSongs(_ values: [Recommendation]) -> [Recommendation] {
+      values.filter { recommendation in
+        switch recommendation.item {
+        case .song(let song): return !songIDs.contains(song.id)
+        case .album(let album): return !albumIDs.contains(album.id)
+        default: return true
+        }
+      }
+    }
+
+    forYouRecommendations = keepingLiveSongs(forYouRecommendations)
+    similarSongs = keepingLiveSongs(similarSongs)
+    genreRecommendations = keepingLiveSongs(genreRecommendations)
+    discoveryRecommendations = keepingLiveSongs(discoveryRecommendations)
+    lastGenerationTime = nil
+  }
 
   func setModelContext(_ context: ModelContext) {
     self.modelContext = context

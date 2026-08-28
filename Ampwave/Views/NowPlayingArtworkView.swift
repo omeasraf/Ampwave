@@ -19,9 +19,8 @@ internal struct NowPlayingArtworkView: View {
         RoundedRectangle(cornerRadius: 16, style: .continuous)
           .fill(Color.secondary.opacity(0.15))
           .overlay(
-            Image(systemName: "music.note")
-              .font(.system(size: 60, weight: .medium))
-              .foregroundStyle(.secondary)
+            AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+              .frame(width: 92, height: 64)
           )
           .frame(width: 260, height: 260)
       }

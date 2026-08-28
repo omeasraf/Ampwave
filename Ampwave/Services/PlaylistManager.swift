@@ -23,6 +23,14 @@ final class PlaylistManager {
 
   private init() {}
 
+  /// Drops observable references before the backing SwiftData rows are
+  /// deleted. This prevents playlist views from resolving faults on detached
+  /// models during a library reset.
+  func resetInMemoryState() {
+    playlists = []
+    likedSongsPlaylist = nil
+  }
+
   func setModelContext(_ context: ModelContext) {
     self.modelContext = context
     Task { await loadPlaylists() }

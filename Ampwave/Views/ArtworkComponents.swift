@@ -29,9 +29,8 @@ struct ArtworkImageView: View {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
           .fill(.gray.opacity(0.15))
           .overlay(
-            Image(systemName: "music.note")
-              .font(.system(size: size * 0.4))
-              .foregroundStyle(.secondary)
+            AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+              .frame(width: size * 0.46, height: size * 0.31)
           )
       }
     }
@@ -95,9 +94,8 @@ struct LargeArtworkImageView: View {
         RoundedRectangle(cornerRadius: 24, style: .continuous)
           .fill(.gray.opacity(0.15))
           .overlay(
-            Image(systemName: "music.note")
-              .font(.system(size: 80))
-              .foregroundStyle(.secondary)
+            AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+              .frame(width: 112, height: 76)
           )
       }
     }

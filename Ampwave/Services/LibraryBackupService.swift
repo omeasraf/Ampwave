@@ -173,6 +173,8 @@ enum LibraryBackupService {
       userPreferences.autoFetchLyrics = preferences.autoFetchLyrics
       userPreferences.wordSyncedLyricsEnabled = preferences.wordSyncedLyricsEnabled
       userPreferences.copyMusicToStorage = preferences.copyMusicToStorage
+      userPreferences.deleteReferencedFilesOnRemoval =
+        preferences.deleteReferencedFilesOnRemoval ?? false
       userPreferences.preferOnlineArtwork = preferences.preferOnlineArtwork
       userPreferences.organizeByAlbum = preferences.organizeByAlbum
       userPreferences.isOfflineMode = preferences.isOfflineMode
@@ -466,6 +468,7 @@ private struct BackupUserPreferences: Codable {
   let autoFetchLyrics: Bool
   let wordSyncedLyricsEnabled: Bool
   let copyMusicToStorage: Bool
+  let deleteReferencedFilesOnRemoval: Bool?
   let preferOnlineArtwork: Bool
   let organizeByAlbum: Bool
   let isOfflineMode: Bool
@@ -504,6 +507,7 @@ private struct BackupUserPreferences: Codable {
     autoFetchLyrics = preferences.autoFetchLyrics
     wordSyncedLyricsEnabled = preferences.wordSyncedLyricsEnabled
     copyMusicToStorage = preferences.copyMusicToStorage
+    deleteReferencedFilesOnRemoval = preferences.deleteReferencedFilesOnRemoval
     preferOnlineArtwork = preferences.preferOnlineArtwork
     organizeByAlbum = preferences.organizeByAlbum
     isOfflineMode = preferences.isOfflineMode

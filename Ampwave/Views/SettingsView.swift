@@ -17,6 +17,14 @@ enum ImportType {
   case backup
 }
 
+private enum SettingsConfirmation: Identifiable, Hashable {
+  case clearCache
+  case resetLibrary
+  case resetStatistics
+
+  var id: Self { self }
+}
+
 struct SettingsView: View {
   @Environment(\.modelContext) private var modelContext
   @State private var activeImport: ImportType?        // which mode is pending
@@ -26,10 +34,10 @@ struct SettingsView: View {
   @State private var importProgress: Double = 0
   @State private var settings: AppSettings?
   @State private var userPreferences: UserPreferences?
-  @State private var showingClearCacheConfirmation = false
-  @State private var showingResetConfirmation = false
-  @State private var showingResetStatsConfirmation = false
+  @State private var activeConfirmation: SettingsConfirmation?
   @State private var isResetting = false
+  @State private var resetProgress: Double = 0
+  @State private var resetStatus = "Preparing…"
   @State private var backupExportURL: URL?
   @State private var showingBulkTagEditor = false
   @State private var showingOnboarding = false
@@ -74,12 +82,10 @@ struct SettingsView: View {
 
   var body: some View {
     List {
-      Section {
+      Section("Music") {
         settingsCategoryLink(
           title: "Import",
-          subtitle: "Songs, folders, playlists and WebDAV",
-          systemImage: "square.and.arrow.down.fill",
-          color: .blue
+          systemImage: "arrow.down.doc"
         ) {
           settingsPage("Import") {
             importSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -88,9 +94,7 @@ struct SettingsView: View {
 
         settingsCategoryLink(
           title: "Playback",
-          subtitle: "Audio, queue behavior and equalizer",
-          systemImage: "play.fill",
-          color: .pink
+          systemImage: "headphones"
         ) {
           settingsPage("Playback") {
             playbackSettingsSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -99,9 +103,7 @@ struct SettingsView: View {
 
         settingsCategoryLink(
           title: "Library",
-          subtitle: "Organization, lyrics and monitoring",
-          systemImage: "music.note.house.fill",
-          color: .purple
+          systemImage: "music.note"
         ) {
           settingsPage("Library") {
             libraryStatsSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -111,9 +113,7 @@ struct SettingsView: View {
 
         settingsCategoryLink(
           title: "Appearance",
-          subtitle: "Theme, player and layout",
-          systemImage: "paintpalette.fill",
-          color: .orange
+          systemImage: "paintbrush"
         ) {
           settingsPage("Appearance") {
             themingSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -121,11 +121,13 @@ struct SettingsView: View {
           }
         }
 
+      }
+      .listRowBackground(themeManager.cardBackgroundColor)
+
+      Section("Services") {
         settingsCategoryLink(
           title: "Online & Metadata",
-          subtitle: "Artwork, lyrics and data sources",
-          systemImage: "sparkles",
-          color: .cyan
+          systemImage: "globe"
         ) {
           settingsPage("Online & Metadata") {
             onlineFeaturesSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -135,9 +137,7 @@ struct SettingsView: View {
 
         settingsCategoryLink(
           title: "Connections",
-          subtitle: "Watch, Last.fm and WebDAV",
-          systemImage: "point.3.connected.trianglepath.dotted",
-          color: .green
+          systemImage: "link"
         ) {
           settingsPage("Connections") {
             #if os(iOS)
@@ -148,11 +148,13 @@ struct SettingsView: View {
           }
         }
 
+      }
+      .listRowBackground(themeManager.cardBackgroundColor)
+
+      Section("App") {
         settingsCategoryLink(
           title: "Data & Storage",
-          subtitle: "Metadata, backups and cleanup",
-          systemImage: "externaldrive.fill",
-          color: .indigo
+          systemImage: "externaldrive"
         ) {
           settingsPage("Data & Storage") {
             dataManagementSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -161,9 +163,7 @@ struct SettingsView: View {
 
         settingsCategoryLink(
           title: "About",
-          subtitle: "Version, community and privacy",
-          systemImage: "info.circle.fill",
-          color: .gray
+          systemImage: "info.circle"
         ) {
           settingsPage("About") {
             aboutSection.listRowBackground(themeManager.cardBackgroundColor)
@@ -203,37 +203,36 @@ struct SettingsView: View {
         }
       }
     }
-    .alert("Clear Cache?", isPresented: $showingClearCacheConfirmation) {
-      Button("Cancel", role: .cancel) {}
-      Button("Clear", role: .destructive) {
-        clearCache()
+    .alert(item: $activeConfirmation) { confirmation in
+      switch confirmation {
+      case .clearCache:
+        return Alert(
+          title: Text("Clear Cache?"),
+          message: Text(
+            "This will remove all cached artwork and lyrics. Your music files will not be affected."
+          ),
+          primaryButton: .destructive(Text("Clear"), action: clearCache),
+          secondaryButton: .cancel()
+        )
+      case .resetLibrary:
+        return Alert(
+          title: Text("Reset Library?"),
+          message: Text(
+            "This will remove all songs and playlists from Ampwave. This action cannot be undone."
+          ),
+          primaryButton: .destructive(Text("Reset"), action: resetLibrary),
+          secondaryButton: .cancel()
+        )
+      case .resetStatistics:
+        return Alert(
+          title: Text("Reset Statistics?"),
+          message: Text(
+            "This will remove your listening history. This action cannot be undone."
+          ),
+          primaryButton: .destructive(Text("Reset"), action: resetStats),
+          secondaryButton: .cancel()
+        )
       }
-    } message: {
-      Text(
-        "This will remove all cached artwork and lyrics. Your music files will not be affected."
-      )
-    }
-    // Reset Library
-    .alert("Reset Library?", isPresented: $showingResetConfirmation) {
-      Button("Cancel", role: .cancel) {}
-      Button("Reset", role: .destructive) {
-        resetLibrary()
-      }
-    } message: {
-      Text(
-        "This will remove all songs, playlists, and listening history. This action cannot be undone."
-      )
-    }
-    // Reset Stats
-    .alert("Reset Statistics?", isPresented: $showingResetStatsConfirmation) {
-      Button("Cancel", role: .cancel) {}
-      Button("Reset", role: .destructive) {
-        resetStats()
-      }
-    } message: {
-      Text(
-        "This will remove your listening history. This action cannot be undone."
-      )
     }
     .onAppear {
       setupContext()
@@ -248,15 +247,19 @@ struct SettingsView: View {
             .ignoresSafeArea()
 
           VStack(spacing: 16) {
-            ProgressView()
-              .scaleEffect(1.5)
-            Text("Resetting Library...")
+            ProgressView(value: resetProgress)
+              .progressViewStyle(.linear)
+              .tint(themeManager.accentColor)
+              .frame(width: 220)
+            Text(resetStatus)
               .font(.headline)
-              .foregroundStyle(.white)
+              .foregroundStyle(.primary)
+              .multilineTextAlignment(.center)
           }
           .padding(30)
           .background(.ultraThinMaterial)
           .clipShape(RoundedRectangle(cornerRadius: 20))
+          .allowsHitTesting(true)
         }
       }
     }
@@ -264,18 +267,19 @@ struct SettingsView: View {
 
   private func settingsCategoryLink<Destination: View>(
     title: String,
-    subtitle: String,
     systemImage: String,
-    color: Color,
     @ViewBuilder destination: () -> Destination
   ) -> some View {
     NavigationLink(destination: destination) {
-      SettingsCategoryRow(
-        title: title,
-        subtitle: subtitle,
-        systemImage: systemImage,
-        color: color
-      )
+      HStack(spacing: 12) {
+        Image(systemName: systemImage)
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(width: 30, height: 30)
+          .background(themeManager.accentColor, in: RoundedRectangle(cornerRadius: 7))
+
+        Text(title)
+      }
     }
   }
 
@@ -698,6 +702,21 @@ struct SettingsView: View {
           )
         )
 
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle(
+            "Delete Original Referenced Files",
+            isOn: Binding(
+              get: { preferences.deleteReferencedFilesOnRemoval },
+              set: { preferences.deleteReferencedFilesOnRemoval = $0 }
+            )
+          )
+          Text(
+            "When enabled, deleting referenced music from Ampwave also permanently deletes the original audio files. Leave this off for synced or externally managed folders."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+
         Toggle(
           "Live Library Monitoring",
           isOn: Binding(
@@ -930,11 +949,21 @@ struct SettingsView: View {
         }
       }
 
-      Link(destination: URL(string: "https://github.com/binimum/lyrics-api")!) {
+      Link(destination: URL(string: "https://github.com/amll-dev/amll-ttml-db")!) {
         HStack {
-          Label("Binimum Lyrics API", systemImage: "waveform.and.magnifyingglass")
+          Label("AMLL TTML Database", systemImage: "waveform.and.magnifyingglass")
           Spacer()
           Text("Word-Synced Lyrics")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      Link(destination: URL(string: "https://github.com/binimum/lyrics-api")!) {
+        HStack {
+          Label("Binimum Lyrics API", systemImage: "waveform.badge.magnifyingglass")
+          Spacer()
+          Text("Lyrics Fallback")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -963,7 +992,7 @@ struct SettingsView: View {
       Text("Data Sources")
     } footer: {
       Text(
-        "Ampwave uses open-source community databases and Apple MusicKit for metadata, artwork, and lyrics. Word-synced lyrics are provided by Binimum and LyricsPlus."
+        "Ampwave uses open-source community databases and Apple MusicKit for metadata, artwork, and lyrics. AMLL is the primary word-synced source, with Binimum and LyricsPlus as fallbacks."
       )
     }
   }
@@ -1022,7 +1051,7 @@ struct SettingsView: View {
       }
 
       Button {
-        showingClearCacheConfirmation = true
+        activeConfirmation = .clearCache
       } label: {
         Label("Clear Cache", systemImage: "trash")
       }
@@ -1036,13 +1065,13 @@ struct SettingsView: View {
       }
 
       Button(role: .destructive) {
-        showingResetConfirmation = true
+        activeConfirmation = .resetLibrary
       } label: {
         Label("Reset Library", systemImage: "exclamationmark.triangle")
       }
 
       Button(role: .destructive) {
-        showingResetStatsConfirmation = true
+        activeConfirmation = .resetStatistics
       } label: {
         Label(
           "Reset Statistics",
@@ -1282,6 +1311,8 @@ struct SettingsView: View {
 
   private func resetLibrary() {
     isResetting = true
+    resetProgress = 0
+    resetStatus = "Preparing reset…"
     print("[DEBUG] SettingsView.resetLibrary: Starting full reset")
 
     Task {
@@ -1291,6 +1322,16 @@ struct SettingsView: View {
       PlaybackController.shared.prepareForLibraryReset()
       library.ignoreReferencedSongsForLiveMonitoring(library.songs)
       library.resetInMemoryState()
+      // Flush every navigation stack and playlist reference before deleting
+      // SwiftData rows. Otherwise a view can fault a Playlist attribute after
+      // its backing object has been detached from the context.
+      playlistManager.resetInMemoryState()
+      NotificationCenter.default.post(
+        name: .libraryDidReset,
+        object: ["phase": "willReset"]
+      )
+      resetProgress = 0.1
+      resetStatus = "Removing library records…"
 
       // ── 1. Delete SwiftData records ───────────────────────────────────────
       // We fetch-and-delete each type individually rather than using the batch
@@ -1304,6 +1345,10 @@ struct SettingsView: View {
 
       // SyncedLyric — depends on LibrarySong.id, must go first
       deleteAll(SyncedLyric.self)
+
+      // Radio stations retain song relationships and otherwise survive as
+      // empty Home cards after the songs are removed.
+      deleteAll(RadioStation.self)
 
       // PlaybackState — references song UUIDs; clear so no dangling references
       deleteAll(PlaybackState.self)
@@ -1325,8 +1370,25 @@ struct SettingsView: View {
       }
 
       // ── 3. Delete physical files & artwork cache ───────────────────────────
-      clearCache()
-      library.deleteAllFiles()
+      resetProgress = 0.55
+      resetStatus = "Removing audio files…"
+      let songsDirectory = library.songsDirectory
+      let artworkCacheDirectory = library.artworkCacheDirectory
+      await Task.detached(priority: .userInitiated) {
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: songsDirectory)
+        try? fileManager.createDirectory(
+          at: songsDirectory,
+          withIntermediateDirectories: true
+        )
+        try? fileManager.removeItem(at: artworkCacheDirectory)
+        try? fileManager.createDirectory(
+          at: artworkCacheDirectory,
+          withIntermediateDirectories: true
+        )
+      }.value
+      resetProgress = 0.75
+      resetStatus = "Finishing reset…"
 
       // ── 4. Clear UserDefaults keys that would skip the next startup scan ──
       // lastDiskScanTime makes indexOnStartup skip if the directory looks unchanged.
@@ -1335,6 +1397,8 @@ struct SettingsView: View {
       ud.removeObject(forKey: "com.ampwave.lastDiskScanTime")
       // One-time metadata backfill flag — let it re-run after a fresh import
       ud.removeObject(forKey: "Ampwave.fullMetadataBackfill.v1")
+      ud.removeObject(forKey: "Ampwave.embeddedMetadataRepair.v2")
+      ud.removeObject(forKey: "Ampwave.embeddedMetadataRepair.v3")
       // Also reset the indexing guard in SongLibrary so indexOnStartup runs cleanly
       ud.synchronize()
 
@@ -1349,6 +1413,7 @@ struct SettingsView: View {
       OnboardingState.reset()
       NotificationCenter.default.post(name: .libraryDidReset, object: nil)
 
+      resetProgress = 1
       isResetting = false
       print("[DEBUG] SettingsView.resetLibrary: Full reset completed")
     }
@@ -1428,43 +1493,6 @@ struct SettingsView: View {
     } else {
       return "\(minutes)m"
     }
-  }
-}
-
-private struct SettingsCategoryRow: View {
-  let title: String
-  let subtitle: String
-  let systemImage: String
-  let color: Color
-
-  var body: some View {
-    HStack(spacing: 14) {
-      ZStack {
-        RoundedRectangle(cornerRadius: 11, style: .continuous)
-          .fill(
-            LinearGradient(
-              colors: [color.opacity(0.72), color],
-              startPoint: .topLeading,
-              endPoint: .bottomTrailing
-            )
-          )
-
-        Image(systemName: systemImage)
-          .font(.system(size: 17, weight: .semibold))
-          .foregroundStyle(.white)
-      }
-      .frame(width: 40, height: 40)
-
-      VStack(alignment: .leading, spacing: 3) {
-        Text(title)
-          .font(.headline)
-        Text(subtitle)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-      }
-    }
-    .padding(.vertical, 3)
   }
 }
 

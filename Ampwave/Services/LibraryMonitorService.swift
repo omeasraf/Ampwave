@@ -100,6 +100,22 @@ final class LibraryMonitorService {
     scheduleReconciliation()
   }
 
+  /// Starts event delivery and waits for the one launch reconciliation to
+  /// finish. ContentView calls this while the splash is visible so additions
+  /// made while the app was closed do not surface as an import banner after
+  /// the Home screen has already appeared.
+  func startAndWaitForInitialReconciliation() async {
+    guard isEnabled, !isInBackground else { return }
+
+    if reconciliationTask == nil {
+      activateFilePresenters()
+      scheduleReconciliation()
+    }
+
+    let initialReconciliation = reconciliationTask
+    await initialReconciliation?.value
+  }
+
   func stop() {
     changeDebounceTask?.cancel()
     changeDebounceTask = nil

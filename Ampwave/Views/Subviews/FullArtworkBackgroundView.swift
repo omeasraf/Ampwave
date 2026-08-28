@@ -40,9 +40,8 @@ struct FullArtworkBackgroundView: View {
         } else {
           Color.gray.opacity(0.2)
             .overlay(
-              Image(systemName: "music.note")
-                .font(.system(size: 100))
-                .foregroundStyle(.secondary)
+              AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+                .frame(width: 140, height: 94)
             )
         }
       }

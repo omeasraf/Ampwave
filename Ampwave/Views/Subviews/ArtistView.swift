@@ -348,8 +348,6 @@ struct ArtistView: View {
 
 struct ArtistInfoSection: View {
   let artist: Artist
-  @State private var isExpanded = false
-  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -365,21 +363,8 @@ struct ArtistInfoSection: View {
         }
 
         if let biography = artist.cachedBiography ?? artist.biography, !biography.isEmpty {
-          Text(biography)
-            .font(.system(size: 15))
-            .foregroundStyle(.secondary)
-            .lineLimit(isExpanded ? nil : 4)
+          ExpandableDescriptionView(text: biography)
             .padding(.top, 4)
-
-          if !isExpanded {
-            Button("Read More") {
-              withAnimation(.spring()) {
-                isExpanded.toggle()
-              }
-            }
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(themeManager.accentColor)
-          }
         }
       }
       .padding(.horizontal, 20)

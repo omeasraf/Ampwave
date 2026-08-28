@@ -57,6 +57,80 @@ final class AppleMusicMetadataService {
         self.isAuthorized = (status == .authorized)
         return self.isAuthorized
     }
+
+    /// Artwork candidates for the editor, ordered from the exact album cover
+    /// to other exact song matches. This never prompts for Music access: the
+    /// picker uses Apple Music only when the user has already granted it.
+    func searchArtworkURLs(
+        title: String,
+        artist: String,
+        album: String?,
+        width: Int = 1200,
+        height: Int = 1200
+    ) async -> [URL] {
+        guard networkAllowed, MusicAuthorization.currentStatus == .authorized else { return [] }
+        isAuthorized = true
+
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanArtist = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanAlbum = album?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty, !cleanArtist.isEmpty else { return [] }
+
+        var urls: [URL] = []
+        func appendUnique(_ url: URL?) {
+            guard let url, !urls.contains(url) else { return }
+            urls.append(url)
+        }
+
+        // For a song, its embedded album name is the strongest cover-art key.
+        // For AlbumEditSheet, `title` itself is the album name.
+        let albumToFind = (cleanAlbum?.isEmpty == false) ? cleanAlbum! : cleanTitle
+        appendUnique(await fetchAlbumArtworkURL(
+            album: albumToFind,
+            artist: cleanArtist,
+            width: width,
+            height: height
+        ))
+
+        do {
+            var request = MusicCatalogSearchRequest(
+                term: "\(cleanArtist) \(cleanTitle)",
+                types: [MKSONG.self]
+            )
+            request.limit = 15
+            let response = try await request.response()
+            let targetAlbum = cleanAlbum.map(normalizedArtistName)
+
+            let matches = response.songs.compactMap { candidate -> (MKSONG, Double, Bool)? in
+                let score = MetadataMatcher.computeMatchScore(
+                    title1: cleanTitle,
+                    artist1: cleanArtist,
+                    duration1: nil,
+                    title2: candidate.title,
+                    artist2: candidate.artistName,
+                    duration2: candidate.duration
+                )
+                guard score >= 0.75 else { return nil }
+                let exactAlbum = targetAlbum.map {
+                    normalizedArtistName(candidate.albumTitle ?? "") == $0
+                } ?? false
+                return (candidate, score, exactAlbum)
+            }
+            .sorted {
+                if $0.2 != $1.2 { return $0.2 && !$1.2 }
+                return $0.1 > $1.1
+            }
+
+            for (candidate, _, _) in matches {
+                appendUnique(candidate.artwork?.url(width: width, height: height))
+                if urls.count >= 8 { break }
+            }
+        } catch {
+            print("[DEBUG] AppleMusicMetadataService: Artwork search error: \(error)")
+        }
+
+        return urls
+    }
     
     /// Searches Apple Music for a song and returns the best match with full metadata.
     func fetchMetadata(title: String, artist: String, duration: TimeInterval? = nil) async -> FetchedMetadata? {

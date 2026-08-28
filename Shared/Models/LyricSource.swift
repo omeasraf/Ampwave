@@ -7,6 +7,7 @@ import Foundation
 
 enum LyricSource: String, Codable {
   case local = "local"
+  case amll = "amll"
   case lrclib = "lrclib"
   case lyricsPlus = "lyricsPlus"
   case biniLyrics = "biniLyrics"

@@ -39,6 +39,7 @@ struct AmpwaveApp: App {
   @Environment(\.scenePhase) private var scenePhase
 
   init() {
+    DiagnosticLog.shared.log("lifecycle", "Application init build=\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown")")
     print("[DEBUG] AmpwaveApp init started")
 
     // Must register before the app finishes launching, or BGTaskScheduler traps.
@@ -131,8 +132,13 @@ struct AmpwaveApp: App {
         .onChange(of: scenePhase) { _, phase in
           switch phase {
           case .active:
+            DiagnosticLog.shared.log("lifecycle", "Scene became active")
             LibraryMonitorService.shared.applicationDidBecomeActive()
           case .background:
+            DiagnosticLog.shared.log(
+              "lifecycle",
+              "Scene entered background playing=\(PlaybackController.shared.isPlaying) song=\(PlaybackController.shared.currentItem?.title ?? "none")"
+            )
             LibraryMonitorService.shared.applicationDidEnterBackground()
             // Leaving the app: ask for a later window so anything the
             // post-backgrounding grace period doesn't finish still gets done.
