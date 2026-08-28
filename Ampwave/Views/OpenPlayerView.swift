@@ -79,6 +79,13 @@ struct OpenPlayerView: View {
             pageHeight * 0.3,
             min(pageHeight * 0.62, pageHeight - controlsHeight)
           )
+          // A resizable image has no useful intrinsic width. Give the compact
+          // artwork branch an explicit square so artwork cannot widen the
+          // entire ScrollView when Full Artwork Background is toggled off.
+          let compactArtworkSize = max(
+            0,
+            min(geometry.size.width - 32, artworkHeight - 20)
+          )
 
           ScrollView(showsIndicators: false) {
               VStack(spacing: 0) {
@@ -127,12 +134,10 @@ struct OpenPlayerView: View {
                               : .black.opacity(0.15),
                             shadowRadius: accentOn ? 32 : 20
                           )
+                          .frame(width: compactArtworkSize, height: compactArtworkSize)
+                          .frame(maxWidth: .infinity)
                           .padding(.top, 10)
                           .padding(.bottom, 10)
-                          .padding(.horizontal, 16)
-                          // Same reasoning as the full-bleed branch: the cover
-                          // shrinks before the controls get clipped.
-                          .frame(maxHeight: artworkHeight)
                       }
                       
                       Spacer(minLength: 0)
@@ -182,6 +187,7 @@ struct OpenPlayerView: View {
                         controlsHeight = height
                       }
                   }
+                  .frame(width: geometry.size.width)
                   .frame(minHeight: pageHeight)
                   
                   // ── Lyrics section: only visible on scroll ──
@@ -189,6 +195,7 @@ struct OpenPlayerView: View {
                       .padding(.horizontal, (userPreferences?.openPlayerGlassBackground ?? true) ? 16 : 8)
                       .padding(.bottom, 24)
               }
+              .frame(width: geometry.size.width)
           }
           .background {
             let accentOn = userPreferences?.coverArtAccentPlayer ?? false
