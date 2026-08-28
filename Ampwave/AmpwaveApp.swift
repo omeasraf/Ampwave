@@ -141,6 +141,7 @@ struct AmpwaveApp: App {
           switch phase {
           case .active:
             DiagnosticLog.shared.log("lifecycle", "Scene became active")
+            PlaybackController.shared.applicationDidBecomeActive()
             LibraryMonitorService.shared.applicationDidBecomeActive()
           case .background:
             DiagnosticLog.shared.log(

@@ -31,16 +31,20 @@
       private var currentURL: URL?
       private var endObserver: NSObjectProtocol?
       private var statusObserver: NSKeyValueObservation?
+      private var lifecycleObservers: [NSObjectProtocol] = []
       private var shouldPlay = false
+      private var appIsActive = true
       private weak var view: ArtworkPlayerUIView?
 
       func attach(to view: ArtworkPlayerUIView) {
         self.view = view
+        appIsActive = UIApplication.shared.applicationState == .active
         player.isMuted = true
         // This player reads a remote HLS stream, so allow AVFoundation to
         // buffer enough data for a stable first frame.
         player.automaticallyWaitsToMinimizeStalling = true
         view.playerLayer.player = player
+        observeApplicationLifecycle()
       }
 
       func configure(url: URL, isPlaying: Bool) {
@@ -60,7 +64,7 @@
                   "animated-artwork",
                   "OpenPlayer animation ready url=\(url.lastPathComponent)"
                 )
-                if self.shouldPlay { self.player.play() }
+                if self.shouldPlay, self.appIsActive { self.player.play() }
               case .failed:
                 DiagnosticLog.shared.log(
                   "animated-artwork",
@@ -78,18 +82,45 @@
           ) { [weak self] _ in
             guard let self else { return }
             self.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-              if self.shouldPlay { self.player.play() }
+              if self.shouldPlay, self.appIsActive { self.player.play() }
             }
           }
         }
-        isPlaying ? player.play() : player.pause()
+        isPlaying && appIsActive ? player.play() : player.pause()
       }
 
       func stop() {
         player.pause()
         removeObservers()
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+        lifecycleObservers.removeAll()
         player.replaceCurrentItem(with: nil)
         view?.playerLayer.player = nil
+      }
+
+      private func observeApplicationLifecycle() {
+        guard lifecycleObservers.isEmpty else { return }
+        lifecycleObservers.append(
+          NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+          ) { [weak self] _ in
+            self?.appIsActive = false
+            self?.player.pause()
+          }
+        )
+        lifecycleObservers.append(
+          NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+          ) { [weak self] _ in
+            guard let self else { return }
+            self.appIsActive = true
+            if self.shouldPlay { self.player.play() }
+          }
+        )
       }
 
       private func removeObservers() {

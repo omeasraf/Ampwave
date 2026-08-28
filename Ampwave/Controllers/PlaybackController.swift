@@ -143,6 +143,9 @@ final class PlaybackController {
   private let library = SongLibrary.shared
   private let historyTracker = ListeningHistoryTracker.shared
   private var audioSessionConfigured = false
+  #if os(iOS)
+    private var shouldResumeAfterSystemInterruption = false
+  #endif
 
   private var modelContext: ModelContext?
   private var preferences: UserPreferences?
@@ -725,22 +728,46 @@ final class PlaybackController {
 
       switch type {
       case .began:
-        DiagnosticLog.shared.log("audio-session", "Interruption began")
-        pause()
+        let wasPlaying = isPlaying || (player?.rate ?? 0) > 0
+        let alreadyWaitingToResume = shouldResumeAfterSystemInterruption
+        DiagnosticLog.shared.log(
+          "audio-session",
+          "Interruption began wasPlaying=\(wasPlaying)"
+        )
+        if wasPlaying { pause() }
+        shouldResumeAfterSystemInterruption = alreadyWaitingToResume || wasPlaying
       case .ended:
         DiagnosticLog.shared.log("audio-session", "Interruption ended userInfo=\(userInfo)")
-        if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey]
-          as? UInt
-        {
-          let options = AVAudioSession.InterruptionOptions(
-            rawValue: optionsValue
-          )
-          if options.contains(.shouldResume) {
-            play()
-          }
+        if shouldResumeAfterSystemInterruption {
+          shouldResumeAfterSystemInterruption = false
+          audioSessionConfigured = false
+          play()
         }
       @unknown default:
         break
+      }
+    }
+
+    /// Reconciles Ampwave's UI intent with the real player after Control
+    /// Center, Notification Center, or another app temporarily owns audio.
+    func applicationDidBecomeActive() {
+      guard currentItem != nil, let player else { return }
+      let playerIsActuallyPlaying =
+        player.timeControlStatus == .playing && player.rate > 0
+      let shouldRecover =
+        shouldResumeAfterSystemInterruption || (isPlaying && !playerIsActuallyPlaying)
+
+      if shouldRecover {
+        DiagnosticLog.shared.log(
+          "audio-session",
+          "Recovering on activation intent=\(isPlaying) interrupted=\(shouldResumeAfterSystemInterruption) status=\(player.timeControlStatus.rawValue) rate=\(player.rate)"
+        )
+        shouldResumeAfterSystemInterruption = false
+        audioSessionConfigured = false
+        play()
+      } else if !isPlaying, playerIsActuallyPlaying {
+        // A user pause always wins over stale AVPlayer state.
+        player.pause()
       }
     }
 
@@ -1578,6 +1605,11 @@ final class PlaybackController {
   }
 
   func pause() {
+    #if os(iOS)
+      // An explicit pause, including one from headphones or the Lock Screen,
+      // cancels any pending automatic resume from an earlier interruption.
+      shouldResumeAfterSystemInterruption = false
+    #endif
     player?.pause()
     if let playerTime = player?.currentTime().seconds,
       playerTime.isFinite, playerTime >= 0
