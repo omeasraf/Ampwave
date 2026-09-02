@@ -11,6 +11,14 @@ import Foundation
 nonisolated enum MusicUnderstandingAnalyzer {
   static let analysisVersion = 1
 
+  static var isFrameworkCompiled: Bool {
+    #if canImport(MusicUnderstanding)
+      return true
+    #else
+      return false
+    #endif
+  }
+
   static var isAvailable: Bool {
     #if canImport(MusicUnderstanding)
       if #available(iOS 27.0, macOS 27.0, tvOS 27.0, watchOS 27.0, visionOS 27.0, *) {
@@ -28,13 +36,23 @@ nonisolated enum MusicUnderstandingAnalyzer {
         defer { if secured { track.url.stopAccessingSecurityScopedResource() } }
 
         do {
+          await DiagnosticLog.shared.log(
+            "sonic",
+            "Music Understanding started file=\(track.url.lastPathComponent)"
+          )
           let asset = AVURLAsset(
             url: track.url,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
           )
           let session = try await MusicUnderstandingSession(asset: asset)
           let result = try await session.analyze(for: [.instrumentActivity])
-          guard let activity = result.instrumentActivity else { return nil }
+          guard let activity = result.instrumentActivity else {
+            await DiagnosticLog.shared.log(
+              "sonic",
+              "Music Understanding returned no instrument activity file=\(track.url.lastPathComponent)"
+            )
+            return nil
+          }
 
           func points(
             for instrument: InstrumentActivityResult.Instrument
@@ -57,7 +75,7 @@ nonisolated enum MusicUnderstandingAnalyzer {
             other: points(for: .other)
           )
         } catch {
-          DiagnosticLog.shared.log(
+          await DiagnosticLog.shared.log(
             "sonic",
             "Music Understanding failed file=\(track.url.lastPathComponent) error=\(error)"
           )

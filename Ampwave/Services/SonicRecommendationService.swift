@@ -2,6 +2,10 @@ import AVFoundation
 import Foundation
 import SwiftData
 
+extension Notification.Name {
+  static let sonicAnalysisDidUpdate = Notification.Name("com.ampwave.sonicAnalysisDidUpdate")
+}
+
 nonisolated struct SonicTrackSnapshot: Sendable {
   let id: UUID
   let fileHash: String
@@ -85,6 +89,11 @@ final class SonicRecommendationService {
 
   func setModelContext(_ context: ModelContext) {
     modelContext = context
+    DiagnosticLog.shared.log(
+      "sonic",
+      "Music Understanding frameworkCompiled=\(MusicUnderstandingAnalyzer.isFrameworkCompiled) "
+        + "runtimeAvailable=\(MusicUnderstandingAnalyzer.isAvailable)"
+    )
   }
 
   func snapshot(for song: LibrarySong) -> SonicTrackSnapshot {
@@ -108,6 +117,22 @@ final class SonicRecommendationService {
     enqueueAnalysis(snapshot(for: song, library: library))
   }
 
+  /// Moves the active song to the front of the LIFO worker so playback does
+  /// not wait for an entire existing library backfill to finish first.
+  func prioritizeAnalysis(for song: LibrarySong) {
+    let track = snapshot(for: song)
+    guard !analysisIsComplete(hash: track.fileHash) else { return }
+    if let index = pending.firstIndex(where: { $0.fileHash == track.fileHash }) {
+      pending.remove(at: index)
+      pending.append(track)
+    } else {
+      pending.append(track)
+      pendingHashes.insert(track.fileHash)
+    }
+    DiagnosticLog.shared.log("sonic", "Prioritized current song file=\(track.url.lastPathComponent)")
+    startWorkerIfNeeded()
+  }
+
   /// Backfills existing libraries after upgrading from a build without sonic
   /// analysis, while imports enqueue their new song immediately.
   func enqueueMissingAnalysis(for songs: [LibrarySong]) {
@@ -123,16 +148,26 @@ final class SonicRecommendationService {
         .map { ($0.fileHash, $0) },
       uniquingKeysWith: { newer, _ in newer }
     )
+    var musicUnderstandingBackfillCount = 0
     for song in songs {
       let track = snapshot(for: song, library: library)
       let record = existingRecords[track.fileHash]
       let needsBaseAnalysis = record == nil
       let needsMusicUnderstanding = MusicUnderstandingAnalyzer.isAvailable
-        && record?.musicUnderstandingVersion != MusicUnderstandingAnalyzer.analysisVersion
+        && (
+          record?.musicUnderstandingVersion != MusicUnderstandingAnalyzer.analysisVersion
+            || record?.instrumentActivityData == nil
+        )
       if needsBaseAnalysis || needsMusicUnderstanding {
+        if needsMusicUnderstanding { musicUnderstandingBackfillCount += 1 }
         enqueueAnalysis(track, databaseCheckAlreadyPerformed: true)
       }
     }
+    DiagnosticLog.shared.log(
+      "sonic",
+      "Analysis backfill songs=\(songs.count) baseRecords=\(existingRecords.count) "
+        + "musicUnderstanding=\(musicUnderstandingBackfillCount)"
+    )
   }
 
   func rank(
@@ -223,7 +258,10 @@ final class SonicRecommendationService {
     guard let analyzed else { return nil }
 
     let needsMusicUnderstanding = MusicUnderstandingAnalyzer.isAvailable
-      && existing?.musicUnderstandingVersion != MusicUnderstandingAnalyzer.analysisVersion
+      && (
+        existing?.musicUnderstandingVersion != MusicUnderstandingAnalyzer.analysisVersion
+          || existing?.instrumentActivityData == nil
+      )
     let instrumentActivity = needsMusicUnderstanding
       ? await MusicUnderstandingAnalyzer.analyze(track)
       : nil
@@ -231,18 +269,15 @@ final class SonicRecommendationService {
 
     guard let modelContext else { return analyzed }
     if let record = fetchRecord(hash: track.fileHash) {
-      if needsMusicUnderstanding {
-        // Mark the version even when a particular file yields no result. That
-        // prevents an unsupported/corrupt file from being retried every launch.
+      if needsMusicUnderstanding, let instrumentActivity, let encodedActivity {
         record.musicUnderstandingVersion = MusicUnderstandingAnalyzer.analysisVersion
         record.instrumentActivityData = encodedActivity
-        if let instrumentActivity {
-          DiagnosticLog.shared.log(
-            "sonic",
-            "Cached Music Understanding activity vocal=\(instrumentActivity.vocal.count) "
-              + "drum=\(instrumentActivity.drum.count) bass=\(instrumentActivity.bass.count)"
-          )
-        }
+        DiagnosticLog.shared.log(
+          "sonic",
+          "Cached Music Understanding activity file=\(track.url.lastPathComponent) "
+            + "vocal=\(instrumentActivity.vocal.count) drum=\(instrumentActivity.drum.count) "
+            + "bass=\(instrumentActivity.bass.count)"
+        )
       }
     } else {
       modelContext.insert(
@@ -255,13 +290,16 @@ final class SonicRecommendationService {
           brightness: analyzed.brightness,
           crestFactor: analyzed.crestFactor,
           stereoWidth: analyzed.stereoWidth,
-          musicUnderstandingVersion: needsMusicUnderstanding
-            ? MusicUnderstandingAnalyzer.analysisVersion : nil,
+          musicUnderstandingVersion: encodedActivity == nil
+            ? nil : MusicUnderstandingAnalyzer.analysisVersion,
           instrumentActivityData: encodedActivity
         )
       )
     }
     try? modelContext.save()
+    if encodedActivity != nil {
+      NotificationCenter.default.post(name: .sonicAnalysisDidUpdate, object: track.id)
+    }
     return analyzed
   }
 
@@ -292,6 +330,7 @@ final class SonicRecommendationService {
     guard let record = fetchRecord(hash: hash) else { return false }
     guard MusicUnderstandingAnalyzer.isAvailable else { return true }
     return record.musicUnderstandingVersion == MusicUnderstandingAnalyzer.analysisVersion
+      && record.instrumentActivityData != nil
   }
 
   private func fetchRecord(hash: String) -> SonicAnalysisRecord? {

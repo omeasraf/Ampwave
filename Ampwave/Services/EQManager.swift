@@ -122,7 +122,7 @@ final class EQManager {
 
     // MARK: - Persistence
 
-    private func syncToVocalIsolator() {
+    func syncToVocalIsolator() {
         VocalIsolator.shared.setEQEnabled(isEnabled)
         for (i, gain) in bands.enumerated() {
             VocalIsolator.shared.setEQGain(gain, atBand: i)

@@ -159,6 +159,11 @@ final class PlaybackController {
       currentInstrumentActivity = currentItem.flatMap {
         SonicRecommendationService.shared.instrumentActivity(for: $0)
       }
+      if let currentItem, currentInstrumentActivity == nil,
+        MusicUnderstandingAnalyzer.isAvailable
+      {
+        SonicRecommendationService.shared.prioritizeAnalysis(for: currentItem)
+      }
     }
   }
   private var currentInstrumentActivity: SonicInstrumentActivity?
@@ -229,13 +234,10 @@ final class PlaybackController {
   }
 
   private func applyEQPresetForPlayback() {
-    let preset = UserDefaults.standard.string(forKey: "com.ampwave.audioEQPreset") ?? "flat"
-    switch preset {
-    case "voice":
-      vocalLevel = 0.72
-    default:
-      vocalLevel = 1.0
-    }
+    // EQManager owns EQ persistence. The previous legacy preset lookup always
+    // resolved to "flat" and reset VocalSlider to 100% at every play/restore,
+    // making an attached processing tap silently become a no-op.
+    EQManager.shared.syncToVocalIsolator()
   }
 
   // MARK: - Vocal Isolation
@@ -293,13 +295,21 @@ final class PlaybackController {
       guard let self, let item else { return }
       do {
         guard let track = try await item.asset.loadTracks(withMediaType: .audio).first,
-          self.player?.currentItem === item
+          self.player?.currentItem === item,
+          let song = self.currentItem
         else { return }
+        let instrumentActivity = SonicRecommendationService.shared.instrumentActivity(for: song)
+        self.currentInstrumentActivity = instrumentActivity
         item.audioMix = VocalIsolator.shared.createAudioMix(
           for: track,
-          instrumentActivity: self.currentInstrumentActivity
+          instrumentActivity: instrumentActivity
         )
-        DiagnosticLog.shared.log("audio-processing", "Attached processing tap on demand")
+        DiagnosticLog.shared.log(
+          "audio-processing",
+          "Attached VocalSlider tap title=\(song.title) level=\(self.currentVocalLevel) "
+            + "mode=\(instrumentActivity == nil ? "fallback" : "music-understanding") "
+            + "vocalPoints=\(instrumentActivity?.vocal.count ?? 0)"
+        )
       } catch {
         DiagnosticLog.shared.log("error", "Could not attach processing tap: \(error)")
       }
@@ -313,6 +323,7 @@ final class PlaybackController {
       Task { @MainActor in
         withAnimation(.easeInOut(duration: 0.5)) {
           self?.isVocalSliderVisible = false
+          self?.saveState()
         }
       }
     }
@@ -561,6 +572,10 @@ final class PlaybackController {
         "[DEBUG] PlaybackController.setModelContext: Applied defaults - Shuffle: \(shuffleMode), Repeat: \(repeatMode)"
       )
     }
+    if let persistentState {
+      self.currentVocalLevel = min(max(persistentState.vocalLevel, 0), 1)
+      VocalIsolator.shared.vocalLevel = self.currentVocalLevel
+    }
 
     self.isInitializing = false
   }
@@ -671,6 +686,45 @@ final class PlaybackController {
       name: .lyricsDidUpdate,
       object: nil
     )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleSonicAnalysisDidUpdate(_:)),
+      name: .sonicAnalysisDidUpdate,
+      object: nil
+    )
+  }
+
+  @objc private func handleSonicAnalysisDidUpdate(_ notification: Notification) {
+    guard let songID = notification.object as? UUID,
+      let song = currentItem,
+      song.id == songID,
+      let activity = SonicRecommendationService.shared.instrumentActivity(for: song)
+    else { return }
+
+    currentInstrumentActivity = activity
+    DiagnosticLog.shared.log(
+      "audio-processing",
+      "Current song Music Understanding became ready title=\(song.title) vocalPoints=\(activity.vocal.count)"
+    )
+
+    // If the fallback tap was installed while analysis was still running,
+    // replace it in place so the current song benefits without a restart.
+    guard let item = player?.currentItem, item.audioMix != nil,
+      VocalIsolator.shared.requiresProcessing
+    else { return }
+    Task { @MainActor [weak self, weak item] in
+      guard let self, let item, self.player?.currentItem === item,
+        let track = try? await item.asset.loadTracks(withMediaType: .audio).first
+      else { return }
+      item.audioMix = VocalIsolator.shared.createAudioMix(
+        for: track,
+        instrumentActivity: activity
+      )
+      DiagnosticLog.shared.log(
+        "audio-processing",
+        "Upgraded active VocalSlider tap to Music Understanding title=\(song.title)"
+      )
+    }
   }
 
   @objc private func handleSongsDeleted(_ notification: Notification) {
@@ -1364,6 +1418,12 @@ final class PlaybackController {
           instrumentActivity: instrumentActivity
         ) {
           item.audioMix = audioMix
+          DiagnosticLog.shared.log(
+            "audio-processing",
+            "Created VocalSlider tap title=\(song.title) level=\(currentVocalLevel) "
+              + "mode=\(instrumentActivity == nil ? "fallback" : "music-understanding") "
+              + "vocalPoints=\(instrumentActivity?.vocal.count ?? 0)"
+          )
           print(
             "[VALIDATION] PlaybackController: Assigned AVAudioMix to AVPlayerItem for \(song.title)"
           )
@@ -2388,6 +2448,7 @@ final class PlaybackController {
     state.lastPlaylistId = currentPlaylistId
     state.shuffleModeRaw = shuffleMode.rawValue
     state.repeatModeRaw = repeatMode.rawValue
+    state.vocalLevel = currentVocalLevel
 
     do {
       try context.save()

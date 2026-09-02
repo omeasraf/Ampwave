@@ -268,19 +268,22 @@ final class VocalIsolator {
             frameCounter = 0
         }
 
-        /// Music Understanding identifies when vocals are actually present; it
-        /// does not separate them. Gate the listener's requested reduction with
-        /// that confidence so center-panned instruments remain untouched in
-        /// instrumental passages. A smoothstep curve makes faint detections
-        /// settle gently rather than pumping between buffers.
+        /// Music Understanding identifies when vocals are present; it does not
+        /// separate them. Use that confidence only to strengthen an existing
+        /// user-requested reduction. It must never move the effective level
+        /// back toward 1, which would make voices more audible than the slider
+        /// position promises when Apple's confidence briefly dips.
         func adaptiveVocalLevel(userLevel: Float, at time: TimeInterval) -> Float {
-            guard let instrumentActivity, !instrumentActivity.vocal.isEmpty else {
+            guard userLevel < 0.999,
+                  let instrumentActivity,
+                  !instrumentActivity.vocal.isEmpty
+            else {
                 return userLevel
             }
             let raw = min(max(instrumentActivity.vocalActivity(at: time), 0), 1)
             let normalized = min(max((raw - 0.04) / 0.36, 0), 1)
             let presence = normalized * normalized * (3 - 2 * normalized)
-            return 1 - (1 - userLevel) * presence
+            return userLevel * (1 - 0.16 * presence)
         }
 
         func adaptiveBassProtection(at time: TimeInterval) -> Float {
