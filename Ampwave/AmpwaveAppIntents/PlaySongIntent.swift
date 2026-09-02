@@ -28,6 +28,7 @@ public struct PlaySongIntent: AudioPlaybackIntent {
   }
 
   public func perform() async throws -> some IntentResult {
+    await SiriIntentEnvironment.prepareLibrary(includePlayback: true)
     let title = song.title
     let artist = song.artist
     _ = try await SiriPlaybackRouter.shared.playSong(songTitle: title, artistName: artist)

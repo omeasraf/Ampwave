@@ -19,14 +19,16 @@ struct ContentView: View {
 
   private var widgetThemeSignature: String {
     let preferences = themeManager.userPreferences
-    return [
-      themeManager.currentTheme.rawValue,
-      preferences?.customBackgroundColorHex ?? "",
-      preferences?.customAccentColorHex ?? "",
-      preferences?.customCardBackgroundColorHex ?? "",
-      preferences?.customColorSchemeRaw ?? "",
-      themeManager.themeConfig.isDark ? "dark" : "light",
-    ].joined(separator: "|")
+    let theme = themeManager.currentTheme.rawValue
+    let background = preferences?.customBackgroundColorHex ?? ""
+    let accent = preferences?.customAccentColorHex ?? ""
+    let card = preferences?.customCardBackgroundColorHex ?? ""
+    let primaryText = preferences?.customPrimaryTextColorHex ?? ""
+    let secondaryText = preferences?.customSecondaryTextColorHex ?? ""
+    let scheme = preferences?.customColorSchemeRaw ?? ""
+    let resolvedScheme = themeManager.themeConfig.isDark ? "dark" : "light"
+    return [theme, background, accent, card, primaryText, secondaryText, scheme, resolvedScheme]
+      .joined(separator: "|")
   }
 
   var body: some View {

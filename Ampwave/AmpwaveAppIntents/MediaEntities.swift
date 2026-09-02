@@ -42,13 +42,15 @@ struct SongEntity: AppEntity, Identifiable {
 struct SongEntityQuery: EntityStringQuery {
   @MainActor
   func entities(for identifiers: [UUID]) async throws -> [SongEntity] {
-    identifiers.compactMap { SongLibrary.shared.song(id: $0) }.map(SongEntity.init)
+    await SiriIntentEnvironment.prepareLibrary()
+    return identifiers.compactMap { SongLibrary.shared.song(id: $0) }.map(SongEntity.init)
   }
 
   /// Resolves what the user actually said. Matching is deliberately loose —
   /// speech recognition rarely reproduces punctuation or bracketed suffixes.
   @MainActor
   func entities(matching string: String) async throws -> [SongEntity] {
+    await SiriIntentEnvironment.prepareLibrary()
     let needle = MediaMatch.normalize(string)
     guard !needle.isEmpty else { return [] }
 
@@ -66,7 +68,8 @@ struct SongEntityQuery: EntityStringQuery {
 
   @MainActor
   func suggestedEntities() async throws -> [SongEntity] {
-    SongLibrary.shared.songs.prefix(20).map(SongEntity.init)
+    await SiriIntentEnvironment.prepareLibrary()
+    return SongLibrary.shared.songs.prefix(20).map(SongEntity.init)
   }
 }
 
@@ -89,12 +92,14 @@ struct ArtistEntity: AppEntity, Identifiable {
 struct ArtistEntityQuery: EntityStringQuery {
   @MainActor
   func entities(for identifiers: [String]) async throws -> [ArtistEntity] {
+    await SiriIntentEnvironment.prepareLibrary()
     let known = Set(SongLibrary.shared.artists.map(\.name))
     return identifiers.filter { known.contains($0) }.map { ArtistEntity(id: $0, name: $0) }
   }
 
   @MainActor
   func entities(matching string: String) async throws -> [ArtistEntity] {
+    await SiriIntentEnvironment.prepareLibrary()
     let needle = MediaMatch.normalize(string)
     guard !needle.isEmpty else { return [] }
 
@@ -113,7 +118,10 @@ struct ArtistEntityQuery: EntityStringQuery {
 
   @MainActor
   func suggestedEntities() async throws -> [ArtistEntity] {
-    SongLibrary.shared.artists.prefix(20).map { ArtistEntity(id: $0.name, name: $0.name) }
+    await SiriIntentEnvironment.prepareLibrary()
+    return SongLibrary.shared.artists.prefix(20).map {
+      ArtistEntity(id: $0.name, name: $0.name)
+    }
   }
 }
 
@@ -136,13 +144,15 @@ struct PlaylistEntity: AppEntity, Identifiable {
 struct PlaylistEntityQuery: EntityStringQuery {
   @MainActor
   func entities(for identifiers: [UUID]) async throws -> [PlaylistEntity] {
-    PlaylistManager.shared.playlists
+    await SiriIntentEnvironment.prepareLibrary(includePlaylists: true)
+    return PlaylistManager.shared.playlists
       .filter { identifiers.contains($0.id) }
       .map { PlaylistEntity(id: $0.id, name: $0.name) }
   }
 
   @MainActor
   func entities(matching string: String) async throws -> [PlaylistEntity] {
+    await SiriIntentEnvironment.prepareLibrary(includePlaylists: true)
     let needle = MediaMatch.normalize(string)
     guard !needle.isEmpty else { return [] }
 
@@ -161,7 +171,8 @@ struct PlaylistEntityQuery: EntityStringQuery {
 
   @MainActor
   func suggestedEntities() async throws -> [PlaylistEntity] {
-    PlaylistManager.shared.playlists.map { PlaylistEntity(id: $0.id, name: $0.name) }
+    await SiriIntentEnvironment.prepareLibrary(includePlaylists: true)
+    return PlaylistManager.shared.playlists.map { PlaylistEntity(id: $0.id, name: $0.name) }
   }
 }
 

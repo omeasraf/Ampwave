@@ -57,10 +57,9 @@ final class SiriPlaybackRouter {
       throw SiriPlaybackRouterError.noPlayableMatch
     }
 
-    if let catalogResult = try await resolveAppleMusicSong(songTitle: title, artistName: artist) {
-      return try await playAppleMusic(catalogResult)
-    }
-
+    // Ampwave is a local-library player first. Resolve the user's own file
+    // before consulting MusicKit, which also keeps Siri working when Apple
+    // Music permission or a catalog subscription is unavailable.
     if let localResult = resolveLocalLibrarySong(songTitle: title, artistName: artist) {
       PlaybackController.shared.play(localResult.song, from: .search)
       return PlaybackResolution(
@@ -69,6 +68,13 @@ final class SiriPlaybackRouter {
         matchedArtist: localResult.song.artist,
         confidence: localResult.confidence
       )
+    }
+
+    // MusicKit is a fallback, not a gate in front of local playback. Permission
+    // failures are intentionally allowed to surface only after no local match
+    // exists.
+    if let catalogResult = try await resolveAppleMusicSong(songTitle: title, artistName: artist) {
+      return try await playAppleMusic(catalogResult)
     }
 
     throw SiriPlaybackRouterError.noPlayableMatch

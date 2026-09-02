@@ -70,6 +70,15 @@ final class RecommendationEngine {
     self.modelContext = context
   }
 
+  /// Releases cached SwiftData models before a destructive library reset.
+  func resetInMemoryState() {
+    forYouRecommendations = []
+    similarSongs = []
+    genreRecommendations = []
+    discoveryRecommendations = []
+    lastGenerationTime = nil
+  }
+
   /// Refreshes the history-driven shelf immediately while invalidating the
   /// broader cache for the next normal Home refresh. Rebuilding every
   /// recommendation family at each track boundary is unnecessary work for a

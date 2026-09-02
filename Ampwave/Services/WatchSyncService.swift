@@ -22,6 +22,7 @@ final class WatchSyncService: NSObject {
   // MARK: - Properties
 
   private var modelContext: ModelContext?
+  private var isLibraryResetting = false
   #if os(iOS)
     private var session: WCSession?
   #endif
@@ -46,10 +47,19 @@ final class WatchSyncService: NSObject {
     self.modelContext = context
   }
 
+  func prepareForLibraryReset() {
+    isLibraryResetting = true
+  }
+
+  func libraryResetDidFinish() {
+    isLibraryResetting = false
+  }
+
   // MARK: - Update Sync Status
 
   /// Updates the sync status for a song
   func updateSyncStatus(for song: LibrarySong, shouldSync: Bool) {
+    guard !isLibraryResetting else { return }
     song.shouldSyncToWatch = shouldSync
     saveChanges()
 
@@ -64,6 +74,7 @@ final class WatchSyncService: NSObject {
 
   /// Updates the sync status for a playlist
   func updateSyncStatus(for playlist: Playlist, shouldSync: Bool) {
+    guard !isLibraryResetting else { return }
     playlist.shouldSyncToWatch = shouldSync
     saveChanges()
 
@@ -98,7 +109,12 @@ final class WatchSyncService: NSObject {
     song: LibrarySong?, isPlaying: Bool, currentTime: TimeInterval, duration: TimeInterval
   ) {
     #if os(iOS)
-      guard let session = session, session.activationState == .activated else { return }
+      guard let session,
+        session.activationState == .activated,
+        session.isPaired,
+        session.isWatchAppInstalled,
+        !isLibraryResetting
+      else { return }
 
       var status: [String: Any] = [
         "type": "playback_status",
@@ -113,7 +129,20 @@ final class WatchSyncService: NSObject {
         status["artist"] = song.artist
       }
 
-      session.transferUserInfo(status)
+      // Playback position is replaceable state, not a queue of events. Using
+      // transferUserInfo here accumulated stale updates and could overwhelm
+      // WatchConnectivity after extended playback.
+      do {
+        try session.updateApplicationContext(status)
+      } catch {
+        DiagnosticLog.shared.log(
+          "watch-sync",
+          "Playback context update failed error=\(error.localizedDescription)"
+        )
+      }
+      if session.isReachable {
+        session.sendMessage(status, replyHandler: nil, errorHandler: nil)
+      }
     #endif
   }
 
@@ -131,39 +160,50 @@ final class WatchSyncService: NSObject {
 
   #if os(iOS)
     private func sendSongToWatch(_ song: LibrarySong) {
-      guard let session = session, session.activationState == .activated else { return }
+      guard let session = availableSession else { return }
+
+      // Materialize every SwiftData value before handing the payload to
+      // WatchConnectivity. Optional.none is not a property-list value and was
+      // previously passed as Any for lyrics/album, which can terminate the app.
+      let songID = song.id.uuidString
+      let artworkPath = song.effectiveArtworkPath
 
       let metadata: [String: Any] = [
         "type": "song_metadata",
-        "id": song.id.uuidString,
+        "id": songID,
         "title": song.title,
         "artist": song.artist,
-        "album": song.album,
+        "album": song.album ?? "",
         "duration": song.duration,
-        "lyrics": song.lyrics,
+        "lyrics": song.lyrics ?? "",
+        "extension": URL(fileURLWithPath: song.fileName).pathExtension,
       ]
-      session.transferUserInfo(metadata)
+      enqueue(metadata, on: session)
 
-      if let artworkPath = song.effectiveArtworkPath,
+      if let artworkPath,
         let artworkURL = PathManager.resolve(artworkPath)
       {
-        if FileManager.default.fileExists(atPath: artworkURL.path) {
-          session.transferFile(artworkURL, metadata: ["type": "artwork", "id": song.id.uuidString])
+        let alreadyQueued = session.outstandingFileTransfers.contains {
+          ($0.file.metadata?["type"] as? String) == "artwork"
+            && ($0.file.metadata?["id"] as? String) == songID
+        }
+        if !alreadyQueued, FileManager.default.fileExists(atPath: artworkURL.path) {
+          session.transferFile(artworkURL, metadata: ["type": "artwork", "id": songID])
         }
       }
     }
 
     private func removeSongFromWatch(_ song: LibrarySong) {
-      guard let session = session, session.activationState == .activated else { return }
+      guard let session = availableSession else { return }
 
-      session.transferUserInfo([
+      enqueue([
         "type": "remove_song",
         "id": song.id.uuidString,
-      ])
+      ], on: session)
     }
 
     private func sendPlaylistToWatch(_ playlist: Playlist) {
-      guard let session = session, session.activationState == .activated else { return }
+      guard let session = availableSession else { return }
 
       let metadata: [String: Any] = [
         "type": "playlist_metadata",
@@ -171,19 +211,20 @@ final class WatchSyncService: NSObject {
         "name": playlist.name,
         "songIds": playlist.orderedSongs.map { $0.id.uuidString },
       ]
-      session.transferUserInfo(metadata)
+      enqueue(metadata, on: session)
     }
 
     private func removePlaylistFromWatch(_ playlist: Playlist) {
-      guard let session = session, session.activationState == .activated else { return }
+      guard let session = availableSession else { return }
 
-      session.transferUserInfo([
+      enqueue([
         "type": "remove_playlist",
         "id": playlist.id.uuidString,
-      ])
+      ], on: session)
     }
 
     private func syncEverything() {
+      guard !isLibraryResetting, availableSession != nil else { return }
       guard let songs = getSongsToSync(), let playlists = getPlaylistsToSync() else { return }
 
       for playlist in playlists {
@@ -207,6 +248,36 @@ final class WatchSyncService: NSObject {
       let descriptor = FetchDescriptor<Playlist>(
         predicate: #Predicate { $0.shouldSyncToWatch == true })
       return try? context.fetch(descriptor)
+    }
+
+    private var availableSession: WCSession? {
+      guard !isLibraryResetting,
+        let session,
+        session.activationState == .activated,
+        session.isPaired,
+        session.isWatchAppInstalled
+      else {
+        DiagnosticLog.shared.log(
+          "watch-sync",
+          "Transfer skipped resetting=\(isLibraryResetting) activated=\(session?.activationState.rawValue ?? -1) paired=\(session?.isPaired ?? false) installed=\(session?.isWatchAppInstalled ?? false)"
+        )
+        return nil
+      }
+      return session
+    }
+
+    private func enqueue(_ payload: [String: Any], on session: WCSession) {
+      let type = payload["type"] as? String
+      let id = payload["id"] as? String
+      for transfer in session.outstandingUserInfoTransfers {
+        let queued = transfer.userInfo
+        if queued["type"] as? String == type,
+          queued["id"] as? String == id
+        {
+          transfer.cancel()
+        }
+      }
+      session.transferUserInfo(payload)
     }
   #endif
 }

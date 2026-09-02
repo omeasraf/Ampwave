@@ -487,12 +487,26 @@ struct PlaylistView: View {
 // MARK: - Radio Station View
 
 struct RadioStationView: View {
-  let station: RadioStation
+  private let stationName: String
+  private let stationSubtitle: String
+  private let stationLastUpdated: Date
+  private let stationArtworkPaths: [String]
+  private let stationColors: [Color]
+  private let stationSongIDs: [UUID]
   @Environment(ThemeManager.self) private var themeManager
   @State private var visibleSongs: [LibrarySong] = []
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
   private var library: SongLibrary { SongLibrary.shared }
+
+  init(station: RadioStation) {
+    stationName = station.name
+    stationSubtitle = station.subtitle
+    stationLastUpdated = station.lastUpdated
+    stationArtworkPaths = station.artworkPaths
+    stationColors = station.colors
+    stationSongIDs = station.songOrder
+  }
 
   var body: some View {
     List {
@@ -517,7 +531,7 @@ struct RadioStationView: View {
     .listStyle(platformListStyle)
     .background(themeManager.backgroundColor)
     .scrollContentBackground(.hidden)
-    .navigationTitle(station.name)
+    .navigationTitle(stationName)
     .onAppear { refreshVisibleSongs() }
     .onChange(of: library.libraryVersion) { refreshVisibleSongs() }
     .onReceive(NotificationCenter.default.publisher(for: .songsWereDeleted)) { notification in
@@ -544,21 +558,25 @@ struct RadioStationView: View {
 
   private var stationHeader: some View {
     VStack(spacing: 20) {
-      RadioArtworkCollage(artworkPaths: station.artworkPaths, colors: station.colors, size: 200)
+      RadioArtworkCollage(
+        artworkPaths: stationArtworkPaths,
+        colors: stationColors,
+        size: 200
+      )
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
 
       VStack(spacing: 8) {
-        Text(station.name)
+        Text(stationName)
           .font(.system(size: 24, weight: .bold))
           .multilineTextAlignment(.center)
 
-        Text(station.subtitle)
+        Text(stationSubtitle)
           .font(.system(size: 15))
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
 
-        Text("Last updated \(station.lastUpdated.formatted(date: .abbreviated, time: .shortened))")
+        Text("Last updated \(stationLastUpdated.formatted(date: .abbreviated, time: .shortened))")
           .font(.system(size: 12))
           .foregroundStyle(.tertiary)
       }
@@ -617,15 +635,15 @@ struct RadioStationView: View {
 
   private func saveAsPlaylist() {
     playlistManager.createPlaylist(
-      name: station.name + " (Radio)",
+      name: stationName + " (Radio)",
       description: "Saved from your personal radio station on \(Date().formatted(date: .numeric, time: .omitted))",
       songs: visibleSongs
     )
   }
 
   private func refreshVisibleSongs() {
-    let liveIDs = Set(library.songs.map(\.id))
-    visibleSongs = station.orderedSongs.filter { liveIDs.contains($0.id) }
+    let liveSongs = Dictionary(uniqueKeysWithValues: library.songs.map { ($0.id, $0) })
+    visibleSongs = stationSongIDs.compactMap { liveSongs[$0] }
   }
 }
 

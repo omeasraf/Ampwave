@@ -133,7 +133,11 @@ struct GridSizePicker: View {
       }
     }
     .padding(3)
+    .frame(height: 32)
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    .fixedSize(horizontal: true, vertical: true)
   }
 }
 
@@ -328,11 +332,6 @@ struct GenresGridView: View {
       }
     }
     .background(themeManager.backgroundColor)
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        GridSizePicker(selection: $genreGridSizeRaw, options: LibraryGridSize.pickerOptions)
-      }
-    }
   }
 
   private func genreCell(name: String, count: Int, width: CGFloat) -> some View {
@@ -431,6 +430,9 @@ struct LibraryView: View {
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
   @State private var selectedTab: LibraryTab
+  @AppStorage("com.ampwave.albumGridSize.v2") private var albumGridSizeRaw = "medium"
+  @AppStorage("com.ampwave.artistGridSize.v2") private var artistGridSizeRaw = "medium"
+  @AppStorage("com.ampwave.genreGridSize.v1") private var genreGridSizeRaw = "medium"
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -460,28 +462,43 @@ struct LibraryView: View {
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      libraryTabStrip
+    TabView(selection: $selectedTab) {
+      SongsListView()
+        .tag(LibraryTab.songs)
 
-      Group {
-        switch selectedTab {
-        case .songs:
-          SongsListView()
-        case .albums:
-          AlbumsGridView()
-        case .artists:
-          ArtistsGridView()
-        case .genres:
-          GenresGridView()
+      AlbumsGridView()
+        .tag(LibraryTab.albums)
+
+      ArtistsGridView()
+        .tag(LibraryTab.artists)
+
+      GenresGridView()
+        .tag(LibraryTab.genres)
+    }
+    .tabViewStyle(.page(indexDisplayMode: .never))
+    .safeAreaInset(edge: .top, spacing: 0) {
+      libraryTabStrip
+        .background(.bar)
+        .overlay(alignment: .bottom) {
+          Divider().opacity(0.35)
         }
-      }
     }
     .background(themeManager.backgroundColor)
     .tint(themeManager.accentColor)
     .navigationTitle("Library")
+    .navigationBarTitleDisplayMode(.large)
     .toolbar {
-      if selectedTab != .genres {
-        LibrarySortMenu(selectedTab: selectedTab, appSettings: appSettings)
+      ToolbarItemGroup(placement: .primaryAction) {
+        if selectedTab != .songs {
+          GridSizePicker(
+            selection: gridSizeBinding,
+            options: LibraryGridSize.pickerOptions
+          )
+        }
+
+        if selectedTab != .genres {
+          LibrarySortMenu(selectedTab: selectedTab, appSettings: appSettings)
+        }
       }
     }
     .onAppear {
@@ -489,38 +506,57 @@ struct LibraryView: View {
     }
   }
 
+  private var gridSizeBinding: Binding<String> {
+    switch selectedTab {
+    case .albums: return $albumGridSizeRaw
+    case .artists: return $artistGridSizeRaw
+    case .genres: return $genreGridSizeRaw
+    case .songs: return .constant("medium")
+    }
+  }
+
   private var libraryTabStrip: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 12) {
-        ForEach(LibraryTab.allCases, id: \.self) { tab in
-          Button {
-            selectedTab = tab
-          } label: {
-            HStack(spacing: 10) {
-              Image(systemName: tab.icon)
-                .font(.system(size: 16, weight: .semibold))
-              Text(tab.rawValue)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+    ScrollViewReader { proxy in
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 12) {
+          ForEach(LibraryTab.allCases, id: \.self) { tab in
+            Button {
+              withAnimation(.snappy(duration: 0.25)) {
+                selectedTab = tab
+              }
+            } label: {
+              HStack(spacing: 10) {
+                Image(systemName: tab.icon)
+                  .font(.system(size: 16, weight: .semibold))
+                Text(tab.rawValue)
+                  .font(.system(size: 15, weight: .semibold, design: .rounded))
+              }
+              .foregroundStyle(selectedTab == tab ? .white : .primary)
+              .padding(.vertical, 10)
+              .padding(.horizontal, 16)
+              .background(
+                selectedTab == tab
+                  ? AnyShapeStyle(themeManager.accentColor.gradient)
+                  : AnyShapeStyle(.clear),
+                in: RoundedRectangle(cornerRadius: 17, style: .continuous)
+              )
+              .glassEffect(
+                .identity,
+                in: RoundedRectangle(cornerRadius: 17, style: .continuous)
+              )
             }
-            .foregroundStyle(selectedTab == tab ? .white : .primary)
-            .padding(.vertical, 12)
-            .padding(.horizontal, 16)
-            .background(
-              selectedTab == tab
-                ? AnyShapeStyle(themeManager.accentColor.gradient)
-                : AnyShapeStyle(.clear),
-              in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-            )
-            .glassEffect(
-              .identity,
-              in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-            )
+            .buttonStyle(.plain)
+            .id(tab)
           }
-          .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+      }
+      .onChange(of: selectedTab, initial: true) { _, tab in
+        withAnimation(.snappy(duration: 0.25)) {
+          proxy.scrollTo(tab, anchor: .center)
         }
       }
-      .padding(.horizontal, 20)
-      .padding(.vertical, 10)
     }
   }
 }
@@ -623,11 +659,6 @@ struct AlbumsGridView: View {
       }
     }
     .background(themeManager.backgroundColor)
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        GridSizePicker(selection: $albumGridSizeRaw, options: LibraryGridSize.pickerOptions)
-      }
-    }
   }
 }
 
@@ -714,11 +745,6 @@ struct ArtistsGridView: View {
     .background(themeManager.backgroundColor)
     .task(id: library.libraryVersion) {
       await loadArtists()
-    }
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        GridSizePicker(selection: $artistGridSizeRaw, options: LibraryGridSize.pickerOptions)
-      }
     }
   }
 

@@ -91,6 +91,9 @@ struct AmpwaveApp: App {
         configurations: [modelConfiguration]
       )
       print("[DEBUG] ModelContainer created successfully")
+      if #available(iOS 17.0, macOS 14.0, *) {
+        SiriIntentEnvironment.configure(modelContext: modelContainer.mainContext)
+      }
       SonicRecommendationService.shared.setModelContext(modelContainer.mainContext)
       SongLibrary.songWasImported = { song in
         SonicRecommendationService.shared.enqueueAnalysis(for: song)

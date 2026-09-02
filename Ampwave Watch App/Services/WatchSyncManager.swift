@@ -38,6 +38,18 @@ final class WatchSyncManager: NSObject, WCSessionDelegate {
   }
 
   func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+    receive(userInfo)
+  }
+
+  func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+    receive(applicationContext)
+  }
+
+  func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+    receive(message)
+  }
+
+  private func receive(_ userInfo: [String: Any]) {
     guard let type = userInfo["type"] as? String else { return }
 
     Task { @MainActor in

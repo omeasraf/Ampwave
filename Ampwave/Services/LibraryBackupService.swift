@@ -189,6 +189,8 @@ enum LibraryBackupService {
       userPreferences.customAccentColorHex = preferences.customAccentColorHex
       userPreferences.customBackgroundColorHex = preferences.customBackgroundColorHex
       userPreferences.customCardBackgroundColorHex = preferences.customCardBackgroundColorHex
+      userPreferences.customPrimaryTextColorHex = preferences.customPrimaryTextColorHex
+      userPreferences.customSecondaryTextColorHex = preferences.customSecondaryTextColorHex
       userPreferences.fullArtworkBackground = preferences.fullArtworkBackground
       userPreferences.openPlayerGlassBackground = preferences.openPlayerGlassBackground
       userPreferences.wavyPlayerSlider = preferences.wavyPlayerSlider ?? false
@@ -486,6 +488,8 @@ private struct BackupUserPreferences: Codable {
   let customAccentColorHex: String?
   let customBackgroundColorHex: String?
   let customCardBackgroundColorHex: String?
+  let customPrimaryTextColorHex: String?
+  let customSecondaryTextColorHex: String?
   let fullArtworkBackground: Bool?
   let openPlayerGlassBackground: Bool?
   let wavyPlayerSlider: Bool?
@@ -526,6 +530,8 @@ private struct BackupUserPreferences: Codable {
     customAccentColorHex = preferences.customAccentColorHex
     customBackgroundColorHex = preferences.customBackgroundColorHex
     customCardBackgroundColorHex = preferences.customCardBackgroundColorHex
+    customPrimaryTextColorHex = preferences.customPrimaryTextColorHex
+    customSecondaryTextColorHex = preferences.customSecondaryTextColorHex
     fullArtworkBackground = preferences.fullArtworkBackground
     openPlayerGlassBackground = preferences.openPlayerGlassBackground
     wavyPlayerSlider = preferences.wavyPlayerSlider

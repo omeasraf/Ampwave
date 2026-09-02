@@ -5,6 +5,7 @@
 
 import AppIntents
 import Foundation
+import SwiftData
 
 #if canImport(UIKit)
   import UIKit
@@ -12,6 +13,51 @@ import Foundation
 #if os(macOS)
   import AppKit
 #endif
+
+/// App Intents can be launched while Ampwave's UI has never appeared. In that
+/// case ContentView has not attached the SwiftData context or loaded the
+/// singleton libraries yet, so every Siri entity query used to return an empty
+/// result. The app configures this bridge at process launch and intents prepare
+/// only the services they need.
+@available(iOS 17.0, macOS 14.0, *)
+@MainActor
+enum SiriIntentEnvironment {
+  private static var modelContext: ModelContext?
+  private static var libraryPrepared = false
+  private static var playlistsPrepared = false
+  private static var playbackPrepared = false
+
+  static func configure(modelContext: ModelContext) {
+    self.modelContext = modelContext
+  }
+
+  static func prepareLibrary(includePlaylists: Bool = false, includePlayback: Bool = false) async {
+    guard let modelContext else {
+      DiagnosticLog.shared.log("siri", "Intent environment has no model context")
+      return
+    }
+
+    if !libraryPrepared {
+      libraryPrepared = true
+      SongLibrary.shared.modelContext = modelContext
+      await SongLibrary.shared.loadSongs(performMaintenance: false)
+      DiagnosticLog.shared.log(
+        "siri", "Cold-launch library prepared songs=\(SongLibrary.shared.songs.count)")
+    }
+
+    if includePlaylists && !playlistsPrepared {
+      playlistsPrepared = true
+      PlaylistManager.shared.modelContext = modelContext
+      await PlaylistManager.shared.loadPlaylists()
+    }
+
+    if includePlayback && !playbackPrepared {
+      playbackPrepared = true
+      PlaybackController.shared.setModelContext(modelContext)
+      PlaybackController.shared.restoreStateAfterLoading()
+    }
+  }
+}
 
 @available(iOS 17.0, macOS 14.0, *)
 enum AmpwaveShortcutURLs {
@@ -41,6 +87,7 @@ public struct PlayLikedSongsIntent: AudioPlaybackIntent {
 
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: PlayLikedSongsIntent.perform")
+    await SiriIntentEnvironment.prepareLibrary(includePlaylists: true, includePlayback: true)
     await MainActor.run {
       let pm = PlaylistManager.shared
       let playback = PlaybackController.shared
@@ -66,6 +113,7 @@ public struct ResumePlaybackIntent: AudioPlaybackIntent {
 
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: ResumePlaybackIntent.perform")
+    await SiriIntentEnvironment.prepareLibrary(includePlayback: true)
     await MainActor.run {
       let playback = PlaybackController.shared
       if playback.currentItem != nil {
@@ -106,6 +154,7 @@ public struct ControlPlaybackIntent: AudioPlaybackIntent {
 
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: ControlPlaybackIntent.perform (action: \(action.rawValue))")
+    await SiriIntentEnvironment.prepareLibrary(includePlayback: true)
     await MainActor.run {
       let playback = PlaybackController.shared
       switch action {
@@ -130,6 +179,7 @@ public struct LikeCurrentSongIntent: AppIntent {
 
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: LikeCurrentSongIntent.perform")
+    await SiriIntentEnvironment.prepareLibrary(includePlaylists: true, includePlayback: true)
     await MainActor.run {
       if let song = PlaybackController.shared.currentItem {
         _ = PlaylistManager.shared.toggleLike(song: song)
@@ -157,6 +207,7 @@ public struct PlayMusicIntent: AudioPlaybackIntent {
 
   public func perform() async throws -> some IntentResult {
     print("[DEBUG] Siri: PlayMusicIntent.perform (query: \(query))")
+    await SiriIntentEnvironment.prepareLibrary(includePlaylists: true, includePlayback: true)
     if let songResult = try? await SiriPlaybackRouter.shared.playSong(songTitle: query) {
       print("[DEBUG] Siri: Routed query through SiriPlaybackRouter (\(songResult.source.rawValue))")
       return .result()
@@ -206,6 +257,7 @@ public struct PlayArtistIntent: AudioPlaybackIntent {
   public func perform() async throws -> some IntentResult {
     let name = artist.name
     print("[DEBUG] Siri: PlayArtistIntent.perform (artist: \(name))")
+    await SiriIntentEnvironment.prepareLibrary(includePlayback: true)
     await MainActor.run {
       PlaybackController.shared.playArtist(name)
     }
@@ -231,6 +283,7 @@ public struct PlaySpecificPlaylistIntent: AudioPlaybackIntent {
   public func perform() async throws -> some IntentResult {
     let id = playlist.id
     print("[DEBUG] Siri: PlaySpecificPlaylistIntent.perform (playlist: \(playlist.name))")
+    await SiriIntentEnvironment.prepareLibrary(includePlaylists: true, includePlayback: true)
     await MainActor.run {
       if let match = PlaylistManager.shared.playlists.first(where: { $0.id == id }) {
         PlaybackController.shared.playPlaylist(match)
@@ -259,6 +312,7 @@ public struct AddToPlaylistIntent: AppIntent {
   public func perform() async throws -> some IntentResult {
     let id = playlist.id
     print("[DEBUG] Siri: AddToPlaylistIntent.perform (playlist: \(playlist.name))")
+    await SiriIntentEnvironment.prepareLibrary(includePlaylists: true, includePlayback: true)
     await MainActor.run {
       if let match = PlaylistManager.shared.playlists.first(where: { $0.id == id }),
         let song = PlaybackController.shared.currentItem

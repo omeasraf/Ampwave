@@ -100,6 +100,24 @@ struct HomeView: View {
     return visible.isEmpty ? Array(ordered.prefix(1)) : visible
   }
 
+  /// Personalized shelves can be enabled before the user has enough listening
+  /// history to populate them. Keep Home useful in that state instead of
+  /// silently rendering a blank page.
+  private var hasRenderableHomeSection: Bool {
+    visibleHomeSections.contains { section in
+      switch section {
+      case .recentlyPlayed: return !recentlyPlayedSongs.isEmpty
+      case .forYou: return !forYouRecommendations.isEmpty
+      case .radioMixes: return !radioMixes.isEmpty
+      case .genrePicks: return !genreRecommendations.isEmpty
+      case .topSongs: return !mostPlayedSongs.isEmpty
+      case .recentlyAdded: return !recentlyAdded.isEmpty
+      case .quickAccess: return true
+      case .rediscover: return !rediscoverSongs.isEmpty
+      }
+    }
+  }
+
   var body: some View {
     ScrollView {
       VStack(spacing: 28) {
@@ -127,6 +145,10 @@ struct HomeView: View {
         } else {
           ForEach(visibleHomeSections) { section in
             homeSection(section)
+          }
+
+          if !hasRenderableHomeSection {
+            emptyConfiguredHomeState
           }
         }
       }
@@ -347,6 +369,33 @@ struct HomeView: View {
       Spacer()
     }
     .padding()
+  }
+
+  private var emptyConfiguredHomeState: some View {
+    VStack(spacing: 14) {
+      AmpwaveEqualizerMark(isAnimated: false, monochromeColor: .secondary)
+        .frame(width: 54, height: 54)
+
+      Text("Nothing to Show Yet")
+        .font(.system(size: 22, weight: .bold, design: .rounded))
+
+      Text("Your enabled Home sections do not have any content yet. Show the recommended sections or keep listening to build your personalized shelves.")
+        .font(.system(size: 15))
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: 420)
+
+      Button("Show Recommended Sections") {
+        withAnimation(.easeInOut(duration: 0.2)) {
+          hiddenHomeSectionsRaw = ""
+        }
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(themeManager.accentColor)
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.horizontal, 30)
+    .padding(.vertical, 56)
   }
 
   private func loadData(forceRefresh: Bool = false) async {

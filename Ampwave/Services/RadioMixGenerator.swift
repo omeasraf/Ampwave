@@ -39,15 +39,15 @@ final class RadioMixGenerator {
     // A library reset or song cleanup can nullify every relationship while
     // leaving the station row itself behind. Such a station still renders a
     // Home card but opens to an empty list, so treat it as stale immediately.
-    if !existing.isEmpty {
+    let activeExisting = existing.filter { !$0.orderedSongs.isEmpty }
+    if !activeExisting.isEmpty {
       let now = Date()
-      let needsRefresh = existing.contains { station in
-        station.orderedSongs.isEmpty
-          || now.timeIntervalSince(station.lastUpdated) > refreshThreshold
+      let needsRefresh = activeExisting.contains { station in
+        now.timeIntervalSince(station.lastUpdated) > refreshThreshold
       }
       
       if !needsRefresh {
-        return existing.sorted { $0.name < $1.name }
+        return activeExisting.sorted { $0.name < $1.name }
       }
     }
     
@@ -58,13 +58,56 @@ final class RadioMixGenerator {
   private func generateMixes(existing: [RadioStation]) -> [RadioStation] {
     guard let context = modelContext else { return [] }
     
-    // Clear existing if we are regenerating everything
-    // Alternatively, we could update them in place, but clearing is simpler for this refactor.
-    for station in existing {
-      context.delete(station)
-    }
-    
     var stations: [RadioStation] = []
+    var reusedStationIDs = Set<UUID>()
+
+    // RadioStationView can remain open while Home refreshes in the background.
+    // Replacing rows detached the model still owned by that destination and
+    // crashed the next SwiftUI render. Keep stable rows and update their
+    // content instead.
+    func updatedStation(
+      name: String,
+      subtitle: String,
+      seedType: String,
+      seedValue: String? = nil,
+      songs: [LibrarySong],
+      artworkPaths: [String],
+      colors: [Color]
+    ) -> RadioStation {
+      let reusable = existing.first {
+        !reusedStationIDs.contains($0.id)
+          && $0.seedType == seedType
+          && (seedType != "dailyMix" || $0.name == name)
+      }
+
+      if let reusable {
+        reusable.name = name
+        reusable.subtitle = subtitle
+        reusable.seedType = seedType
+        reusable.seedValue = seedValue
+        reusable.songs = songs
+        reusable.songOrder = songs.map(\.id)
+        reusable.artworkPaths = artworkPaths
+        reusable.colorHexes = colors.map { $0.toHexString() }
+        reusable.lastUpdated = Date()
+        reusedStationIDs.insert(reusable.id)
+        return reusable
+      }
+
+      let station = RadioStation(
+        name: name,
+        subtitle: subtitle,
+        seedType: seedType,
+        seedValue: seedValue,
+        songs: songs,
+        artworkPaths: artworkPaths,
+        colors: colors
+      )
+      context.insert(station)
+      reusedStationIDs.insert(station.id)
+      return station
+    }
+
     let recentSongs = history.getRecentlyPlayed(limit: 50)
     let mostPlayed = history.getMostPlayed(limit: 30).map(\.song)
 
@@ -86,7 +129,7 @@ final class RadioMixGenerator {
       let seedPool = Array(seeds.shuffled().prefix(5))
       let similar = engine.buildRadioQueue(seeds: seedPool, limit: 24)
       let queue = ([seedPool[0]] + similar).shuffledPreservingFirst()
-      let station = RadioStation(
+      let station = updatedStation(
         name: "Daily Mix \(mixNumber)",
         subtitle: genreSubtitle(genre: genre, songs: seeds),
         seedType: "dailyMix",
@@ -95,7 +138,6 @@ final class RadioMixGenerator {
         artworkPaths: fourArtworks(from: queue),
         colors: GenrePalette.gradient(for: genre)
       )
-      context.insert(station)
       stations.append(station)
       mixNumber += 1
     }
@@ -113,7 +155,7 @@ final class RadioMixGenerator {
           .shuffled()
           .prefix(25)
       )
-      let station = RadioStation(
+      let station = updatedStation(
         name: "Favorites Mix",
         subtitle: "\(liked.songs.count) liked songs & more",
         seedType: "favorites",
@@ -121,7 +163,6 @@ final class RadioMixGenerator {
         artworkPaths: fourArtworks(from: likedSongs),
         colors: [.pink, .red]
       )
-      context.insert(station)
       stations.append(station)
     }
 
@@ -135,7 +176,7 @@ final class RadioMixGenerator {
     )
     if unheard.count >= 5 {
       let queue = unheard
-      let station = RadioStation(
+      let station = updatedStation(
         name: "Discovery Mix",
         subtitle: "Fresh picks from your library",
         seedType: "discovery",
@@ -143,8 +184,16 @@ final class RadioMixGenerator {
         artworkPaths: fourArtworks(from: queue),
         colors: [.blue, .cyan]
       )
-      context.insert(station)
       stations.append(station)
+    }
+
+    // Keep unused rows attached so an already-open destination remains safe.
+    // Empty stations are excluded by fetchOrCreateMixes on future loads.
+    for station in existing where !reusedStationIDs.contains(station.id) {
+      station.songs = []
+      station.songOrder = []
+      station.artworkPaths = []
+      station.lastUpdated = Date()
     }
 
     do {

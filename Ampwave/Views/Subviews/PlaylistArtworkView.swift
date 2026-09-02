@@ -8,32 +8,46 @@
 internal import SwiftUI
 
 struct PlaylistArtworkView: View {
-  let playlist: Playlist
   let size: CGFloat
+  private let artworkType: PlaylistArtworkType
+  private let artworkPaths: [String]
+  private let customArtworkPath: String?
+  private let iconName: String
+  private let iconColor: Color
+  private let isLikedSongs: Bool
   @Environment(ThemeManager.self) private var themeManager
+
+  init(playlist: Playlist, size: CGFloat) {
+    self.size = size
+    artworkType = playlist.artworkType
+    artworkPaths = playlist.getArtworkPaths()
+    customArtworkPath = playlist.artworkPath
+    iconName = playlist.icon?.icon ?? "music.note"
+    iconColor = playlist.icon?.color ?? .secondary
+    isLikedSongs = playlist.playlistType == .likedSongs
+  }
 
   var body: some View {
     Group {
-      switch playlist.artworkType {
+      switch artworkType {
       case .grid:
         // A collage needs four *different* covers to read as one. With fewer
         // distinct albums, show a single cover rather than tiling one image.
-        let paths = playlist.getArtworkPaths()
-        if paths.count >= 4 {
-          GridArtworkView(paths: Array(paths.prefix(4)), size: size)
-        } else if let firstPath = paths.first {
+        if artworkPaths.count >= 4 {
+          GridArtworkView(paths: Array(artworkPaths.prefix(4)), size: size)
+        } else if let firstPath = artworkPaths.first {
           SingleArtworkView(artworkPath: firstPath, size: size)
         } else {
           placeholderView
         }
       case .single:
-        if let firstPath = playlist.getArtworkPaths().first {
+        if let firstPath = artworkPaths.first {
           SingleArtworkView(artworkPath: firstPath, size: size)
         } else {
           placeholderView
         }
       case .custom:
-        if let artworkPath = playlist.artworkPath {
+        if let artworkPath = customArtworkPath {
           SingleArtworkView(artworkPath: artworkPath, size: size)
         } else {
           placeholderView
@@ -48,11 +62,10 @@ struct PlaylistArtworkView: View {
   }
 
   private var placeholderView: some View {
-    let iconName = playlist.icon?.icon ?? "music.note"
     let color: Color =
-      playlist.playlistType == .likedSongs
+      isLikedSongs
         ? themeManager.accentColor
-        : (playlist.icon?.color ?? .secondary)
+        : iconColor
 
     return RoundedRectangle(cornerRadius: 8, style: .continuous)
       .fill(color.opacity(0.15))

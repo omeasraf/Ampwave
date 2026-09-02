@@ -78,7 +78,8 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
 
   func colors(
     isDark: Bool, customBackground: Color? = nil, customAccent: Color? = nil,
-    customCard: Color? = nil
+    customCard: Color? = nil, customPrimaryText: Color? = nil,
+    customSecondaryText: Color? = nil
   ) -> ThemeConfig {
     let actualIsDark: Bool
     switch self {
@@ -97,33 +98,23 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
 
     switch self {
     case .ampwave:
-      // System semantic colors so the UI follows the platform appearance (materials, tint, etc.).
-      #if os(macOS)
-        bg = Color(nsColor: .windowBackgroundColor)
-        card = Color(nsColor: .controlBackgroundColor)
-      #elseif os(iOS)
-        bg = Color(uiColor: .systemBackground)
-        card = Color(uiColor: .secondarySystemGroupedBackground)
-      #elseif os(tvOS)
-        bg = Color(uiColor: .systemBackground)
-        card = Color(uiColor: .secondarySystemBackground)
-      #elseif os(watchOS)
-        // watchOS UIKit lacks grouped/semantic background colors used on iOS.
-        bg = Color(white: 0.05)
-        card = Color(white: 0.14)
-      #else
-        bg = Color.white
-        card = Color(white: 0.92)
-      #endif
-      accent = Color.accentColor
+      // The default theme remains adaptive, but now carries Ampwave's own
+      // lively pearl/aubergine palette instead of falling back to system gray.
+      bg = actualIsDark ? Color(hex: "#100916") : Color(hex: "#FFF6FC")
+      accent = actualIsDark ? Color(hex: "#FF4FA3") : Color(hex: "#F20F7A")
+      card = actualIsDark ? Color(hex: "#281532") : Color(hex: "#FFFFFF")
     case .light:
-      bg = Color(red: 250 / 255.0, green: 250 / 255.0, blue: 252 / 255.0)
-      accent = Color(red: 232 / 255.0, green: 61 / 255.0, blue: 137 / 255.0)  // #E83D89
-      card = Color(red: 244 / 255.0, green: 244 / 255.0, blue: 247 / 255.0)
+      // Bright pearl surfaces with a saturated Ampwave pink. The slight plum
+      // cast keeps the theme lively without tinting artwork or hurting contrast.
+      bg = Color(hex: "#FFF6FC")
+      accent = Color(hex: "#F20F7A")
+      card = Color(hex: "#FFFFFF")
     case .dark:
-      bg = Color(red: 18 / 255.0, green: 18 / 255.0, blue: 20 / 255.0)
-      accent = Color(red: 232 / 255.0, green: 61 / 255.0, blue: 137 / 255.0)  // #E83D89
-      card = Color(red: 30 / 255.0, green: 30 / 255.0, blue: 33 / 255.0)
+      // Deep aubergine instead of flat charcoal gives glass, cards, and the
+      // signature pink enough chroma to feel distinctly Ampwave.
+      bg = Color(hex: "#100916")
+      accent = Color(hex: "#FF4FA3")
+      card = Color(hex: "#281532")
     case .oled:
       bg = .black
       accent = Color(red: 232 / 255.0, green: 61 / 255.0, blue: 137 / 255.0)  // #E83D89
@@ -190,6 +181,16 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     case .ampwave:
       primaryText = Color.primary
       secondaryText = Color.secondary
+    case .light:
+      primaryText = Color(hex: "#281321")
+      secondaryText = Color(hex: "#765568")
+    case .dark:
+      primaryText = Color(hex: "#FFF4FA")
+      secondaryText = Color(hex: "#D6B8CB")
+    case .custom:
+      primaryText = customPrimaryText ?? (actualIsDark ? Color.white : Color(hex: "#20151C"))
+      secondaryText = customSecondaryText
+        ?? (actualIsDark ? Color.white.opacity(0.72) : Color(hex: "#6E5D67"))
     case .catppuccinLatte:
       primaryText = Color(red: 76 / 255.0, green: 79 / 255.0, blue: 105 / 255.0)
       secondaryText = Color(red: 92 / 255.0, green: 95 / 255.0, blue: 119 / 255.0)
@@ -253,7 +254,15 @@ final class ThemeManager {
       customAccent: (userPreferences?.customAccentColorHex
         ?? UserDefaults.standard.string(forKey: "com.ampwave.customAccent")).map { Color(hex: $0) },
       customCard: (userPreferences?.customCardBackgroundColorHex
-        ?? UserDefaults.standard.string(forKey: "com.ampwave.customCard")).map { Color(hex: $0) }
+        ?? UserDefaults.standard.string(forKey: "com.ampwave.customCard")).map { Color(hex: $0) },
+      customPrimaryText: (userPreferences?.customPrimaryTextColorHex
+        ?? UserDefaults.standard.string(forKey: "com.ampwave.customPrimaryText")).map {
+          Color(hex: $0)
+        },
+      customSecondaryText: (userPreferences?.customSecondaryTextColorHex
+        ?? UserDefaults.standard.string(forKey: "com.ampwave.customSecondaryText")).map {
+          Color(hex: $0)
+        }
     )
   }
 
@@ -264,6 +273,8 @@ final class ThemeManager {
   // backgrounds. List-row backgrounds in Settings, sheets, and the player
   // must stay consistent regardless of the toggle.
   var cardBackgroundColor: Color { themeConfig.cardBackground }
+  var primaryTextColor: Color { themeConfig.primaryText }
+  var secondaryTextColor: Color { themeConfig.secondaryText }
 
   var colorScheme: ColorScheme? {
     if currentTheme == .custom {
@@ -416,6 +427,24 @@ final class UserPreferences: Identifiable {
   }
   @Attribute(originalName: "customCardBackgroundColorHex") var _customCardBackgroundColorHex:
     String?
+
+  var customPrimaryTextColorHex: String? {
+    get { _customPrimaryTextColorHex }
+    set {
+      _customPrimaryTextColorHex = newValue
+      save()
+    }
+  }
+  var _customPrimaryTextColorHex: String?
+
+  var customSecondaryTextColorHex: String? {
+    get { _customSecondaryTextColorHex }
+    set {
+      _customSecondaryTextColorHex = newValue
+      save()
+    }
+  }
+  var _customSecondaryTextColorHex: String?
 
   var fullArtworkBackground: Bool? {
     get {
@@ -570,6 +599,9 @@ final class UserPreferences: Identifiable {
     UserDefaults.standard.set(customAccentColorHex, forKey: "com.ampwave.customAccent")
     UserDefaults.standard.set(customBackgroundColorHex, forKey: "com.ampwave.customBackground")
     UserDefaults.standard.set(customCardBackgroundColorHex, forKey: "com.ampwave.customCard")
+    UserDefaults.standard.set(customPrimaryTextColorHex, forKey: "com.ampwave.customPrimaryText")
+    UserDefaults.standard.set(
+      customSecondaryTextColorHex, forKey: "com.ampwave.customSecondaryText")
     UserDefaults.standard.set(customColorSchemeRaw, forKey: "com.ampwave.customColorScheme")
     UserDefaults.standard.set(
       fullArtworkBackground ?? false, forKey: "com.ampwave.fullArtworkBackground")
@@ -697,8 +729,9 @@ final class UserPreferences: Identifiable {
 
 // MARK: - ThemeManager Extensions
 extension ThemeManager {
-  /// Uses platform semantic colors and does not force a custom global accent (Liquid Glass / system chrome).
-  var usesSystemAppearance: Bool { currentTheme == .ampwave }
+  /// Kept as a separate decision point for themes that may opt back into
+  /// completely system-owned chrome in the future.
+  var usesSystemAppearance: Bool { false }
 
   var fullArtworkBackground: Bool {
     userPreferences?.fullArtworkBackground

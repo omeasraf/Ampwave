@@ -18,6 +18,7 @@ struct OpenTabView: View {
   /// Incremented on library reset — causes all tab content to be recreated,
   /// clearing every NavigationStack and flushing any stale in-memory data.
   @State private var libraryResetID: Int = 0
+  @State private var libraryReset = LibraryResetCoordinator.shared
 
 
   enum AppTab: String, CaseIterable {
@@ -130,6 +131,29 @@ struct OpenTabView: View {
     .overlay(alignment: .top) {
       IndexingStatusView()
     }
+    .overlay {
+      if libraryReset.isResetting {
+        ZStack {
+          Color.black.opacity(0.45)
+            .ignoresSafeArea()
+
+          VStack(spacing: 16) {
+            ProgressView(value: libraryReset.progress)
+              .progressViewStyle(.linear)
+              .tint(themeManager.accentColor)
+              .frame(width: 220)
+            Text(libraryReset.status)
+              .font(.headline)
+              .multilineTextAlignment(.center)
+          }
+          .padding(30)
+          .background(.ultraThinMaterial)
+          .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .allowsHitTesting(true)
+        .zIndex(100)
+      }
+    }
     // The player pushes onto the Library stack, so follow it there.
     .onChange(of: AppNavigator.shared.libraryPath) { oldPath, newPath in
       if newPath.count > oldPath.count { selectedTab = .library }
@@ -147,7 +171,14 @@ struct OpenTabView: View {
       // non-dismissible reset progress overlay remains visible.
       AppNavigator.shared.reset()
 
-      guard !isPreparingForReset else { return }
+      if isPreparingForReset {
+        // Tear down every view holding a SwiftData model before any record is
+        // deleted. The reset progress lives above the tabs, so it remains
+        // visible even though the Settings navigation stack is recreated.
+        libraryResetID += 1
+        selectedTab = .home
+        return
+      }
 
       libraryResetID += 1
       selectedTab = .home

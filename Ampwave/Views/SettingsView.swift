@@ -7,6 +7,34 @@ import SwiftData
 internal import SwiftUI
 import UniformTypeIdentifiers
 
+@MainActor
+@Observable
+final class LibraryResetCoordinator {
+  static let shared = LibraryResetCoordinator()
+
+  private(set) var isResetting = false
+  private(set) var progress: Double = 0
+  private(set) var status = "Preparing…"
+
+  private init() {}
+
+  func begin() {
+    isResetting = true
+    progress = 0
+    status = "Preparing reset…"
+  }
+
+  func update(progress: Double, status: String) {
+    self.progress = progress
+    self.status = status
+  }
+
+  func finish() {
+    progress = 1
+    isResetting = false
+  }
+}
+
 // Unified import mode — covers every file-picker use case in one enum so only
 // a single .fileImporter modifier is needed. SwiftUI silently drops all but the
 // last .fileImporter when multiple are stacked on the same view.
@@ -38,6 +66,7 @@ struct SettingsView: View {
   @State private var isResetting = false
   @State private var resetProgress: Double = 0
   @State private var resetStatus = "Preparing…"
+  @State private var libraryReset = LibraryResetCoordinator.shared
   @State private var backupExportURL: URL?
   @State private var showingBulkTagEditor = false
   @State private var showingOnboarding = false
@@ -248,17 +277,17 @@ struct SettingsView: View {
       }
     }
     .overlay {
-      if isResetting {
+      if isResetting || libraryReset.isResetting {
         ZStack {
           Color.black.opacity(0.4)
             .ignoresSafeArea()
 
           VStack(spacing: 16) {
-            ProgressView(value: resetProgress)
+            ProgressView(value: libraryReset.isResetting ? libraryReset.progress : resetProgress)
               .progressViewStyle(.linear)
               .tint(themeManager.accentColor)
               .frame(width: 220)
-            Text(resetStatus)
+            Text(libraryReset.isResetting ? libraryReset.status : resetStatus)
               .font(.headline)
               .foregroundStyle(.primary)
               .multilineTextAlignment(.center)
@@ -1347,9 +1376,7 @@ struct SettingsView: View {
   }
 
   private func resetLibrary() {
-    isResetting = true
-    resetProgress = 0
-    resetStatus = "Preparing reset…"
+    libraryReset.begin()
     print("[DEBUG] SettingsView.resetLibrary: Starting full reset")
 
     Task {
@@ -1357,6 +1384,8 @@ struct SettingsView: View {
       // Clearing after save is too late: SwiftUI or the player can resolve an
       // outstanding attribute fault during that gap and crash.
       PlaybackController.shared.prepareForLibraryReset()
+      WatchSyncService.shared.prepareForLibraryReset()
+      RecommendationEngine.shared.resetInMemoryState()
       library.ignoreReferencedSongsForLiveMonitoring(library.songs)
       library.resetInMemoryState()
       // Flush every navigation stack and playlist reference before deleting
@@ -1367,8 +1396,12 @@ struct SettingsView: View {
         name: .libraryDidReset,
         object: ["phase": "willReset"]
       )
-      resetProgress = 0.1
-      resetStatus = "Removing library records…"
+      // Give SwiftUI one render pass to release RadioStationView,
+      // PlaylistArtworkView, navigation destinations, and other model-backed
+      // rows before SwiftData detaches their backing data below.
+      await Task.yield()
+      try? await Task.sleep(for: .milliseconds(100))
+      libraryReset.update(progress: 0.1, status: "Removing library records…")
 
       // ── 1. Delete SwiftData records ───────────────────────────────────────
       // We fetch-and-delete each type individually rather than using the batch
@@ -1411,8 +1444,7 @@ struct SettingsView: View {
       }
 
       // ── 3. Delete physical files & artwork cache ───────────────────────────
-      resetProgress = 0.55
-      resetStatus = "Removing audio files…"
+      libraryReset.update(progress: 0.55, status: "Removing audio files…")
       let songsDirectory = library.songsDirectory
       let artworkCacheDirectory = library.artworkCacheDirectory
       await Task.detached(priority: .userInitiated) {
@@ -1428,8 +1460,7 @@ struct SettingsView: View {
           withIntermediateDirectories: true
         )
       }.value
-      resetProgress = 0.75
-      resetStatus = "Finishing reset…"
+      libraryReset.update(progress: 0.75, status: "Finishing reset…")
 
       // ── 4. Clear UserDefaults keys that would skip the next startup scan ──
       // lastDiskScanTime makes indexOnStartup skip if the directory looks unchanged.
@@ -1446,6 +1477,7 @@ struct SettingsView: View {
       // ── 5. Reload from (now empty) SwiftData ──────────────────────────────
       await library.loadSongs(force: true)
       await playlistManager.loadPlaylists()
+      WatchSyncService.shared.libraryResetDidFinish()
 
       // ── 6. Reset onboarding + notify tab view ─────────────────────────────
       // OpenTabView's .libraryDidReset handler increments libraryResetID (tears
@@ -1454,8 +1486,7 @@ struct SettingsView: View {
       OnboardingState.reset()
       NotificationCenter.default.post(name: .libraryDidReset, object: nil)
 
-      resetProgress = 1
-      isResetting = false
+      libraryReset.finish()
       print("[DEBUG] SettingsView.resetLibrary: Full reset completed")
     }
   }
@@ -1568,7 +1599,7 @@ private struct HomeCustomizationView: View {
       } header: {
         Text("Home Sections")
       } footer: {
-        Text("Turn off shelves you do not use. At least one section must remain visible. Tap Edit and drag rows to choose the order shown on Home.")
+        Text("Turn off shelves you do not use. At least one section must remain visible. Personalized sections may stay empty until enough listening history is available. Tap Edit and drag rows to choose the order shown on Home.")
       }
 
       Section {
@@ -1677,6 +1708,27 @@ struct AddThemeView: View {
               },
               set: { preferences.customCardBackgroundColorHex = $0.toHex() }
             ))
+
+          ColorPicker(
+            "Primary Text",
+            selection: Binding(
+              get: {
+                preferences.customPrimaryTextColorHex.map { Color(hex: $0) }
+                  ?? (preferences.customColorScheme == .light ? Color(hex: "#20151C") : .white)
+              },
+              set: { preferences.customPrimaryTextColorHex = $0.toHex() }
+            ))
+
+          ColorPicker(
+            "Secondary Text",
+            selection: Binding(
+              get: {
+                preferences.customSecondaryTextColorHex.map { Color(hex: $0) }
+                  ?? (preferences.customColorScheme == .light
+                    ? Color(hex: "#6E5D67") : Color.white.opacity(0.72))
+              },
+              set: { preferences.customSecondaryTextColorHex = $0.toHex() }
+            ))
         }
         .listRowBackground(themeManager.cardBackgroundColor)
 
@@ -1694,10 +1746,18 @@ struct AddThemeView: View {
                     .frame(width: 30, height: 30)
                   VStack(alignment: .leading) {
                     Text("Song Title")
-                      .foregroundStyle(preferences.customColorScheme == .light ? .black : .white)
+                      .foregroundStyle(
+                        preferences.customPrimaryTextColorHex.map { Color(hex: $0) }
+                          ?? (preferences.customColorScheme == .light
+                            ? Color(hex: "#20151C") : .white)
+                      )
                     Text("Artist Name")
                       .font(.caption)
-                      .foregroundStyle(.secondary)
+                      .foregroundStyle(
+                        preferences.customSecondaryTextColorHex.map { Color(hex: $0) }
+                          ?? (preferences.customColorScheme == .light
+                            ? Color(hex: "#6E5D67") : Color.white.opacity(0.72))
+                      )
                   }
                   Spacer()
                   Image(systemName: "play.fill")
@@ -1719,6 +1779,8 @@ struct AddThemeView: View {
             preferences.customAccentColorHex = nil
             preferences.customBackgroundColorHex = nil
             preferences.customCardBackgroundColorHex = nil
+            preferences.customPrimaryTextColorHex = nil
+            preferences.customSecondaryTextColorHex = nil
           }
           .foregroundStyle(.red)
         }
