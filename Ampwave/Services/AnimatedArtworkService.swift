@@ -340,6 +340,15 @@ final class AnimatedArtworkService {
     private let storedLocationsKey = "com.ampwave.animatedArtworkAssetLocations"
 
     private var cacheDirectory: URL {
+      // Documents is the app's Files-visible root. The shared app-group
+      // container is intentionally hidden from Files, which made successfully
+      // cached animations look as if they had never been downloaded.
+      PathManager.documentsDirectory
+        .appendingPathComponent("artworks", isDirectory: true)
+        .appendingPathComponent("animated", isDirectory: true)
+    }
+
+    private var legacyCacheDirectory: URL {
       PathManager.baseDirectory
         .appendingPathComponent("artworks", isDirectory: true)
         .appendingPathComponent("animated", isDirectory: true)
@@ -370,6 +379,9 @@ final class AnimatedArtworkService {
         try? FileManager.default.removeItem(at: url)
       }
       try? FileManager.default.removeItem(at: cacheDirectory)
+      if legacyCacheDirectory.standardizedFileURL != cacheDirectory.standardizedFileURL {
+        try? FileManager.default.removeItem(at: legacyCacheDirectory)
+      }
       UserDefaults.standard.removeObject(forKey: storedLocationsKey)
     }
 
@@ -391,9 +403,76 @@ final class AnimatedArtworkService {
       let expected = cacheDirectory.appendingPathComponent("\(key).movpkg", isDirectory: true)
       if FileManager.default.fileExists(atPath: expected.path) { return expected }
       if let cached = storedLocations[key], FileManager.default.fileExists(atPath: cached.path) {
-        return cached
+        return migrateToVisibleCacheIfNeeded(assetAt: cached, key: key) ?? cached
+      }
+
+      // Move caches created by builds that wrote into the private app-group
+      // container. The migration is lazy so launch never walks a potentially
+      // large artwork directory.
+      if legacyCacheDirectory.standardizedFileURL != cacheDirectory.standardizedFileURL {
+        let legacyHLS = legacyCacheDirectory
+          .appendingPathComponent("\(key).hls", isDirectory: true)
+          .appendingPathComponent("animation.mp4")
+        if FileManager.default.fileExists(atPath: legacyHLS.path),
+          let migrated = migrateToVisibleCacheIfNeeded(assetAt: legacyHLS, key: key)
+        {
+          return migrated
+        }
+
+        let legacyMovpkg = legacyCacheDirectory
+          .appendingPathComponent("\(key).movpkg", isDirectory: true)
+        if FileManager.default.fileExists(atPath: legacyMovpkg.path),
+          let migrated = migrateToVisibleCacheIfNeeded(assetAt: legacyMovpkg, key: key)
+        {
+          return migrated
+        }
       }
       return nil
+    }
+
+    private func migrateToVisibleCacheIfNeeded(assetAt source: URL, key: String) -> URL? {
+      guard !Self.isInside(source, directory: cacheDirectory) else { return source }
+
+      let isPackage = source.pathExtension.lowercased() == "movpkg"
+      let sourceContainer = isPackage ? source : source.deletingLastPathComponent()
+      let destinationContainer = cacheDirectory.appendingPathComponent(
+        "\(key).\(isPackage ? "movpkg" : "hls")",
+        isDirectory: true
+      )
+      let destination = isPackage
+        ? destinationContainer
+        : destinationContainer.appendingPathComponent("animation.mp4")
+
+      do {
+        try FileManager.default.createDirectory(
+          at: cacheDirectory,
+          withIntermediateDirectories: true
+        )
+        try? FileManager.default.removeItem(at: destinationContainer)
+        try FileManager.default.copyItem(at: sourceContainer, to: destinationContainer)
+        guard FileManager.default.fileExists(atPath: destination.path) else { return nil }
+
+        var stored = storedLocations
+        stored[key] = destination
+        storedLocations = stored
+        DiagnosticLog.shared.log(
+          "animated-artwork",
+          "Migrated animation to Files-visible cache path=artworks/animated/\(destinationContainer.lastPathComponent)"
+        )
+        return destination
+      } catch {
+        DiagnosticLog.shared.log(
+          "animated-artwork",
+          "Could not migrate animation cache error=\(error.localizedDescription)"
+        )
+        return nil
+      }
+    }
+
+    private static func isInside(_ url: URL, directory: URL) -> Bool {
+      let path = url.standardizedFileURL.pathComponents
+      let directoryPath = directory.standardizedFileURL.pathComponents
+      return path.count >= directoryPath.count && path.starts(with: directoryPath)
     }
 
     private func downloadHLSAsset(from remoteURL: URL, title: String) async -> URL? {

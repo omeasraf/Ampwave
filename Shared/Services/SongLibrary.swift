@@ -2848,6 +2848,85 @@ extension Notification.Name {
     pruneEmptyContainers(album: albumRef, artistName: artistName)
   }
 
+  /// Removes entries whose backing files were deleted outside Ampwave.
+  ///
+  /// This deliberately does not add their hashes to the live-monitor ignore
+  /// list. If a sync provider restores one of these files later, that is a real
+  /// filesystem addition and it should be imported again.
+  func removeSongsWhoseFilesDisappeared(_ candidates: [LibrarySong]) {
+    guard let modelContext else { return }
+    let missing = candidates.filter { songIndex[$0.id] != nil }
+    guard !missing.isEmpty else { return }
+
+    let deletedIDs = Set(missing.map(\.id))
+    var affectedAlbums: [UUID: Album] = [:]
+    var affectedArtistNames = Set<String>()
+
+    // Snapshot every value needed for cleanup before SwiftData detaches the
+    // song models, and update relationship arrays while those models are live.
+    for song in missing {
+      if let album = song.albumReference {
+        affectedAlbums[album.id] = album
+        album.songs.removeAll { deletedIDs.contains($0.id) }
+      }
+
+      let names = song.artists.isEmpty
+        ? ArtistParser.parseArtists(from: song.albumArtist ?? song.artist)
+        : song.artists
+      affectedArtistNames.formUnion(
+        names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+          .filter { !$0.isEmpty }
+      )
+    }
+
+    let emptyAlbumIDs = Set(
+      affectedAlbums.values.filter(\.songs.isEmpty).map(\.id)
+    )
+
+    // The deletion notification synchronously evicts a currently playing file
+    // from AVQueuePlayer before any persistent backing data is invalidated.
+    removeSongsFromMemory(ids: deletedIDs)
+    purgeSongReferences(ids: deletedIDs, albumIDs: emptyAlbumIDs)
+
+    for song in missing {
+      modelContext.delete(song)
+    }
+
+    for album in affectedAlbums.values where album.songs.isEmpty {
+      modelContext.delete(album)
+      albums.removeAll { $0.id == album.id }
+    }
+
+    // Counts on Artist are stored fields rather than computed relationships.
+    // Refresh every artist touched by this batch and prune newly empty rows.
+    var artistIDsToRemove = Set<UUID>()
+    for artist in artists
+    where affectedArtistNames.contains(artist.name.lowercased())
+    {
+      let remainingSongs = songs.filter { song in
+        let names = song.artists.isEmpty
+          ? ArtistParser.parseArtists(from: song.albumArtist ?? song.artist)
+          : song.artists
+        return names.contains {
+          $0.caseInsensitiveCompare(artist.name) == .orderedSame
+        }
+      }
+
+      if remainingSongs.isEmpty {
+        artistIDsToRemove.insert(artist.id)
+        modelContext.delete(artist)
+      } else {
+        artist.songCount = remainingSongs.count
+        artist.albumCount = Set(remainingSongs.compactMap(\.album)).count
+      }
+    }
+    artists.removeAll { artistIDsToRemove.contains($0.id) }
+
+    saveContext()
+    notifyLibraryChange()
+    print("[DEBUG] SongLibrary: Removed \(missing.count) songs whose files disappeared")
+  }
+
   private func deleteAudioFileIfRequested(
     for song: LibrarySong,
     modelContext: ModelContext

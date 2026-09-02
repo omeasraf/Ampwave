@@ -18,6 +18,10 @@ final class PlaybackState: Identifiable {
   var lastQueueIndex: Int
   var lastSourceRaw: String?
   var lastPlaylistId: UUID?
+  /// Empty values mean this state predates playback-mode persistence and the
+  /// user's configured defaults should be used instead.
+  var shuffleModeRaw: String = ""
+  var repeatModeRaw: String = ""
   var isVocalSliderVisible: Bool = false
   var vocalLevel: Float = 1.0
 
@@ -28,6 +32,8 @@ final class PlaybackState: Identifiable {
     lastQueueIndex: Int = 0,
     lastSourceRaw: String? = nil,
     lastPlaylistId: UUID? = nil,
+    shuffleModeRaw: String = "",
+    repeatModeRaw: String = "",
     isVocalSliderVisible: Bool = false,
     vocalLevel: Float = 1.0
   ) {
@@ -38,6 +44,8 @@ final class PlaybackState: Identifiable {
     self.lastQueueIndex = lastQueueIndex
     self.lastSourceRaw = lastSourceRaw
     self.lastPlaylistId = lastPlaylistId
+    self.shuffleModeRaw = shuffleModeRaw
+    self.repeatModeRaw = repeatModeRaw
     self.isVocalSliderVisible = isVocalSliderVisible
     self.vocalLevel = vocalLevel
   }

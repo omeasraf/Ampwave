@@ -45,6 +45,8 @@ private func sortSongs(
 // MARK: - View
 
 struct SongsListView: View {
+  var onScrollStateChange: (Bool) -> Void = { _ in }
+
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
@@ -70,6 +72,11 @@ struct SongsListView: View {
       .listStyle(.plain)
       .scrollContentBackground(.hidden)
       .background(themeManager.backgroundColor)
+      .onScrollGeometryChange(for: Bool.self) { geometry in
+        geometry.contentOffset.y + geometry.contentInsets.top > 1
+      } action: { _, isScrolled in
+        onScrollStateChange(isScrolled)
+      }
       // Persistent models must stay on the model context's actor. Passing this
       // array through Task.detached can detach unresolved SwiftData faults.
       .task(id: sortCacheKey) {

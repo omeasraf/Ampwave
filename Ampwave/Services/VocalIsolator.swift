@@ -163,6 +163,7 @@ final class VocalIsolator {
         let bassProtectFreq: Float
         let bassProtectQ: Float
         let bassProtectAmount: Float
+        let instrumentActivity: SonicInstrumentActivity?
         var bassState = BiquadState()
         var bassCoeffs: BiquadCoeffs = .passthrough
         /// False until `prepare` computes real coefficients for the actual
@@ -212,7 +213,8 @@ final class VocalIsolator {
             bandQ: Float,
             bassProtectFreq: Float,
             bassProtectQ: Float,
-            bassProtectAmount: Float
+            bassProtectAmount: Float,
+            instrumentActivity: SonicInstrumentActivity?
         ) {
             self.targetLevel = targetLevel
             self.currentLevel = currentLevel
@@ -223,6 +225,7 @@ final class VocalIsolator {
             self.bassProtectFreq = bassProtectFreq
             self.bassProtectQ = bassProtectQ
             self.bassProtectAmount = bassProtectAmount
+            self.instrumentActivity = instrumentActivity
             let n = bandFreqs.count
             self.eqState = Array(repeating: Array(repeating: BiquadState(), count: 2), count: n)
             self.eqCoeffs = Array(repeating: .passthrough, count: n)
@@ -262,6 +265,31 @@ final class VocalIsolator {
                 }
             }
             bassState = BiquadState()
+            frameCounter = 0
+        }
+
+        /// Music Understanding identifies when vocals are actually present; it
+        /// does not separate them. Gate the listener's requested reduction with
+        /// that confidence so center-panned instruments remain untouched in
+        /// instrumental passages. A smoothstep curve makes faint detections
+        /// settle gently rather than pumping between buffers.
+        func adaptiveVocalLevel(userLevel: Float, at time: TimeInterval) -> Float {
+            guard let instrumentActivity, !instrumentActivity.vocal.isEmpty else {
+                return userLevel
+            }
+            let raw = min(max(instrumentActivity.vocalActivity(at: time), 0), 1)
+            let normalized = min(max((raw - 0.04) / 0.36, 0), 1)
+            let presence = normalized * normalized * (3 - 2 * normalized)
+            return 1 - (1 - userLevel) * presence
+        }
+
+        func adaptiveBassProtection(at time: TimeInterval) -> Float {
+            guard let instrumentActivity else { return bassProtectAmount }
+            let rhythmActivity = max(
+                instrumentActivity.bassActivity(at: time),
+                instrumentActivity.drumActivity(at: time)
+            )
+            return min(1, bassProtectAmount + (1 - bassProtectAmount) * rhythmActivity * 0.75)
         }
 
         // MARK: Native voice separation
@@ -902,7 +930,10 @@ final class VocalIsolator {
 
     // MARK: - AVAudioMix Factory
 
-    func createAudioMix(for audioTrack: AVAssetTrack) -> AVAudioMix? {
+    func createAudioMix(
+        for audioTrack: AVAssetTrack,
+        instrumentActivity: SonicInstrumentActivity? = nil
+    ) -> AVAudioMix? {
         let storage = TapStorage(
             targetLevel: targetVocalLevelPtr,
             currentLevel: currentVocalLevelPtr,
@@ -912,7 +943,8 @@ final class VocalIsolator {
             bandQ: bandQ,
             bassProtectFreq: bassProtectFreq,
             bassProtectQ: bassProtectQ,
-            bassProtectAmount: bassProtectAmount
+            bassProtectAmount: bassProtectAmount,
+            instrumentActivity: instrumentActivity
         )
 
         var callbacks = MTAudioProcessingTapCallbacks(
@@ -983,15 +1015,32 @@ final class VocalIsolator {
                     return
                 }
 
+                var sourceTimeRange = CMTimeRange.invalid
                 let status = MTAudioProcessingTapGetSourceAudio(
-                    tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut)
+                    tap,
+                    numberFrames,
+                    bufferListInOut,
+                    flagsOut,
+                    &sourceTimeRange,
+                    numberFramesOut
+                )
                 guard status == noErr else { return }
 
                 if flags & kMTAudioProcessingTapFlag_StartOfStream != 0 {
                     storage.resetFilterState()
                 }
 
-                let target = storage.targetLevel.pointee
+                let sourceSeconds = sourceTimeRange.start.seconds
+                let fallbackSeconds = Double(storage.frameCounter) / Double(max(storage.sampleRate, 1))
+                let bufferStart = sourceSeconds.isFinite && sourceSeconds >= 0
+                    ? sourceSeconds : fallbackSeconds
+                let bufferMiddle = bufferStart
+                    + Double(numberFrames) / Double(max(storage.sampleRate, 1)) / 2
+                let target = storage.adaptiveVocalLevel(
+                    userLevel: storage.targetLevel.pointee,
+                    at: bufferMiddle
+                )
+                let bassProtectAmount = storage.adaptiveBassProtection(at: bufferMiddle)
                 var current = storage.currentLevel.pointee
                 let doVocal = !(target >= 0.999 && current >= 0.999)
                 let doEQ = storage.eqEnabled.pointee
@@ -1045,7 +1094,7 @@ final class VocalIsolator {
                                 let lowMid = storage.bassState.process(mid, storage.bassCoeffs)
                                 let highMid = mid - lowMid
                                 let bassGain =
-                                    1.0 + (midGain - 1.0) * (1.0 - storage.bassProtectAmount)
+                                    1.0 + (midGain - 1.0) * (1.0 - bassProtectAmount)
                                 newMid = lowMid * bassGain + highMid * midGain
                             }
                             let newSide = side * sideGain
@@ -1100,7 +1149,7 @@ final class VocalIsolator {
                                 let lowMid = storage.bassState.process(mid, storage.bassCoeffs)
                                 let highMid = mid - lowMid
                                 let bassGain =
-                                    1.0 + (midGain - 1.0) * (1.0 - storage.bassProtectAmount)
+                                    1.0 + (midGain - 1.0) * (1.0 - bassProtectAmount)
                                 newMid = lowMid * bassGain + highMid * midGain
                             }
                             let newSide = side * sideGain

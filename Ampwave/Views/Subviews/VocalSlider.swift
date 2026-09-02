@@ -9,7 +9,12 @@ internal import SwiftUI
 
 struct VocalSlider: View {
   @Binding var value: Float
+  var vocalActivity: Float? = nil
   @State private var isDragging = false
+
+  private var activityStrength: CGFloat {
+    CGFloat(min(max(vocalActivity ?? 0, 0), 1))
+  }
 
   var body: some View {
     VStack(spacing: 12) {
@@ -31,6 +36,12 @@ struct VocalSlider: View {
             Image(systemName: "waveform.path")
               .font(.system(size: 20, weight: .bold))
               .foregroundStyle(value > 0.3 ? .black : .white)
+              .scaleEffect(1 + activityStrength * 0.12)
+              .shadow(
+                color: .white.opacity(vocalActivity == nil ? 0 : 0.25 + activityStrength * 0.55),
+                radius: 3 + activityStrength * 8
+              )
+              .animation(.linear(duration: 0.15), value: activityStrength)
               .padding(.bottom, 80)
           }
         }
@@ -52,6 +63,10 @@ struct VocalSlider: View {
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("Song vocals")
       .accessibilityValue("\(Int((value * 100).rounded())) percent")
+      .accessibilityHint(
+        vocalActivity.map { "Detected vocal activity \(Int(($0 * 100).rounded())) percent" }
+          ?? "Vocal activity analysis unavailable"
+      )
       .accessibilityAdjustableAction { direction in
         switch direction {
         case .increment:

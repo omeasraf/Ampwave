@@ -860,7 +860,7 @@ struct SettingsView: View {
             )
           )
           Text(
-            "Looks for Apple Music's animated cover only when a song starts playing. Animations are cached for Now Playing and supported lock screens. These video files can be large and may use significant device storage."
+            "Looks for Apple Music's animated cover only when a song starts playing. Animations are cached under Ampwave/artworks/animated in Files for Now Playing and supported lock screens. These video files can be large and may use significant device storage."
           )
           .font(.caption)
           .foregroundStyle(.secondary)

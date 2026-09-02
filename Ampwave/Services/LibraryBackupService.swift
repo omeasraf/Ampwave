@@ -216,6 +216,12 @@ enum LibraryBackupService {
       )
       playbackState.lastSourceRaw = backupPlaybackState.lastSourceRaw
       playbackState.lastPlaylistId = backupPlaybackState.lastPlaylistId
+      if let shuffleMode = backupPlaybackState.shuffleModeRaw {
+        playbackState.shuffleModeRaw = shuffleMode
+      }
+      if let repeatMode = backupPlaybackState.repeatModeRaw {
+        playbackState.repeatModeRaw = repeatMode
+      }
       playbackState.isVocalSliderVisible = backupPlaybackState.isVocalSliderVisible
       playbackState.vocalLevel = backupPlaybackState.vocalLevel
     }
@@ -551,6 +557,8 @@ private struct BackupPlaybackState: Codable {
   let lastQueueIndex: Int
   let lastSourceRaw: String?
   let lastPlaylistId: UUID?
+  let shuffleModeRaw: String?
+  let repeatModeRaw: String?
   let isVocalSliderVisible: Bool
   let vocalLevel: Float
 
@@ -561,6 +569,8 @@ private struct BackupPlaybackState: Codable {
     lastQueueIndex = state.lastQueueIndex
     lastSourceRaw = state.lastSourceRaw
     lastPlaylistId = state.lastPlaylistId
+    shuffleModeRaw = state.shuffleModeRaw
+    repeatModeRaw = state.repeatModeRaw
     isVocalSliderVisible = state.isVocalSliderVisible
     vocalLevel = state.vocalLevel
   }

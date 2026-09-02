@@ -132,11 +132,6 @@ struct GridSizePicker: View {
         .buttonStyle(.plain)
       }
     }
-    .padding(3)
-    .frame(height: 32)
-    .background(.quaternary, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-    .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
     .fixedSize(horizontal: true, vertical: true)
   }
 }
@@ -223,7 +218,10 @@ struct LibrarySortMenu: View {
       }
     } label: {
       Image(systemName: "arrow.up.arrow.down.circle")
+        .font(.system(size: 15, weight: .semibold))
+        .frame(width: 30, height: 26)
     }
+    .buttonStyle(.plain)
   }
 
   private var currentSortBinding: Binding<LibrarySortOrder> {
@@ -272,9 +270,46 @@ struct LibrarySortMenu: View {
   }
 }
 
+/// Keeps density and sort controls inside one compact toolbar capsule. SwiftUI
+/// otherwise gives a `Menu` and a group of buttons separate Liquid Glass
+/// spacing, which can push the density buttons outside their visible border.
+private struct LibraryToolbarControls: View {
+  let selectedTab: LibraryView.LibraryTab
+  @Binding var gridSelection: String
+  @Bindable var appSettings: AppSettings
+
+  private var showsGridPicker: Bool { selectedTab != .songs }
+  private var showsSortMenu: Bool { selectedTab != .genres }
+
+  var body: some View {
+    HStack(spacing: 0) {
+      if showsGridPicker {
+        GridSizePicker(
+          selection: $gridSelection,
+          options: LibraryGridSize.pickerOptions
+        )
+      }
+
+      if showsGridPicker, showsSortMenu {
+        Divider()
+          .frame(height: 16)
+          .padding(.horizontal, 2)
+      }
+
+      if showsSortMenu {
+        LibrarySortMenu(selectedTab: selectedTab, appSettings: appSettings)
+      }
+    }
+    .frame(height: 32)
+    .fixedSize(horizontal: true, vertical: true)
+  }
+}
+
 // MARK: - Genres grid
 
 struct GenresGridView: View {
+  var onScrollStateChange: (Bool) -> Void = { _ in }
+
   @Environment(ThemeManager.self) private var themeManager
   @AppStorage("com.ampwave.genreGridSize.v1") private var genreGridSizeRaw: String = "medium"
   @State private var gridWidth: CGFloat = 400
@@ -320,6 +355,11 @@ struct GenresGridView: View {
           .padding(.horizontal, gridSize.horizontalPadding)
           .padding(.top, 16)
           .padding(.bottom, 24)
+        }
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+          geometry.contentOffset.y + geometry.contentInsets.top > 1
+        } action: { _, isScrolled in
+          onScrollStateChange(isScrolled)
         }
       }
     }
@@ -433,6 +473,7 @@ struct LibraryView: View {
   @AppStorage("com.ampwave.albumGridSize.v2") private var albumGridSizeRaw = "medium"
   @AppStorage("com.ampwave.artistGridSize.v2") private var artistGridSizeRaw = "medium"
   @AppStorage("com.ampwave.genreGridSize.v1") private var genreGridSizeRaw = "medium"
+  @State private var scrollStates: [LibraryTab: Bool] = [:]
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -463,46 +504,72 @@ struct LibraryView: View {
 
   var body: some View {
     TabView(selection: $selectedTab) {
-      SongsListView()
+      SongsListView { updateScrollState($0, for: .songs) }
         .tag(LibraryTab.songs)
 
-      AlbumsGridView()
+      AlbumsGridView { updateScrollState($0, for: .albums) }
         .tag(LibraryTab.albums)
 
-      ArtistsGridView()
+      ArtistsGridView { updateScrollState($0, for: .artists) }
         .tag(LibraryTab.artists)
 
-      GenresGridView()
+      GenresGridView { updateScrollState($0, for: .genres) }
         .tag(LibraryTab.genres)
     }
     .tabViewStyle(.page(indexDisplayMode: .never))
     .safeAreaInset(edge: .top, spacing: 0) {
-      libraryTabStrip
-        .background(.bar)
-        .overlay(alignment: .bottom) {
-          Divider().opacity(0.35)
+      VStack(spacing: 0) {
+        HStack {
+          Text("Library")
+            .font(.largeTitle.bold())
+          Spacer(minLength: 0)
         }
+        .padding(.horizontal, 20)
+        .frame(height: currentPageHasScrolled ? 0 : 48, alignment: .bottom)
+        .opacity(currentPageHasScrolled ? 0 : 1)
+        .clipped()
+
+        libraryTabStrip
+          .overlay(alignment: .bottom) {
+            Divider().opacity(0.35)
+          }
+      }
+      .background(themeManager.backgroundColor)
+      .animation(.smooth(duration: 0.28), value: currentPageHasScrolled)
     }
     .background(themeManager.backgroundColor)
     .tint(themeManager.accentColor)
-    .navigationTitle("Library")
-    .navigationBarTitleDisplayMode(.large)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(themeManager.backgroundColor, for: .navigationBar)
     .toolbar {
-      ToolbarItemGroup(placement: .primaryAction) {
-        if selectedTab != .songs {
-          GridSizePicker(
-            selection: gridSizeBinding,
-            options: LibraryGridSize.pickerOptions
-          )
-        }
+      ToolbarItem(placement: .principal) {
+        Text("Library")
+          .font(.headline)
+          .opacity(currentPageHasScrolled ? 1 : 0)
+          .animation(.easeInOut(duration: 0.2), value: currentPageHasScrolled)
+      }
 
-        if selectedTab != .genres {
-          LibrarySortMenu(selectedTab: selectedTab, appSettings: appSettings)
-        }
+      ToolbarItem(placement: .primaryAction) {
+        LibraryToolbarControls(
+          selectedTab: selectedTab,
+          gridSelection: gridSizeBinding,
+          appSettings: appSettings
+        )
       }
     }
     .onAppear {
       playlistManager.setModelContext(modelContext)
+    }
+  }
+
+  private var currentPageHasScrolled: Bool {
+    scrollStates[selectedTab, default: false]
+  }
+
+  private func updateScrollState(_ isScrolled: Bool, for tab: LibraryTab) {
+    guard scrollStates[tab] != isScrolled else { return }
+    withAnimation(.smooth(duration: 0.28)) {
+      scrollStates[tab] = isScrolled
     }
   }
 
@@ -564,6 +631,8 @@ struct LibraryView: View {
 // MARK: - Albums Grid View
 
 struct AlbumsGridView: View {
+  var onScrollStateChange: (Bool) -> Void = { _ in }
+
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
@@ -651,6 +720,11 @@ struct AlbumsGridView: View {
         .padding(.bottom, 24)
       }
     }
+    .onScrollGeometryChange(for: Bool.self) { geometry in
+      geometry.contentOffset.y + geometry.contentInsets.top > 1
+    } action: { _, isScrolled in
+      onScrollStateChange(isScrolled)
+    }
     // Capture available width for the large full-bleed column calculation
     .background {
       GeometryReader { geo in
@@ -665,6 +739,8 @@ struct AlbumsGridView: View {
 // MARK: - Artists Grid View
 
 struct ArtistsGridView: View {
+  var onScrollStateChange: (Bool) -> Void = { _ in }
+
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
@@ -735,6 +811,11 @@ struct ArtistsGridView: View {
         .padding(.top, 16)
         .padding(.bottom, 24)
       }
+    }
+    .onScrollGeometryChange(for: Bool.self) { geometry in
+      geometry.contentOffset.y + geometry.contentInsets.top > 1
+    } action: { _, isScrolled in
+      onScrollStateChange(isScrolled)
     }
     .background {
       GeometryReader { geo in

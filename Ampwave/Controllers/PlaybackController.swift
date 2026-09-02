@@ -154,7 +154,14 @@ final class PlaybackController {
 
   // MARK: - Playback State
 
-  private(set) var currentItem: LibrarySong?
+  private(set) var currentItem: LibrarySong? {
+    didSet {
+      currentInstrumentActivity = currentItem.flatMap {
+        SonicRecommendationService.shared.instrumentActivity(for: $0)
+      }
+    }
+  }
+  private var currentInstrumentActivity: SonicInstrumentActivity?
   var currentTime: TimeInterval = 0 {
     didSet {
       currentTimeAnchorUptime = ProcessInfo.processInfo.systemUptime
@@ -272,6 +279,14 @@ final class PlaybackController {
     }
   }
 
+  /// Live Music Understanding confidence for the current playback position.
+  /// Nil preserves the ordinary slider appearance on iOS 26 and for songs that
+  /// have not produced instrument activity results.
+  var currentVocalActivity: Float? {
+    guard let currentInstrumentActivity else { return nil }
+    return currentInstrumentActivity.vocalActivity(at: interpolatedCurrentTime())
+  }
+
   private func attachAudioProcessingToCurrentItemIfNeeded() {
     guard let item = player?.currentItem, item.audioMix == nil else { return }
     Task { @MainActor [weak self, weak item] in
@@ -280,7 +295,10 @@ final class PlaybackController {
         guard let track = try await item.asset.loadTracks(withMediaType: .audio).first,
           self.player?.currentItem === item
         else { return }
-        item.audioMix = VocalIsolator.shared.createAudioMix(for: track)
+        item.audioMix = VocalIsolator.shared.createAudioMix(
+          for: track,
+          instrumentActivity: self.currentInstrumentActivity
+        )
         DiagnosticLog.shared.log("audio-processing", "Attached processing tap on demand")
       } catch {
         DiagnosticLog.shared.log("error", "Could not attach processing tap: \(error)")
@@ -407,13 +425,26 @@ final class PlaybackController {
 
   /// Updates the live lyric position immediately. Slider drags can defer the
   /// database write until the gesture/sheet finishes.
-  func setLyricsTimingOffset(_ offset: TimeInterval, persist: Bool = true) {
-    guard let song = currentItem else { return }
-    song.lyricsTimingOffset = min(max(offset, -30), 30)
-    updateCurrentLyric(at: currentTime)
-    updateWidget(force: true)
+  func setLyricsTimingOffset(
+    _ offset: TimeInterval,
+    for targetSong: LibrarySong? = nil,
+    persist: Bool = true
+  ) {
+    guard let song = targetSong ?? currentItem else { return }
+    song.lyricsTimingOffset = min(max(offset, -10), 10)
+    if song.id == currentItem?.id {
+      updateCurrentLyric(at: currentTime)
+      updateWidget(force: true)
+    }
     if persist {
-      try? modelContext?.save()
+      do {
+        try modelContext?.save()
+      } catch {
+        DiagnosticLog.shared.log(
+          "lyrics-timing",
+          "Failed to save offset song=\(song.title) error=\(error.localizedDescription)"
+        )
+      }
     }
   }
 
@@ -517,10 +548,15 @@ final class PlaybackController {
       "[DEBUG] PlaybackController.setModelContext: preferences: \(preferences != nil), persistentState: \(persistentState != nil)"
     )
 
-    // Apply defaults from preferences if not already set
+    // Restore the user's active modes. Older PlaybackState records have empty
+    // values, in which case their configured defaults remain the right choice.
     if let prefs = preferences {
-      self.shuffleMode = prefs.defaultShuffleMode
-      self.repeatMode = prefs.defaultRepeatMode
+      self.shuffleMode = persistentState.flatMap {
+        ShuffleMode(rawValue: $0.shuffleModeRaw)
+      } ?? prefs.defaultShuffleMode
+      self.repeatMode = persistentState.flatMap {
+        RepeatMode(rawValue: $0.repeatModeRaw)
+      } ?? prefs.defaultRepeatMode
       print(
         "[DEBUG] PlaybackController.setModelContext: Applied defaults - Shuffle: \(shuffleMode), Repeat: \(repeatMode)"
       )
@@ -1322,7 +1358,11 @@ final class PlaybackController {
       do {
       let tracks = try await asset.loadTracks(withMediaType: .audio)
       if let audioTrack = tracks.first {
-        if let audioMix = VocalIsolator.shared.createAudioMix(for: audioTrack) {
+        let instrumentActivity = SonicRecommendationService.shared.instrumentActivity(for: song)
+        if let audioMix = VocalIsolator.shared.createAudioMix(
+          for: audioTrack,
+          instrumentActivity: instrumentActivity
+        ) {
           item.audioMix = audioMix
           print(
             "[VALIDATION] PlaybackController: Assigned AVAudioMix to AVPlayerItem for \(song.title)"
@@ -2346,6 +2386,8 @@ final class PlaybackController {
     state.lastQueueIndex = currentQueueIndex
     state.lastSourceRaw = currentSource.rawValue
     state.lastPlaylistId = currentPlaylistId
+    state.shuffleModeRaw = shuffleMode.rawValue
+    state.repeatModeRaw = repeatMode.rawValue
 
     do {
       try context.save()

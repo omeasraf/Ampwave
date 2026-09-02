@@ -117,12 +117,19 @@ final class SonicRecommendationService {
   func enqueueMissingAnalysis(for songs: [LibrarySong], library: SongLibrary) {
     guard let modelContext else { return }
     let records = (try? modelContext.fetch(FetchDescriptor<SonicAnalysisRecord>())) ?? []
-    let existingHashes = Set(
-      records.lazy.filter { $0.analysisVersion == self.analysisVersion }.map(\.fileHash)
+    let existingRecords = Dictionary(
+      records.lazy
+        .filter { $0.analysisVersion == self.analysisVersion }
+        .map { ($0.fileHash, $0) },
+      uniquingKeysWith: { newer, _ in newer }
     )
     for song in songs {
       let track = snapshot(for: song, library: library)
-      if !existingHashes.contains(track.fileHash) {
+      let record = existingRecords[track.fileHash]
+      let needsBaseAnalysis = record == nil
+      let needsMusicUnderstanding = MusicUnderstandingAnalyzer.isAvailable
+        && record?.musicUnderstandingVersion != MusicUnderstandingAnalyzer.analysisVersion
+      if needsBaseAnalysis || needsMusicUnderstanding {
         enqueueAnalysis(track, databaseCheckAlreadyPerformed: true)
       }
     }
@@ -178,7 +185,7 @@ final class SonicRecommendationService {
     databaseCheckAlreadyPerformed: Bool = false
   ) {
     guard !pendingHashes.contains(track.fileHash) else { return }
-    guard databaseCheckAlreadyPerformed || fetchProfile(hash: track.fileHash) == nil else {
+    guard databaseCheckAlreadyPerformed || !analysisIsComplete(hash: track.fileHash) else {
       return
     }
     pending.append(track)
@@ -193,7 +200,7 @@ final class SonicRecommendationService {
       while !Task.isCancelled, !self.pending.isEmpty {
         let track = self.pending.removeLast()
         self.pendingHashes.remove(track.fileHash)
-        _ = await self.profile(for: track)
+        _ = await self.analyzeAndCacheIfNeeded(track)
         await Task.yield()
       }
       self.analysisWorker = nil
@@ -202,33 +209,98 @@ final class SonicRecommendationService {
 
   private func profile(for track: SonicTrackSnapshot) async -> SonicProfile? {
     if let cached = fetchProfile(hash: track.fileHash) { return cached }
-    let analyzed = await Task.detached(priority: .utility) { Self.analyze(track) }.value
-    guard let analyzed, let modelContext else { return analyzed }
-    if let cached = fetchProfile(hash: track.fileHash) { return cached }
+    return await analyzeAndCacheIfNeeded(track)
+  }
 
-    modelContext.insert(
-      SonicAnalysisRecord(
-        fileHash: track.fileHash,
-        analysisVersion: analysisVersion,
-        loudness: analyzed.loudness,
-        dynamics: analyzed.dynamics,
-        zeroCrossingRate: analyzed.zeroCrossingRate,
-        brightness: analyzed.brightness,
-        crestFactor: analyzed.crestFactor,
-        stereoWidth: analyzed.stereoWidth
+  private func analyzeAndCacheIfNeeded(_ track: SonicTrackSnapshot) async -> SonicProfile? {
+    let existing = fetchRecord(hash: track.fileHash)
+    let analyzed: SonicProfile?
+    if let existing {
+      analyzed = SonicProfile(record: existing)
+    } else {
+      analyzed = await Task.detached(priority: .utility) { Self.analyze(track) }.value
+    }
+    guard let analyzed else { return nil }
+
+    let needsMusicUnderstanding = MusicUnderstandingAnalyzer.isAvailable
+      && existing?.musicUnderstandingVersion != MusicUnderstandingAnalyzer.analysisVersion
+    let instrumentActivity = needsMusicUnderstanding
+      ? await MusicUnderstandingAnalyzer.analyze(track)
+      : nil
+    let encodedActivity = instrumentActivity.flatMap(Self.encodeInstrumentActivity)
+
+    guard let modelContext else { return analyzed }
+    if let record = fetchRecord(hash: track.fileHash) {
+      if needsMusicUnderstanding {
+        // Mark the version even when a particular file yields no result. That
+        // prevents an unsupported/corrupt file from being retried every launch.
+        record.musicUnderstandingVersion = MusicUnderstandingAnalyzer.analysisVersion
+        record.instrumentActivityData = encodedActivity
+        if let instrumentActivity {
+          DiagnosticLog.shared.log(
+            "sonic",
+            "Cached Music Understanding activity vocal=\(instrumentActivity.vocal.count) "
+              + "drum=\(instrumentActivity.drum.count) bass=\(instrumentActivity.bass.count)"
+          )
+        }
+      }
+    } else {
+      modelContext.insert(
+        SonicAnalysisRecord(
+          fileHash: track.fileHash,
+          analysisVersion: analysisVersion,
+          loudness: analyzed.loudness,
+          dynamics: analyzed.dynamics,
+          zeroCrossingRate: analyzed.zeroCrossingRate,
+          brightness: analyzed.brightness,
+          crestFactor: analyzed.crestFactor,
+          stereoWidth: analyzed.stereoWidth,
+          musicUnderstandingVersion: needsMusicUnderstanding
+            ? MusicUnderstandingAnalyzer.analysisVersion : nil,
+          instrumentActivityData: encodedActivity
+        )
       )
-    )
+    }
     try? modelContext.save()
     return analyzed
   }
 
+  func instrumentActivity(for song: LibrarySong) -> SonicInstrumentActivity? {
+    let track = snapshot(for: song)
+    guard let data = fetchRecord(hash: track.fileHash)?.instrumentActivityData else { return nil }
+    if let decoded = try? PropertyListDecoder().decode(SonicInstrumentActivity.self, from: data) {
+      return decoded
+    }
+    // Allows development builds that briefly wrote JSON activity records to
+    // migrate naturally without forcing the song through analysis again.
+    return try? JSONDecoder().decode(SonicInstrumentActivity.self, from: data)
+  }
+
+  private nonisolated static func encodeInstrumentActivity(
+    _ activity: SonicInstrumentActivity
+  ) -> Data? {
+    let encoder = PropertyListEncoder()
+    encoder.outputFormat = .binary
+    return try? encoder.encode(activity)
+  }
+
   private func fetchProfile(hash: String) -> SonicProfile? {
+    fetchRecord(hash: hash).map(SonicProfile.init(record:))
+  }
+
+  private func analysisIsComplete(hash: String) -> Bool {
+    guard let record = fetchRecord(hash: hash) else { return false }
+    guard MusicUnderstandingAnalyzer.isAvailable else { return true }
+    return record.musicUnderstandingVersion == MusicUnderstandingAnalyzer.analysisVersion
+  }
+
+  private func fetchRecord(hash: String) -> SonicAnalysisRecord? {
     guard let modelContext else { return nil }
     let cacheKey = "\(analysisVersion):\(hash)"
     let descriptor = FetchDescriptor<SonicAnalysisRecord>(
       predicate: #Predicate { $0.cacheKey == cacheKey }
     )
-    return (try? modelContext.fetch(descriptor).first).map(SonicProfile.init(record:))
+    return try? modelContext.fetch(descriptor).first
   }
 
   private nonisolated static func analyze(_ track: SonicTrackSnapshot) -> SonicProfile? {

@@ -42,7 +42,9 @@ private final class MusicFolderPresenter: NSObject, NSFilePresenter {
   }
 
   func presentedSubitemDidDisappear(at url: URL) {
-    changeHandler(url.deletingLastPathComponent())
+    // Preserve the exact URL. Turning this into the parent directory loses the
+    // only unambiguous signal that one particular library file was deleted.
+    changeHandler(url)
   }
 
   func presentedSubitem(at oldURL: URL, didMoveTo newURL: URL) {
@@ -59,6 +61,11 @@ final class LibraryMonitorService {
     let presenter: MusicFolderPresenter
     let folderURL: URL
     let isAccessingSecurityScope: Bool
+  }
+
+  private struct FolderScan: Sendable {
+    let files: [URL]
+    let snapshot: Set<String>
   }
 
   private let enabledKey = "com.ampwave.liveLibraryMonitoringEnabled"
@@ -237,11 +244,18 @@ final class LibraryMonitorService {
     needsFullReconciliation = false
 
     if reconcile {
-      await reconcileMonitoredFolders()
+      // A provider may report only a nested parent directory. Its change does
+      // not always update the root folder's modification date, so the event is
+      // itself the authoritative reason to scan the managed tree once.
+      await reconcileMonitoredFolders(forceManagedScan: true)
     } else if !urls.isEmpty {
+      let existingURLs = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+      let disappearedURLs = urls.filter { !FileManager.default.fileExists(atPath: $0.path) }
+      removeSongsMatchingDisappearedFiles(disappearedURLs)
+
       let managedDirectory = SongLibrary.shared.songsDirectory
-      let managedFiles = urls.filter { Self.isInside($0, directory: managedDirectory) }
-      let referencedFiles = urls.filter { !Self.isInside($0, directory: managedDirectory) }
+      let managedFiles = existingURLs.filter { Self.isInside($0, directory: managedDirectory) }
+      let referencedFiles = existingURLs.filter { !Self.isInside($0, directory: managedDirectory) }
       await importNewManagedFiles(managedFiles)
       rememberManagedFolderStamp(managedDirectory)
       await importGenuinelyNewReferencedFiles(referencedFiles)
@@ -268,18 +282,23 @@ final class LibraryMonitorService {
 
   /// One launch/foreground fallback scan. Normal live monitoring is driven by
   /// NSFilePresenter events, so there is no recurring folder enumeration.
-  private func reconcileMonitoredFolders() async {
+  private func reconcileMonitoredFolders(forceManagedScan: Bool = false) async {
     let library = SongLibrary.shared
     guard library.modelContext != nil, !Task.isCancelled else { return }
 
     let managedFolder = library.songsDirectory
-    if managedFolderNeedsScan(managedFolder) {
-      let managedScan = await scan(folder: managedFolder)
+    if forceManagedScan || managedFolderNeedsScan(managedFolder) {
+      guard let managedScan = await scan(folder: managedFolder) else { return }
       guard !Task.isCancelled else { return }
       let managedKey = Self.normalizedPath(managedFolder)
-      if folderSnapshots[managedKey] != managedScan.1 {
-        folderSnapshots[managedKey] = managedScan.1
-        await importNewManagedFiles(managedScan.0)
+      if folderSnapshots[managedKey] != managedScan.snapshot {
+        folderSnapshots[managedKey] = managedScan.snapshot
+        reconcileMissingSongs(
+          in: managedFolder,
+          presentFiles: managedScan.files,
+          storageMode: .copied
+        )
+        await importNewManagedFiles(managedScan.files)
       }
       rememberManagedFolderStamp(managedFolder)
     }
@@ -295,20 +314,65 @@ final class LibraryMonitorService {
       let secured = folderURL.startAccessingSecurityScopedResource()
       let scan = await scan(folder: folderURL)
       if secured { folderURL.stopAccessingSecurityScopedResource() }
-      guard !Task.isCancelled else { return }
+      guard !Task.isCancelled, let scan else { continue }
 
       let folderKey = Self.normalizedPath(folderURL)
-      if folderSnapshots[folderKey] == scan.1 { continue }
-      folderSnapshots[folderKey] = scan.1
-      await importGenuinelyNewReferencedFiles(scan.0)
+      if folderSnapshots[folderKey] == scan.snapshot { continue }
+      folderSnapshots[folderKey] = scan.snapshot
+      reconcileMissingSongs(
+        in: folderURL,
+        presentFiles: scan.files,
+        storageMode: .referenced
+      )
+      await importGenuinelyNewReferencedFiles(scan.files)
     }
   }
 
-  private func scan(folder: URL) async -> ([URL], Set<String>) {
+  private func scan(folder: URL) async -> FolderScan? {
     await Task.detached(priority: .utility) {
-      let files = Self.audioFiles(in: folder)
-      return (files, Set(files.map(Self.snapshotEntry)))
+      guard let files = Self.audioFiles(in: folder) else { return nil }
+      return FolderScan(files: files, snapshot: Set(files.map(Self.snapshotEntry)))
     }.value
+  }
+
+  /// Removes database entries only after a successful scan of a folder that
+  /// Ampwave is already responsible for monitoring. Failed security-scope or
+  /// provider access produces `nil` above and never turns into a mass deletion.
+  private func reconcileMissingSongs(
+    in folder: URL,
+    presentFiles: [URL],
+    storageMode: LibrarySong.StorageMode
+  ) {
+    let presentPaths = Set(presentFiles.map(Self.normalizedPath))
+    let library = SongLibrary.shared
+    let missing = library.songs.filter { song in
+      guard song.storageMode == storageMode,
+        let expectedURL = expectedStoredURL(for: song),
+        Self.isInside(expectedURL, directory: folder)
+      else { return false }
+      return !presentPaths.contains(Self.normalizedPath(expectedURL))
+    }
+    library.removeSongsWhoseFilesDisappeared(missing)
+  }
+
+  /// Handles the precise `NSFilePresenter` disappearance callback without
+  /// waiting for a recursive folder scan.
+  private func removeSongsMatchingDisappearedFiles(_ urls: [URL]) {
+    guard !urls.isEmpty else { return }
+    let paths = Set(urls.map(Self.normalizedPath))
+    let library = SongLibrary.shared
+    let missing = library.songs.filter { song in
+      guard let expected = expectedStoredURL(for: song) else { return false }
+      if paths.contains(Self.normalizedPath(expected)) { return true }
+      return paths.contains(Self.normalizedPath(library.getFileURL(for: song)))
+    }
+    library.removeSongsWhoseFilesDisappeared(missing)
+  }
+
+  private func expectedStoredURL(for song: LibrarySong) -> URL? {
+    guard let path = song.filePath, !path.isEmpty else { return nil }
+    if path.hasPrefix("/") { return URL(fileURLWithPath: path).standardizedFileURL }
+    return PathManager.baseDirectory.appendingPathComponent(path).standardizedFileURL
   }
 
   /// iOS does not expose a directory hash. Its modification date is the cheap
@@ -401,7 +465,7 @@ final class LibraryMonitorService {
     )
   }
 
-  nonisolated private static func audioFiles(in folderURL: URL) -> [URL] {
+  nonisolated private static func audioFiles(in folderURL: URL) -> [URL]? {
     guard
       let enumerator = FileManager.default.enumerator(
         at: folderURL,
@@ -410,7 +474,7 @@ final class LibraryMonitorService {
         ],
         options: [.skipsHiddenFiles, .skipsPackageDescendants]
       )
-    else { return [] }
+    else { return nil }
 
     var files: [URL] = []
     for case let url as URL in enumerator

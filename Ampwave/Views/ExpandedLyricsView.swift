@@ -241,7 +241,10 @@ struct ExpandedLyricsView: View {
     }
     .overlay(alignment: .topTrailing) {
       if playback.isVocalSliderVisible {
-        VocalSlider(value: $playback.vocalLevel)
+        VocalSlider(
+          value: $playback.vocalLevel,
+          vocalActivity: playback.currentVocalActivity
+        )
           .padding(.top, 64)  // Safe area + toolbar height
           .padding(.trailing, 16)
           .transition(
@@ -275,6 +278,7 @@ private struct LyricsTimingOffsetControl: View {
   @Bindable private var playback = PlaybackController.shared
   @State private var draftOffset: TimeInterval = 0
   @State private var targetSongID: UUID?
+  @State private var targetSong: LibrarySong?
 
   var body: some View {
     VStack(spacing: 10) {
@@ -332,7 +336,8 @@ private struct LyricsTimingOffsetControl: View {
     }
     .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
     .onAppear {
-      targetSongID = playback.currentItem?.id
+      targetSong = playback.currentItem
+      targetSongID = targetSong?.id
       draftOffset = playback.lyricsTimingOffset
     }
     .onChange(of: draftOffset) { _, newValue in
@@ -375,8 +380,8 @@ private struct LyricsTimingOffsetControl: View {
   }
 
   private func persistOffsetIfStillApplicable() {
-    guard playback.currentItem?.id == targetSongID else { return }
-    playback.setLyricsTimingOffset(draftOffset, persist: true)
+    guard targetSong?.id == targetSongID else { return }
+    playback.setLyricsTimingOffset(draftOffset, for: targetSong, persist: true)
   }
 }
 
