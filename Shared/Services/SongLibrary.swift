@@ -673,12 +673,7 @@ extension Notification.Name {
       // REFERENCED SONGS: We don't delete these automatically in the startup scan.
       // Bookmark resolution and permission issues make automatic deletion too risky.
       if song.storageMode == .referenced {
-        let url = getFileURL(for: song)
-        let secured = url.startAccessingSecurityScopedResource()
-        let exists = FileManager.default.fileExists(atPath: url.path)
-        if secured { url.stopAccessingSecurityScopedResource() }
-
-        if !exists {
+        if !fileExists(for: song) {
           print("[DEBUG] indexOnStartup: Referenced song file not accessible/missing: \(song.title)")
           // We still don't delete it automatically, just log it.
         }
@@ -978,7 +973,11 @@ extension Notification.Name {
 
   // MARK: - Import
 
-  func importFiles(_ urls: [URL], forceCopy: Bool? = nil) async {
+  func importFiles(
+    _ urls: [URL],
+    forceCopy: Bool? = nil,
+    progress: ((Int, Int, String) -> Void)? = nil
+  ) async {
     print("[DEBUG] SongLibrary.importFiles: Starting import of \(urls.count) files")
     guard let modelContext = modelContext else {
       print("[DEBUG] SongLibrary.importFiles: Error - No modelContext")
@@ -996,8 +995,13 @@ extension Notification.Name {
 
     var importedCount = 0
     let totalCount = urls.count
+    progress?(0, totalCount, "Preparing \(totalCount) songs…")
 
     for (index, url) in urls.enumerated() {
+      guard !Task.isCancelled else {
+        print("[DEBUG] SongLibrary.importFiles: Cancelled, stopping import")
+        break
+      }
       // Update status every file for better feedback
       print(
         "[DEBUG] SongLibrary.importFiles: Processing file \(index + 1)/\(totalCount): \(url.lastPathComponent)"
@@ -1016,6 +1020,8 @@ extension Notification.Name {
       } else {
         print("[DEBUG] SongLibrary.importFiles: Failed or skipped \(url.lastPathComponent)")
       }
+
+      progress?(index + 1, totalCount, "Imported \(index + 1) of \(totalCount) songs")
 
       // Save periodically for large imports
       if importedCount % 5 == 0 && importedCount > 0 {
@@ -1985,7 +1991,7 @@ extension Notification.Name {
     }
   }
 
-  func refreshAllMetadata() async {
+  func refreshAllMetadata(progress: ((Int, Int, String) -> Void)? = nil) async {
     print("[DEBUG] SongLibrary.refreshAllMetadata: Starting full library refresh")
     guard let modelContext = modelContext else { return }
 
@@ -2008,23 +2014,30 @@ extension Notification.Name {
     indexingStatus = .indexing("Refreshing library…")
 
     let songsCount = songIDs.count
+    let totalItems = max(1, songsCount + albums.count)
+    progress?(0, totalItems, "Preparing library metadata…")
     for (index, songID) in songIDs.enumerated() {
+      guard !Task.isCancelled else { break }
       indexingStatus = .indexing("Refreshing songs (\(index + 1)/\(songsCount))…")
       guard let song = self.song(id: songID) else { continue }
       await refreshEmbeddedMetadata(for: song)
       if let liveSong = self.song(id: songID) {
         await metadataService.refreshMetadata(for: liveSong)
       }
+      progress?(index + 1, totalItems, "Refreshed \(index + 1) of \(totalItems) items")
     }
     saveContext()
 
     let albumIDs = albums.map(\.id)
     let albumCount = albumIDs.count
     for (index, albumID) in albumIDs.enumerated() {
+      guard !Task.isCancelled else { break }
       indexingStatus = .indexing("Refreshing albums (\(index + 1)/\(albumCount))…")
       if let album = albums.first(where: { $0.id == albumID }) {
         await metadataService.refreshMetadata(for: album)
       }
+      let completed = songsCount + index + 1
+      progress?(completed, totalItems, "Refreshed \(completed) of \(totalItems) items")
     }
 
     indexingStatus = .complete
@@ -2634,6 +2647,10 @@ extension Notification.Name {
   func fileExists(for song: LibrarySong) -> Bool {
     let url = getFileURL(for: song)
     if song.storageMode == .referenced {
+      // A monitored parent folder may already own the security scope. Calling
+      // startAccessing again on each child produces sandbox_extension_consume
+      // EINVAL spam on iOS 27 even though the file is already readable.
+      if fileManager.isReadableFile(atPath: url.path) { return true }
       return isReadable(url)
     }
     return fileManager.fileExists(atPath: url.path)
@@ -2642,9 +2659,10 @@ extension Notification.Name {
   /// Existence check that opens security scope first — a plain `fileExists`
   /// reports false for a perfectly good file outside the container.
   private func isReadable(_ url: URL) -> Bool {
+    if fileManager.isReadableFile(atPath: url.path) { return true }
     let secured = url.startAccessingSecurityScopedResource()
     defer { if secured { url.stopAccessingSecurityScopedResource() } }
-    return fileManager.fileExists(atPath: url.path)
+    return fileManager.isReadableFile(atPath: url.path)
   }
 
   func getFileURL(for song: LibrarySong) -> URL {
@@ -2665,6 +2683,15 @@ extension Notification.Name {
   }
 
   private func resolveFileURL(for song: LibrarySong) -> URL {
+    // Prefer an already-readable stored path. Live folder monitoring retains
+    // the parent directory's security scope, making a second per-file bookmark
+    // consume both redundant and noisy on newer iOS releases.
+    if let storedURL = resolvedStoredFileURL(for: song),
+      fileManager.isReadableFile(atPath: storedURL.path)
+    {
+      return storedURL
+    }
+
     // A bookmark that still *resolves* isn't necessarily usable — its sandbox
     // extension can be stale (the "sandbox_extension_consume failed: 22" case),
     // which used to shadow a perfectly good stored path and make the track
@@ -2674,12 +2701,6 @@ extension Notification.Name {
       isReadable(resolved)
     {
       return resolved
-    }
-
-    if let storedURL = resolvedStoredFileURL(for: song),
-      fileManager.fileExists(atPath: storedURL.path)
-    {
-      return storedURL
     }
 
     let legacyURL = legacyMetadataFileURL(for: song)

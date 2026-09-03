@@ -329,7 +329,9 @@ struct CapsuleDetailView: View {
       }
       .listRowBackground(themeManager.cardBackgroundColor)
     }
-    .listStyle(.insetGrouped)
+    #if os(iOS)
+        .listStyle(.insetGrouped)
+    #endif
     .scrollContentBackground(.hidden)
     .background(themeManager.backgroundColor)
     .navigationTitle(capsule.title)

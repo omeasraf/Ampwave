@@ -86,7 +86,9 @@ final class AnimatedArtworkService {
       isLoading = false
       PlaybackController.shared.animatedArtworkDidChange(for: song.id)
       if let result = cached.result {
-        cacheForPlayback(result, songID: song.id)
+        #if os(iOS)
+            cacheForPlayback(result, songID: song.id)
+        #endif
       }
       return
     }
@@ -123,7 +125,9 @@ final class AnimatedArtworkService {
       )
       PlaybackController.shared.animatedArtworkDidChange(for: songID)
       if let result {
-        self.cacheForPlayback(result, songID: songID)
+        #if os(iOS)
+          self.cacheForPlayback(result, songID: songID)
+        #endif
       }
     }
   }

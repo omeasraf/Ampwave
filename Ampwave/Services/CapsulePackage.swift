@@ -92,7 +92,15 @@ enum CapsulePackage {
     if library.modelContext == nil {
       library.setModelContext(modelContext)
     }
-    await library.importFiles(audioURLs, forceCopy: true)
+    await BackgroundWorkCoordinator.performUserInitiated(
+      title: "Importing Capsule",
+      subtitle: "Adding \(audioURLs.count) songs…",
+      totalUnitCount: audioURLs.count
+    ) { reporter in
+      await library.importFiles(audioURLs, forceCopy: true) { completed, total, status in
+        reporter.update(completed: completed, total: total, subtitle: status)
+      }
+    }
 
     let songs = document.tracks.compactMap { resolve($0, in: library) }
     guard songs.count == document.tracks.count else {

@@ -25,6 +25,8 @@ connection.
 - [x] Export and restore library metadata, playlists, listening statistics,
   preferences, and playback state.
 - [x] Keep shareable, rotating session logs for playback troubleshooting.
+- [x] Continue user-started imports, full metadata refreshes, and library resets
+  with system-visible progress when Ampwave moves to the background on iOS 26+.
 
 Sound-based recommendations complement the existing metadata and listening
 history engine with a private, cached analysis of the audio signal itself.
@@ -64,6 +66,8 @@ history engine with a private, cached analysis of the audio signal itself.
   time with a chosen energy curve and a natural ending.
 - [ ] **Nearby Listening Room** — Let nearby Ampwave users suggest songs, vote,
   and manage a shared queue without accounts or internet.
+  - [ ] Use Wi-Fi Aware on supported iOS 26+ devices for encrypted, high-speed
+    nearby discovery, Capsule transfer, and shared-session transport.
 - [ ] **Output Memory** — Remember normalization, EQ, balance, and other playback
   preferences independently for headphones, cars, speakers, and USB DACs.
 
@@ -115,6 +119,8 @@ history engine with a private, cached analysis of the audio signal itself.
   - [ ] Display BPM, key, beats, and song structure.
   - [ ] Save practice settings per song.
   - [ ] Add additional stem controls when local separation is reliable.
+  - [ ] Evaluate an optional iOS 27 Core AI source-separation model that caches
+    vocal and accompaniment stems locally instead of relying on EQ filtering.
 - [ ] **Musician's A/B Lab** — Compare recordings with synchronized seeking,
   automatic loudness matching, loops, and blind preference tests.
 - [ ] **Concept Album Mode** — Preserve gapless sequences, multi-disc structure,
@@ -127,6 +133,13 @@ history engine with a private, cached analysis of the audio signal itself.
   Spotlight, Shortcuts, and on-device library search.
   - [x] Add Siri and Shortcuts playback intents.
   - [ ] Add Spotlight indexing and broader natural-language library requests.
+- [ ] **Natural-Language Mix Builder** — Use Apple's on-device Foundation Model
+  when available to turn requests such as “a calm 45-minute mix with no repeated
+  artists” into structured filters over Ampwave's private local library index.
+- [ ] **Translated Synced Lyrics** — Translate cached lyrics on device while
+  preserving line timing, with Original, Translated, and Both display modes.
+- [ ] **System Sleep Timer** — Integrate the existing sleep timer with AlarmKit
+  so its countdown and controls remain visible on the Lock Screen.
 
 ## Ownership and Reliability
 

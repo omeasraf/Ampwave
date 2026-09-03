@@ -535,7 +535,15 @@ private struct WebDAVDirectoryView: View {
       if library.modelContext == nil {
         library.setModelContext(modelContext)
       }
-      await library.importFiles(localFiles, forceCopy: true)
+      await BackgroundWorkCoordinator.performUserInitiated(
+        title: "Importing Music",
+        subtitle: "Adding \(localFiles.count) downloaded songs…",
+        totalUnitCount: localFiles.count
+      ) { reporter in
+        await library.importFiles(localFiles, forceCopy: true) { completed, total, status in
+          reporter.update(completed: completed, total: total, subtitle: status)
+        }
+      }
 
       selectedItems.removeAll()
       activityMessage =

@@ -1219,7 +1219,15 @@ struct SettingsView: View {
         library.setModelContext(modelContext)
       }
 
-      await library.importFiles(urls)
+      await BackgroundWorkCoordinator.performUserInitiated(
+        title: "Importing Music",
+        subtitle: "Preparing \(urls.count) songs…",
+        totalUnitCount: urls.count
+      ) { reporter in
+        await library.importFiles(urls) { completed, total, status in
+          reporter.update(completed: completed, total: total, subtitle: status)
+        }
+      }
       importProgress = 1.0
 
     } catch {
@@ -1311,7 +1319,15 @@ struct SettingsView: View {
           library.setModelContext(modelContext)
         }
 
-        await library.importFiles(audioFiles)
+        await BackgroundWorkCoordinator.performUserInitiated(
+          title: "Importing Music",
+          subtitle: "Preparing \(audioFiles.count) songs…",
+          totalUnitCount: audioFiles.count
+        ) { reporter in
+          await library.importFiles(audioFiles) { completed, total, status in
+            reporter.update(completed: completed, total: total, subtitle: status)
+          }
+        }
         let preferences = UserPreferences.getOrCreate(in: modelContext)
         if !preferences.copyMusicToStorage {
           LibraryMonitorService.shared.registerReferencedFolder(folderURL)
@@ -1362,7 +1378,16 @@ struct SettingsView: View {
   }
 
   private func refreshAllMetadata() async {
-    await library.refreshAllMetadata()
+    let total = max(1, library.songs.count + library.albums.count)
+    await BackgroundWorkCoordinator.performUserInitiated(
+      title: "Refreshing Metadata",
+      subtitle: "Preparing \(total) library items…",
+      totalUnitCount: total
+    ) { reporter in
+      await library.refreshAllMetadata { completed, total, status in
+        reporter.update(completed: completed, total: total, subtitle: status)
+      }
+    }
   }
 
   private func clearCache() {
@@ -1380,6 +1405,11 @@ struct SettingsView: View {
     print("[DEBUG] SettingsView.resetLibrary: Starting full reset")
 
     Task {
+      await BackgroundWorkCoordinator.performUserInitiated(
+        title: "Resetting Library",
+        subtitle: "Preparing Ampwave…",
+        totalUnitCount: 100
+      ) { continuedProgress in
       // Release every long-lived reference before SwiftData detaches the rows.
       // Clearing after save is too late: SwiftUI or the player can resolve an
       // outstanding attribute fault during that gap and crash.
@@ -1402,6 +1432,10 @@ struct SettingsView: View {
       await Task.yield()
       try? await Task.sleep(for: .milliseconds(100))
       libraryReset.update(progress: 0.1, status: "Removing library records…")
+      continuedProgress.update(
+        completed: 10,
+        subtitle: "Removing library records…"
+      )
 
       // ── 1. Delete SwiftData records ───────────────────────────────────────
       // We fetch-and-delete each type individually rather than using the batch
@@ -1445,6 +1479,7 @@ struct SettingsView: View {
 
       // ── 3. Delete physical files & artwork cache ───────────────────────────
       libraryReset.update(progress: 0.55, status: "Removing audio files…")
+      continuedProgress.update(completed: 55, subtitle: "Removing audio files…")
       let songsDirectory = library.songsDirectory
       let artworkCacheDirectory = library.artworkCacheDirectory
       await Task.detached(priority: .userInitiated) {
@@ -1461,6 +1496,7 @@ struct SettingsView: View {
         )
       }.value
       libraryReset.update(progress: 0.75, status: "Finishing reset…")
+      continuedProgress.update(completed: 75, subtitle: "Finishing reset…")
 
       // ── 4. Clear UserDefaults keys that would skip the next startup scan ──
       // lastDiskScanTime makes indexOnStartup skip if the directory looks unchanged.
@@ -1487,7 +1523,9 @@ struct SettingsView: View {
       NotificationCenter.default.post(name: .libraryDidReset, object: nil)
 
       libraryReset.finish()
+      continuedProgress.update(completed: 100, subtitle: "Library reset complete")
       print("[DEBUG] SettingsView.resetLibrary: Full reset completed")
+      }
     }
   }
 
@@ -1616,7 +1654,11 @@ private struct HomeCustomizationView: View {
     .scrollContentBackground(.hidden)
     .tint(themeManager.accentColor)
     .navigationTitle("Home")
-    .toolbar { EditButton() }
+    .toolbar {
+        #if os(iOS)
+                EditButton()
+        #endif
+    }
     .onAppear {
       sections = HomeSection.decode(savedOrder)
       ensureAtLeastOneVisibleSection()

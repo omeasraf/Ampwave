@@ -245,8 +245,47 @@ final class PlaybackController {
   private(set) var isVocalSliderVisible: Bool = false
   private(set) var currentVocalLevel: Float = 1.0
   private var vocalSliderTimer: Timer?
+  private var isVocalSliderSessionActive = false
+
+  /// Vocal reduction is an intentional, temporary lyrics-screen tool. A new
+  /// lyrics session always starts neutral so an old value can never affect
+  /// ordinary player, background, or gapless playback.
+  func beginVocalSliderSession() {
+    isVocalSliderSessionActive = true
+    isVocalSliderVisible = false
+    currentVocalLevel = 1
+    VocalIsolator.shared.vocalLevel = 1
+    vocalSliderTimer?.invalidate()
+    vocalSliderTimer = nil
+    DiagnosticLog.shared.log("audio-processing", "VocalSlider lyrics session began")
+  }
+
+  /// Restores the unmodified vocal level as soon as ExpandedLyricsView leaves
+  /// the hierarchy. Keep an existing mix only when it is still needed for EQ.
+  func endVocalSliderSession() {
+    guard isVocalSliderSessionActive || currentVocalLevel < 0.999 || isVocalSliderVisible else {
+      return
+    }
+    isVocalSliderSessionActive = false
+    isVocalSliderVisible = false
+    vocalSliderTimer?.invalidate()
+    vocalSliderTimer = nil
+    currentVocalLevel = 1
+    VocalIsolator.shared.vocalLevel = 1
+
+    if !VocalIsolator.shared.requiresProcessing {
+      player?.currentItem?.audioMix = nil
+    }
+    prepareNextItem()
+    saveState()
+    DiagnosticLog.shared.log("audio-processing", "VocalSlider lyrics session ended and reset")
+  }
 
   func toggleVocalSlider() {
+    guard isVocalSliderSessionActive else {
+      DiagnosticLog.shared.log("audio-processing", "Ignored VocalSlider outside lyrics view")
+      return
+    }
     withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
       isVocalSliderVisible.toggle()
     }
@@ -266,6 +305,11 @@ final class PlaybackController {
   var vocalLevel: Float {
     get { currentVocalLevel }
     set {
+      guard isVocalSliderSessionActive else {
+        currentVocalLevel = 1
+        VocalIsolator.shared.vocalLevel = 1
+        return
+      }
       let clamped = min(max(newValue, 0), 1)
       let needsTap = currentVocalLevel >= 0.999 && clamped < 0.999
       currentVocalLevel = clamped
@@ -290,7 +334,10 @@ final class PlaybackController {
   }
 
   private func attachAudioProcessingToCurrentItemIfNeeded() {
-    guard let item = player?.currentItem, item.audioMix == nil else { return }
+    guard isVocalSliderSessionActive,
+      let item = player?.currentItem,
+      item.audioMix == nil
+    else { return }
     Task { @MainActor [weak self, weak item] in
       guard let self, let item else { return }
       do {
@@ -572,10 +619,13 @@ final class PlaybackController {
         "[DEBUG] PlaybackController.setModelContext: Applied defaults - Shuffle: \(shuffleMode), Repeat: \(repeatMode)"
       )
     }
-    if let persistentState {
-      self.currentVocalLevel = min(max(persistentState.vocalLevel, 0), 1)
-      VocalIsolator.shared.vocalLevel = self.currentVocalLevel
-    }
+    // VocalSlider is intentionally scoped to ExpandedLyricsView and must not
+    // survive relaunches or affect restored/background playback.
+    self.currentVocalLevel = 1
+    self.isVocalSliderVisible = false
+    VocalIsolator.shared.vocalLevel = 1
+    persistentState?.vocalLevel = 1
+    persistentState?.isVocalSliderVisible = false
 
     self.isInitializing = false
   }
@@ -709,7 +759,8 @@ final class PlaybackController {
 
     // If the fallback tap was installed while analysis was still running,
     // replace it in place so the current song benefits without a restart.
-    guard let item = player?.currentItem, item.audioMix != nil,
+    guard isVocalSliderSessionActive,
+      let item = player?.currentItem, item.audioMix != nil,
       VocalIsolator.shared.requiresProcessing
     else { return }
     Task { @MainActor [weak self, weak item] in
@@ -2448,7 +2499,9 @@ final class PlaybackController {
     state.lastPlaylistId = currentPlaylistId
     state.shuffleModeRaw = shuffleMode.rawValue
     state.repeatModeRaw = repeatMode.rawValue
-    state.vocalLevel = currentVocalLevel
+    // VocalSlider is a view-scoped effect, not durable playback state.
+    state.vocalLevel = 1
+    state.isVocalSliderVisible = false
 
     do {
       try context.save()

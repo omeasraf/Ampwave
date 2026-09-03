@@ -21,6 +21,7 @@ struct ExpandedLyricsView: View {
   @State private var scrollTimeout: Timer?
   @State private var showTimingAdjustment = false
   @Environment(ThemeManager.self) private var themeManager
+  @Environment(\.scenePhase) private var scenePhase
 
   @Bindable private var playback = PlaybackController.shared
 
@@ -228,15 +229,24 @@ struct ExpandedLyricsView: View {
       #endif
       .onAppear {
         isVisible = true
+        playback.beginVocalSliderSession()
         #if os(iOS)
           UIApplication.shared.isIdleTimerDisabled = true
         #endif
       }
       .onDisappear {
         isVisible = false
+        playback.endVocalSliderSession()
         #if os(iOS)
           UIApplication.shared.isIdleTimerDisabled = false
         #endif
+      }
+      .onChange(of: scenePhase) { _, phase in
+        if phase == .active, isVisible {
+          playback.beginVocalSliderSession()
+        } else {
+          playback.endVocalSliderSession()
+        }
       }
     }
     .overlay(alignment: .topTrailing) {

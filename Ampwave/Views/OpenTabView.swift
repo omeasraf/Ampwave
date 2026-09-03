@@ -14,6 +14,7 @@ struct OpenTabView: View {
   @Binding var isPlayerExpanded: Bool
   @State private var selectedTab: AppTab = .home
   @State private var showOnboarding = OnboardingState.shouldShow
+  @State private var showUpdateCommunityPrompt = false
   @State private var capsuleImportError: String?
   /// Incremented on library reset — causes all tab content to be recreated,
   /// clearing every NavigationStack and flushing any stale in-memory data.
@@ -221,6 +222,35 @@ struct OpenTabView: View {
         .environment(ThemeManager.shared)
       }
     #endif
+    .sheet(isPresented: $showUpdateCommunityPrompt) {
+      UpdateCommunityPromptView()
+        .environment(ThemeManager.shared)
+        #if os(iOS)
+          .presentationDetents([.medium])
+          .presentationDragIndicator(.visible)
+          .presentationCornerRadius(30)
+        #endif
+    }
+    .task {
+      await presentUpdateCommunityPromptIfNeeded()
+    }
+  }
+
+  @MainActor
+  private func presentUpdateCommunityPromptIfNeeded() async {
+    // Onboarding already welcomes a brand-new user. Record this build without
+    // stacking another presentation on top of their first launch.
+    guard !showOnboarding else {
+      UpdateCommunityPromptState.markCurrentReleaseSeen()
+      return
+    }
+
+    guard UpdateCommunityPromptState.shouldPresent else { return }
+    try? await Task.sleep(for: .milliseconds(650))
+    guard !Task.isCancelled, !showOnboarding else { return }
+
+    UpdateCommunityPromptState.markCurrentReleaseSeen()
+    showUpdateCommunityPrompt = true
   }
 
   private var capsuleImportAlertBinding: Binding<Bool> {

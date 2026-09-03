@@ -115,6 +115,9 @@ final class SonicRecommendationService {
 
   func enqueueAnalysis(for song: LibrarySong, library: SongLibrary) {
     enqueueAnalysis(snapshot(for: song, library: library))
+    if hasPendingAnalysis {
+      BackgroundWorkCoordinator.scheduleSonicAnalysis()
+    }
   }
 
   /// Moves the active song to the front of the LIFO worker so playback does
@@ -168,6 +171,24 @@ final class SonicRecommendationService {
       "Analysis backfill songs=\(songs.count) baseRecords=\(existingRecords.count) "
         + "musicUnderstanding=\(musicUnderstandingBackfillCount)"
     )
+    if hasPendingAnalysis {
+      BackgroundWorkCoordinator.scheduleSonicAnalysis()
+    }
+  }
+
+  var hasPendingAnalysis: Bool {
+    analysisWorker != nil || !pending.isEmpty
+  }
+
+  /// Keeps a BGProcessingTask associated with the existing low-priority
+  /// worker without transferring SwiftData or AVFoundation work off its
+  /// established executors. Cancellation stops waiting immediately; the
+  /// worker can naturally resume when Ampwave returns to the foreground.
+  func waitForPendingAnalysis() async {
+    startWorkerIfNeeded()
+    while hasPendingAnalysis, !Task.isCancelled {
+      try? await Task.sleep(for: .milliseconds(250))
+    }
   }
 
   func rank(

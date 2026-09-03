@@ -73,7 +73,9 @@ struct MissingFilesView: View {
       }
     }
     .background(themeManager.backgroundColor)
-    .scrollContentBackground(.hidden)
+    #if os(iOS)
+      .scrollContentBackground(.hidden)
+    #endif
     .navigationTitle("Missing Files")
     #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
@@ -132,10 +134,22 @@ struct BulkTagEditorSheet: View {
     NavigationStack {
       Form {
         Section {
-          TextField("Artist", text: $artist).textInputAutocapitalization(.words)
-          TextField("Album Artist", text: $albumArtist).textInputAutocapitalization(.words)
-          TextField("Album", text: $album).textInputAutocapitalization(.words)
-          TextField("Genre", text: $genre).textInputAutocapitalization(.words)
+          TextField("Artist", text: $artist)
+            #if os(iOS)
+              .textInputAutocapitalization(.words)
+            #endif
+          TextField("Album Artist", text: $albumArtist)
+            #if os(iOS)
+              .textInputAutocapitalization(.words)
+            #endif
+          TextField("Album", text: $album)
+            #if os(iOS)
+              .textInputAutocapitalization(.words)
+            #endif
+          TextField("Genre", text: $genre)
+            #if os(iOS)
+              .textInputAutocapitalization(.words)
+            #endif
           #if os(iOS)
             TextField("Year", text: $year).keyboardType(.numberPad)
           #else

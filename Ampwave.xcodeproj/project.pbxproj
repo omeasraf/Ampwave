@@ -299,12 +299,20 @@
 			);
 			target = B46195512F8B3AAE00FF14A5 /* LyricsExtension */;
 		};
+		B4FA1A2D3048DD7F00C11F50 /* Exceptions for "Ampwave" folder in "Ampwave" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			platformFiltersByRelativePath = {
+				LaunchScreen.storyboard = (ios, );
+			};
+			target = B40A39182F411B23005DD316 /* Ampwave */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		B40A391B2F411B23005DD316 /* Ampwave */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
+				B4FA1A2D3048DD7F00C11F50 /* Exceptions for "Ampwave" folder in "Ampwave" target */,
 				B4E1644E2FB3CC5D00FB94CE /* Exceptions for "Ampwave" folder in "Ampwave Watch App" target */,
 				B4E1644F2FB3CC5D00FB94CE /* Exceptions for "Ampwave" folder in "LyricsExtension" target */,
 			);
@@ -1127,7 +1135,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 33;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1173,7 +1181,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 33;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;

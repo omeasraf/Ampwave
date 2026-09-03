@@ -516,7 +516,12 @@ struct LibraryView: View {
       GenresGridView { updateScrollState($0, for: .genres) }
         .tag(LibraryTab.genres)
     }
+#if os(iOS)
     .tabViewStyle(.page(indexDisplayMode: .never))
+#else
+    // Use the default tab view style on macOS
+    .tabViewStyle(.automatic)
+#endif
     .safeAreaInset(edge: .top, spacing: 0) {
       VStack(spacing: 0) {
         HStack {
@@ -539,15 +544,23 @@ struct LibraryView: View {
     }
     .background(themeManager.backgroundColor)
     .tint(themeManager.accentColor)
+#if os(iOS)
     .navigationBarTitleDisplayMode(.inline)
+#endif
+#if os(iOS)
     .toolbarBackground(themeManager.backgroundColor, for: .navigationBar)
+#else
+    .toolbarBackground(themeManager.backgroundColor, for: .automatic)
+#endif
     .toolbar {
+#if os(iOS)
       ToolbarItem(placement: .principal) {
         Text("Library")
           .font(.headline)
           .opacity(currentPageHasScrolled ? 1 : 0)
           .animation(.easeInOut(duration: 0.2), value: currentPageHasScrolled)
       }
+#endif
 
       ToolbarItem(placement: .primaryAction) {
         LibraryToolbarControls(
@@ -845,3 +858,4 @@ extension String {
 #Preview {
   LibraryView()
 }
+
