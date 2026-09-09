@@ -509,6 +509,11 @@ private struct WebDAVDirectoryView: View {
   }
 
   private func importSelection() async {
+    let generation = SongLibrary.shared.importGeneration
+    guard UserPreferences.getOrCreate(in: modelContext).copyMusicToStorage else {
+      errorMessage = "WebDAV import downloads audio into Ampwave. Enable Copy Imported Music in Settings, or save the files to a local folder and import that folder using Link in Place."
+      return
+    }
     let selection = selectedItems.sorted {
       $0.name.localizedStandardCompare($1.name) == .orderedAscending
     }
@@ -535,14 +540,20 @@ private struct WebDAVDirectoryView: View {
       if library.modelContext == nil {
         library.setModelContext(modelContext)
       }
+      var importAccepted = false
       await BackgroundWorkCoordinator.performUserInitiated(
         title: "Importing Music",
         subtitle: "Adding \(localFiles.count) downloaded songs…",
         totalUnitCount: localFiles.count
       ) { reporter in
-        await library.importFiles(localFiles, forceCopy: true) { completed, total, status in
+        importAccepted = await library.importFiles(localFiles, forceCopy: true, expectedGeneration: generation) { completed, total, status in
           reporter.update(completed: completed, total: total, subtitle: status)
         }
+      }
+      guard importAccepted else {
+        activityMessage = nil
+        errorMessage = "Import was cancelled or Copy Imported Music was turned off."
+        return
       }
 
       selectedItems.removeAll()

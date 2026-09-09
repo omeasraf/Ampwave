@@ -50,7 +50,7 @@ struct OpenTabView: View {
         value: AppTab.home
       ) {
         NavigationStack {
-          HomeView()
+          if !libraryReset.isResetting { HomeView() }
         }
         .background(themeManager.backgroundColor)
         .id(libraryResetID)
@@ -64,7 +64,9 @@ struct OpenTabView: View {
       ) {
         @Bindable var navigator = AppNavigator.shared
         NavigationStack(path: $navigator.libraryPath) {
-          LibraryView()
+          Group {
+            if !libraryReset.isResetting { LibraryView() }
+          }
             // Lets the player hand navigation over to this stack after it
             // collapses, instead of pushing inside its own cover.
             .navigationDestination(for: AppNavigator.Destination.self) { destination in
@@ -85,7 +87,7 @@ struct OpenTabView: View {
         value: AppTab.playlists
       ) {
         NavigationStack {
-          PlaylistsListView()
+          if !libraryReset.isResetting { PlaylistsListView() }
         }
         .background(themeManager.backgroundColor)
         .id(libraryResetID)
@@ -98,7 +100,7 @@ struct OpenTabView: View {
         value: AppTab.settings
       ) {
         NavigationStack {
-          SettingsView()
+          if !libraryReset.isResetting { SettingsView() }
         }
         .background(themeManager.backgroundColor)
         .id(libraryResetID)
@@ -107,7 +109,7 @@ struct OpenTabView: View {
       //       Search tab (special role)
       Tab(value: AppTab.search, role: .search) {
         NavigationStack {
-          SearchView()
+          if !libraryReset.isResetting { SearchView() }
         }
         .background(themeManager.backgroundColor)
         .id(libraryResetID)
@@ -116,6 +118,10 @@ struct OpenTabView: View {
 
     #if os(iOS)
       .tabBarMinimizeBehavior(.onScrollDown)
+      // This single system accessory overlays every tab and supplies the
+      // scroll-content inset needed to reveal each page's final row. Keep
+      // page scroll views connected to these safe areas; don't pad or shrink
+      // their frames by a guessed mini-player height.
       .tabViewBottomAccessory {
         MiniPlayerView(isExpanded: $isPlayerExpanded)
       }
@@ -207,15 +213,23 @@ struct OpenTabView: View {
     } message: {
       Text(capsuleImportError ?? "The Capsule could not be imported.")
     }
+    .alert("Couldn't Reset Library", isPresented: Binding(
+      get: { libraryReset.errorMessage != nil },
+      set: { if !$0 { libraryReset.errorMessage = nil } }
+    )) {
+      Button("OK") { libraryReset.errorMessage = nil }
+    } message: {
+      Text(libraryReset.errorMessage ?? "Please try again.")
+    }
     #if os(iOS)
-      .fullScreenCover(isPresented: $showOnboarding) {
+      .fullScreenCover(isPresented: $showOnboarding, onDismiss: onboardingDidFinish) {
         Group {
           OnboardingView()
         }
         .environment(ThemeManager.shared)
       }
     #else
-      .sheet(isPresented: $showOnboarding) {
+      .sheet(isPresented: $showOnboarding, onDismiss: onboardingDidFinish) {
         Group {
           OnboardingView()
         }
@@ -229,6 +243,7 @@ struct OpenTabView: View {
           .presentationDetents([.medium])
           .presentationDragIndicator(.visible)
           .presentationCornerRadius(30)
+          .presentationBackground(themeManager.backgroundColor)
         #endif
     }
     .task {
@@ -238,12 +253,9 @@ struct OpenTabView: View {
 
   @MainActor
   private func presentUpdateCommunityPromptIfNeeded() async {
-    // Onboarding already welcomes a brand-new user. Record this build without
-    // stacking another presentation on top of their first launch.
-    guard !showOnboarding else {
-      UpdateCommunityPromptState.markCurrentReleaseSeen()
-      return
-    }
+    // The setup wizard owns first launch. The update sheet is deferred until
+    // its presentation has fully dismissed instead of competing with it.
+    guard !showOnboarding else { return }
 
     guard UpdateCommunityPromptState.shouldPresent else { return }
     try? await Task.sleep(for: .milliseconds(650))
@@ -251,6 +263,12 @@ struct OpenTabView: View {
 
     UpdateCommunityPromptState.markCurrentReleaseSeen()
     showUpdateCommunityPrompt = true
+  }
+
+  private func onboardingDidFinish() {
+    Task { @MainActor in
+      await presentUpdateCommunityPromptIfNeeded()
+    }
   }
 
   private var capsuleImportAlertBinding: Binding<Bool> {

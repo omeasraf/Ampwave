@@ -94,9 +94,10 @@ struct ArtistView: View {
         allSongsList
       }
 
-      // Padding for mini player
-      Spacer().frame(height: 100)
     }
+    // The tab accessory supplies its own scroll inset, including its current
+    // expanded/collapsed height. Only add ordinary spacing after the content.
+    .padding(.bottom, 24)
   }
 
   private var artistHeader: some View {
@@ -222,7 +223,7 @@ struct ArtistView: View {
         }
         .swipeActions(edge: .trailing) {
           Button {
-            playlistManager.toggleLike(song: song)
+            _ = playlistManager.toggleLike(song: song)
           } label: {
             Image(systemName: playlistManager.isLiked(song: song) ? "heart.slash" : "heart")
           }
@@ -413,10 +414,14 @@ class ArtistDetailViewModel {
   var isLoading = false
   var isRefreshing = false
 
-  init(artist: Artist, library: SongLibrary = .shared, metadataService: MetadataService = .shared) {
+  init(
+    artist: Artist,
+    library: SongLibrary? = nil,
+    metadataService: MetadataService? = nil
+  ) {
     self.artist = artist
-    self.library = library
-    self.metadataService = metadataService
+    self.library = library ?? .shared
+    self.metadataService = metadataService ?? .shared
   }
 
   /// Re-reads this artist's content from the library.

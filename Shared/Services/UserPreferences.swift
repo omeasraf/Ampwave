@@ -354,7 +354,7 @@ final class UserPreferences: Identifiable {
   /// Opt-in because animated Apple Music artwork uses an unofficial online
   /// lookup and may download video while the album is playing.
   var animatedArtworkEnabled: Bool = false
-  var copyMusicToStorage: Bool = true
+  var copyMusicToStorage: Bool = false
   /// When enabled, removing a referenced song from Ampwave also deletes the
   /// external audio file. Defaults to false because this is destructive and
   /// may affect folders synchronized with another device.
@@ -655,7 +655,7 @@ final class UserPreferences: Identifiable {
     self.autoFetchLyrics = onboardingBool("com.ampwave.onboarding.autoFetchLyrics", default: true)
     self.wordSyncedLyricsEnabled = true
     self.animatedArtworkEnabled = false
-    self.copyMusicToStorage = onboardingBool("com.ampwave.onboarding.copyToStorage", default: true)
+    self.copyMusicToStorage = onboardingBool("com.ampwave.onboarding.copyToStorage", default: false)
     self.deleteReferencedFilesOnRemoval = false
     self.preferOnlineArtwork = false
     self.organizeByAlbum = true
@@ -709,8 +709,6 @@ final class UserPreferences: Identifiable {
         if existing.miniPlayerFloating == nil { existing.miniPlayerFloating = false }
         if existing.fullScreenArtworkExpanded == nil { existing.fullScreenArtworkExpanded = false }
         if existing.coverArtAccentPlayer == nil { existing.coverArtAccentPlayer = false }
-        if existing.wordSyncedLyricsEnabled == nil { existing.wordSyncedLyricsEnabled = true }
-        if existing.copyMusicToStorage == nil { existing.copyMusicToStorage = true }
         if existing.isPremiumUser == nil { existing.isPremiumUser = true }
         if existing.customColorSchemeRaw == nil { existing.customColorSchemeRaw = "dark" }
 

@@ -9,6 +9,56 @@ import CryptoKit
 import Foundation
 import Observation
 
+/// A presenter, a scan, and multiple player items can share one sandbox grant.
+/// Each releases its own lease; backgrounding a presenter must not revoke the
+/// grant still needed by the audio player.
+@MainActor
+final class SecurityScopedAccessPool {
+  @MainActor final class Lease {
+    let url: URL
+    private var releaseAction: (() -> Void)?
+    init(url: URL, release: @escaping () -> Void) {
+      self.url = url
+      releaseAction = release
+    }
+    func release() {
+      releaseAction?()
+      releaseAction = nil
+    }
+  }
+
+  private struct Entry { let url: URL; let secured: Bool; var references: Int }
+  private var entries: [String: Entry] = [:]
+  private let start: (URL) -> Bool
+  private let stop: (URL) -> Void
+
+  init(start: @escaping (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+       stop: @escaping (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }) {
+    self.start = start
+    self.stop = stop
+  }
+
+  func acquire(_ url: URL) -> Lease {
+    let key = url.standardizedFileURL.path
+    if entries[key] != nil { entries[key]!.references += 1 }
+    else {
+      let secured = start(url)
+      entries[key] = Entry(url: url, secured: secured, references: 1)
+      if !secured && !FileManager.default.isReadableFile(atPath: url.path) {
+        DiagnosticLog.shared.log("file-access", "Source requires relinking name=\(url.lastPathComponent)")
+      }
+    }
+    return Lease(url: url) { [self] in
+      guard var entry = entries[key] else { return }
+      entry.references -= 1
+      if entry.references == 0 {
+        if entry.secured { stop(entry.url) }
+        entries[key] = nil
+      } else { entries[key] = entry }
+    }
+  }
+}
+
 /// Receives coordinated changes for one music directory. File presenter
 /// callbacks arrive on a private operation queue and are forwarded to the
 /// main-actor monitor, which debounces bursts from sync providers.
@@ -41,13 +91,25 @@ private final class MusicFolderPresenter: NSObject, NSFilePresenter {
     changeHandler(url)
   }
 
-  func presentedSubitemDidDisappear(at url: URL) {
-    // Preserve the exact URL. Turning this into the parent directory loses the
-    // only unambiguous signal that one particular library file was deleted.
+  func accommodatePresentedItemDeletion(completionHandler: @escaping (Error?) -> Void) {
+    if let presentedItemURL { changeHandler(presentedItemURL) }
+    // The coordinator waits for this acknowledgement before deleting. Never
+    // wait on the main actor or a rescan from a file-presenter callback.
+    completionHandler(nil)
+  }
+
+  func accommodatePresentedSubitemDeletion(at url: URL, completionHandler: @escaping (Error?) -> Void) {
     changeHandler(url)
+    completionHandler(nil)
+  }
+
+  func presentedItemDidMove(to newURL: URL) {
+    if let presentedItemURL { changeHandler(presentedItemURL) }
+    changeHandler(newURL)
   }
 
   func presentedSubitem(at oldURL: URL, didMoveTo newURL: URL) {
+    changeHandler(oldURL)
     changeHandler(newURL)
   }
 }
@@ -55,12 +117,12 @@ private final class MusicFolderPresenter: NSObject, NSFilePresenter {
 @MainActor
 @Observable
 final class LibraryMonitorService {
-  static let shared = LibraryMonitorService()
+  static let shared = LibraryMonitorService(library: .shared)
 
   private struct PresenterRegistration {
     let presenter: MusicFolderPresenter
     let folderURL: URL
-    let isAccessingSecurityScope: Bool
+    let access: SecurityScopedAccessPool.Lease?
   }
 
   private struct FolderScan: Sendable {
@@ -76,25 +138,48 @@ final class LibraryMonitorService {
   ]
 
   private var registrations: [PresenterRegistration] = []
+  private var presentedSongIDs: Set<UUID> = []
   private var folderSnapshots: [String: Set<String>] = [:]
+  private var folderExclusions: [String: Set<String>] = [:]
   private var pendingChangedURLs: Set<URL> = []
   private var needsFullReconciliation = false
   private var changeDebounceTask: Task<Void, Never>?
   private var reconciliationTask: Task<Void, Never>?
   private var reconciliationID: UUID?
   private var isInBackground = false
+  private let library: SongLibrary
+  private let defaults: UserDefaults
+  private let accessPool: SecurityScopedAccessPool
+  private var resolvedFolders: [Data: URL] = [:]
+  private var resolvedSongBookmarks: [Data: URL] = [:]
+  private(set) var presenterGeneration = UUID()
 
-  private init() {}
+  init(library: SongLibrary, defaults: UserDefaults = .standard,
+       accessPool: SecurityScopedAccessPool? = nil) {
+    self.library = library
+    self.defaults = defaults
+    self.accessPool = accessPool ?? SecurityScopedAccessPool()
+  }
+
+  var monitoredURLs: [URL] { registrations.map(\.folderURL) }
+
+  /// Waits for work already scheduled by start or a file-presenter event.
+  func waitForPendingChanges() async {
+    let changes = changeDebounceTask
+    let reconciliation = reconciliationTask
+    await changes?.value
+    await reconciliation?.value
+  }
 
   var isEnabled: Bool {
     get {
-      if UserDefaults.standard.object(forKey: enabledKey) == nil {
+      if defaults.object(forKey: enabledKey) == nil {
         return true
       }
-      return UserDefaults.standard.bool(forKey: enabledKey)
+      return defaults.bool(forKey: enabledKey)
     }
     set {
-      UserDefaults.standard.set(newValue, forKey: enabledKey)
+      defaults.set(newValue, forKey: enabledKey)
       if newValue { start() } else { stop() }
     }
   }
@@ -102,25 +187,22 @@ final class LibraryMonitorService {
   /// Starts foreground event delivery and performs one reconciliation for
   /// changes that may have happened while Ampwave was not running.
   func start() {
-    guard isEnabled, !isInBackground else { return }
-    activateFilePresenters()
+    guard !isInBackground, !library.isResetting else { return }
+    if isEnabled {
+      let referencedIDs = Set(library.songs.filter { $0.storageMode == .referenced }.map(\.id))
+      if registrations.isEmpty || referencedIDs != presentedSongIDs { activateFilePresenters() }
+    }
     scheduleReconciliation()
   }
 
-  /// Starts event delivery and waits for the one launch reconciliation to
-  /// finish. ContentView calls this while the splash is visible so additions
-  /// made while the app was closed do not surface as an import banner after
-  /// the Home screen has already appeared.
-  func startAndWaitForInitialReconciliation() async {
-    guard isEnabled, !isInBackground else { return }
-
-    if reconciliationTask == nil {
-      activateFilePresenters()
-      scheduleReconciliation()
-    }
-
-    let initialReconciliation = reconciliationTask
-    await initialReconciliation?.value
+  func prepareForLibraryReset() {
+    stop()
+    folderSnapshots.removeAll()
+    folderExclusions.removeAll()
+    resolvedFolders.removeAll()
+    resolvedSongBookmarks.removeAll()
+    defaults.removeObject(forKey: referencedFoldersKey)
+    defaults.removeObject(forKey: managedFolderStampKey)
   }
 
   func stop() {
@@ -154,7 +236,8 @@ final class LibraryMonitorService {
   }
 
   /// Remembers a Files folder selected while "Copy Imported Music" is off.
-  func registerReferencedFolder(_ url: URL) {
+  func registerReferencedFolder(_ url: URL, expectedGeneration: UUID) {
+    guard !library.isResetting, expectedGeneration == library.importGeneration else { return }
     let secured = url.startAccessingSecurityScopedResource()
     defer { if secured { url.stopAccessingSecurityScopedResource() } }
 
@@ -167,7 +250,7 @@ final class LibraryMonitorService {
     guard !alreadyRegistered else { return }
 
     bookmarks.append(bookmark)
-    UserDefaults.standard.set(bookmarks, forKey: referencedFoldersKey)
+    defaults.set(bookmarks, forKey: referencedFoldersKey)
 
     if isEnabled, !isInBackground {
       activateFilePresenters()
@@ -176,7 +259,41 @@ final class LibraryMonitorService {
   }
 
   private var referencedFolderBookmarks: [Data] {
-    UserDefaults.standard.array(forKey: referencedFoldersKey) as? [Data] ?? []
+    defaults.array(forKey: referencedFoldersKey) as? [Data] ?? []
+  }
+
+  private func resolveFolder(_ bookmark: Data) -> URL? {
+    if let url = resolvedFolders[bookmark] { return url }
+    let url = PathManager.resolveBookmark(bookmark)
+    resolvedFolders[bookmark] = url
+    return url
+  }
+
+  /// Prefer the actual folder bookmark over constructing a child URL and
+  /// attempting to consume another (possibly stale) child sandbox extension.
+  func acquirePlaybackAccess(for song: LibrarySong) -> SecurityScopedAccessPool.Lease? {
+    guard song.storageMode == .referenced, !library.isResetting,
+      let storedURL = expectedStoredURL(for: song), !PathManager.isTrashed(storedURL)
+    else { return nil }
+    for bookmark in referencedFolderBookmarks {
+      if let folder = resolveFolder(bookmark), !PathManager.isTrashed(folder),
+        Self.isInside(storedURL, directory: folder) {
+        return accessPool.acquire(folder)
+      }
+    }
+    // Individually imported files must use the URL carrying the bookmark's
+    // grant, not a freshly constructed URL with the same path.
+    if let bookmark = song.bookmarkData {
+      let resolved = resolvedSongBookmarks[bookmark] ?? PathManager.resolveBookmark(bookmark)
+      if let resolved, !PathManager.isTrashed(resolved),
+        !PathManager.isInside(resolved, directory: library.songsDirectory),
+        (storedURL.resolvingSymlinksInPath() == resolved.resolvingSymlinksInPath()
+          || PathManager.isInside(storedURL, directory: library.songsDirectory)) {
+        resolvedSongBookmarks[bookmark] = resolved
+        return accessPool.acquire(resolved)
+      }
+    }
+    return nil
   }
 
   private func activateFilePresenters() {
@@ -185,45 +302,65 @@ final class LibraryMonitorService {
     // Files copied directly into Ampwave's exposed Songs directory never pass
     // through the document picker, so this presenter is what makes those
     // additions visible immediately.
-    addPresenter(for: SongLibrary.shared.songsDirectory, securityScoped: false)
+    addPresenter(for: library.songsDirectory, access: nil)
 
     for bookmark in referencedFolderBookmarks {
-      guard let folderURL = PathManager.resolveBookmark(bookmark) else { continue }
-      let secured = folderURL.startAccessingSecurityScopedResource()
-      addPresenter(for: folderURL, securityScoped: secured)
+      guard let folderURL = resolveFolder(bookmark), !PathManager.isTrashed(folderURL) else { continue }
+      addPresenter(for: folderURL, access: accessPool.acquire(folderURL))
     }
+
+    // Individually selected files have no imported parent-folder bookmark.
+    // Present those files themselves so they receive deletion callbacks too.
+    for song in library.songs where song.storageMode == .referenced {
+      if let storedURL = expectedStoredURL(for: song), registrations.contains(where: {
+        $0.folderURL.standardizedFileURL == storedURL.standardizedFileURL
+          || Self.isInside(storedURL, directory: $0.folderURL)
+      }) { continue }
+      let access = acquirePlaybackAccess(for: song)
+      let url = library.getFileURL(for: song)
+      guard !PathManager.isTrashed(url),
+        !registrations.contains(where: {
+          $0.folderURL.standardizedFileURL == url.standardizedFileURL
+            || Self.isInside(url, directory: $0.folderURL)
+        })
+      else { access?.release(); continue }
+      addPresenter(for: url, access: access)
+    }
+    presentedSongIDs = Set(library.songs.filter { $0.storageMode == .referenced }.map(\.id))
   }
 
-  private func addPresenter(for folderURL: URL, securityScoped: Bool) {
+  private func addPresenter(for folderURL: URL, access: SecurityScopedAccessPool.Lease?) {
+    let generation = presenterGeneration
     let presenter = MusicFolderPresenter(url: folderURL) { [weak self] changedURL in
-      Task { @MainActor in self?.recordPresentedChange(at: changedURL) }
+      Task { @MainActor in self?.recordPresentedChange(at: changedURL, generation: generation) }
     }
     NSFileCoordinator.addFilePresenter(presenter)
     registrations.append(
       PresenterRegistration(
         presenter: presenter,
         folderURL: folderURL,
-        isAccessingSecurityScope: securityScoped
+        access: access
       )
     )
   }
 
   private func deactivateFilePresenters() {
+    // Removing a presenter does not retract callbacks already queued on the
+    // main actor. Invalidate them so reset/foreground cannot revive old links.
+    presenterGeneration = UUID()
     for registration in registrations {
       NSFileCoordinator.removeFilePresenter(registration.presenter)
-      if registration.isAccessingSecurityScope {
-        registration.folderURL.stopAccessingSecurityScopedResource()
-      }
+      registration.access?.release()
     }
     registrations.removeAll()
+    presentedSongIDs.removeAll()
   }
 
-  private func recordPresentedChange(at url: URL) {
-    guard isEnabled, !isInBackground else { return }
+  func recordPresentedChange(at url: URL, generation: UUID) {
+    guard generation == presenterGeneration, isEnabled, !isInBackground, !library.isResetting else { return }
 
-    if Self.audioExtensions.contains(url.pathExtension.lowercased()) {
-      pendingChangedURLs.insert(url)
-    } else {
+    pendingChangedURLs.insert(url)
+    if !Self.audioExtensions.contains(url.pathExtension.lowercased()) {
       // Some providers report only the containing directory. Reconcile in
       // that case so nested additions are still found.
       needsFullReconciliation = true
@@ -238,11 +375,15 @@ final class LibraryMonitorService {
   }
 
   private func processPresentedChanges() async {
+    guard !library.isResetting else { return }
     let urls = Array(pendingChangedURLs)
     pendingChangedURLs.removeAll()
     let reconcile = needsFullReconciliation
     needsFullReconciliation = false
 
+    // A directory deletion invalidates all descendants, including currently
+    // buffered tracks. Keep the original URL even if its bookmark follows it.
+    removeSongsMatchingDisappearedFiles(urls.filter { PathManager.isDefinitelyMissing($0) })
     if reconcile {
       // A provider may report only a nested parent directory. Its change does
       // not always update the root folder's modification date, so the event is
@@ -250,10 +391,8 @@ final class LibraryMonitorService {
       await reconcileMonitoredFolders(forceManagedScan: true)
     } else if !urls.isEmpty {
       let existingURLs = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
-      let disappearedURLs = urls.filter { !FileManager.default.fileExists(atPath: $0.path) }
-      removeSongsMatchingDisappearedFiles(disappearedURLs)
 
-      let managedDirectory = SongLibrary.shared.songsDirectory
+      let managedDirectory = library.songsDirectory
       let managedFiles = existingURLs.filter { Self.isInside($0, directory: managedDirectory) }
       let referencedFiles = existingURLs.filter { !Self.isInside($0, directory: managedDirectory) }
       await importNewManagedFiles(managedFiles)
@@ -283,41 +422,45 @@ final class LibraryMonitorService {
   /// One launch/foreground fallback scan. Normal live monitoring is driven by
   /// NSFilePresenter events, so there is no recurring folder enumeration.
   private func reconcileMonitoredFolders(forceManagedScan: Bool = false) async {
-    let library = SongLibrary.shared
-    guard library.modelContext != nil, !Task.isCancelled else { return }
+    guard library.modelContext != nil, !library.isResetting, !Task.isCancelled else { return }
+    await library.reconcileReferencedSources()
+    guard isEnabled, !library.isResetting, !Task.isCancelled else { return }
 
     let managedFolder = library.songsDirectory
     if forceManagedScan || managedFolderNeedsScan(managedFolder) {
-      guard let managedScan = await scan(folder: managedFolder) else { return }
-      guard !Task.isCancelled else { return }
-      let managedKey = Self.normalizedPath(managedFolder)
-      if folderSnapshots[managedKey] != managedScan.snapshot {
-        folderSnapshots[managedKey] = managedScan.snapshot
-        reconcileMissingSongs(
-          in: managedFolder,
-          presentFiles: managedScan.files,
-          storageMode: .copied
-        )
-        await importNewManagedFiles(managedScan.files)
+      if let managedScan = await scan(folder: managedFolder) {
+        guard !Task.isCancelled, !library.isResetting else { return }
+        let managedKey = Self.normalizedPath(managedFolder)
+        if folderSnapshots[managedKey] != managedScan.snapshot {
+          folderSnapshots[managedKey] = managedScan.snapshot
+          reconcileMissingSongs(
+            in: managedFolder,
+            presentFiles: managedScan.files,
+            storageMode: .copied
+          )
+          await importNewManagedFiles(managedScan.files)
+        }
+        rememberManagedFolderStamp(managedFolder)
       }
-      rememberManagedFolderStamp(managedFolder)
     }
 
     for bookmark in referencedFolderBookmarks {
-      guard !Task.isCancelled,
-        let folderURL = PathManager.resolveBookmark(bookmark)
-      else { return }
+      guard !Task.isCancelled, !library.isResetting else { return }
+      guard let folderURL = resolveFolder(bookmark),
+        !PathManager.isTrashed(folderURL)
+      else { continue }
 
-      // Use a separate balanced security-scope access for this scan. The
-      // presenter can be removed if the app backgrounds while enumeration is
-      // suspended without invalidating the scan's own access token.
-      let secured = folderURL.startAccessingSecurityScopedResource()
+      // The scan owns a lease even if backgrounding removes its presenter.
+      let access = accessPool.acquire(folderURL)
       let scan = await scan(folder: folderURL)
-      if secured { folderURL.stopAccessingSecurityScopedResource() }
-      guard !Task.isCancelled, let scan else { continue }
+      defer { access.release() }
+      guard !Task.isCancelled, !library.isResetting, let scan else { continue }
 
       let folderKey = Self.normalizedPath(folderURL)
-      if folderSnapshots[folderKey] == scan.snapshot { continue }
+      // The source files may be unchanged while a retained duplicate in a
+      // different folder disappears, or the user disables duplicate merging.
+      if folderSnapshots[folderKey] == scan.snapshot,
+        folderExclusions[folderKey] == referencedImportExclusions { continue }
       folderSnapshots[folderKey] = scan.snapshot
       reconcileMissingSongs(
         in: folderURL,
@@ -325,6 +468,7 @@ final class LibraryMonitorService {
         storageMode: .referenced
       )
       await importGenuinelyNewReferencedFiles(scan.files)
+      folderExclusions[folderKey] = referencedImportExclusions
     }
   }
 
@@ -344,7 +488,6 @@ final class LibraryMonitorService {
     storageMode: LibrarySong.StorageMode
   ) {
     let presentPaths = Set(presentFiles.map(Self.normalizedPath))
-    let library = SongLibrary.shared
     let missing = library.songs.filter { song in
       guard song.storageMode == storageMode,
         let expectedURL = expectedStoredURL(for: song),
@@ -359,12 +502,12 @@ final class LibraryMonitorService {
   /// waiting for a recursive folder scan.
   private func removeSongsMatchingDisappearedFiles(_ urls: [URL]) {
     guard !urls.isEmpty else { return }
-    let paths = Set(urls.map(Self.normalizedPath))
-    let library = SongLibrary.shared
     let missing = library.songs.filter { song in
       guard let expected = expectedStoredURL(for: song) else { return false }
-      if paths.contains(Self.normalizedPath(expected)) { return true }
-      return paths.contains(Self.normalizedPath(library.getFileURL(for: song)))
+      return urls.contains {
+        Self.normalizedPath(expected) == Self.normalizedPath($0)
+          || Self.isInside(expected, directory: $0)
+      }
     }
     library.removeSongsWhoseFilesDisappeared(missing)
   }
@@ -382,13 +525,13 @@ final class LibraryMonitorService {
   private func managedFolderNeedsScan(_ folder: URL) -> Bool {
     guard let stamp = Self.directoryModificationStamp(folder) else { return true }
 
-    if UserDefaults.standard.object(forKey: managedFolderStampKey) != nil {
-      return UserDefaults.standard.double(forKey: managedFolderStampKey) != stamp
+    if defaults.object(forKey: managedFolderStampKey) != nil {
+      return defaults.double(forKey: managedFolderStampKey) != stamp
     }
 
-    let startupScan = UserDefaults.standard.double(forKey: "com.ampwave.lastDiskScanTime")
+    let startupScan = defaults.double(forKey: "com.ampwave.lastDiskScanTime")
     if startupScan > 0, stamp <= startupScan {
-      UserDefaults.standard.set(stamp, forKey: managedFolderStampKey)
+      defaults.set(stamp, forKey: managedFolderStampKey)
       return false
     }
     return true
@@ -396,11 +539,10 @@ final class LibraryMonitorService {
 
   private func rememberManagedFolderStamp(_ folder: URL) {
     guard let stamp = Self.directoryModificationStamp(folder) else { return }
-    UserDefaults.standard.set(stamp, forKey: managedFolderStampKey)
+    defaults.set(stamp, forKey: managedFolderStampKey)
   }
 
   private func importNewManagedFiles(_ files: [URL]) async {
-    let library = SongLibrary.shared
     guard library.modelContext != nil, !files.isEmpty, !Task.isCancelled else { return }
 
     let knownHashes = Set(library.songs.map(\.fileHash))
@@ -413,8 +555,13 @@ final class LibraryMonitorService {
 
   /// Path aliases from Files providers are verified by content hash before the
   /// importer is called. Existing songs and albums are never rewritten here.
+  private var referencedImportExclusions: Set<String> {
+    Set(library.songs.map(\.fileHash))
+      .union(library.liveMonitoringIgnoredHashes)
+      .union(library.liveMonitoringMergedHashes)
+  }
+
   private func importGenuinelyNewReferencedFiles(_ files: [URL]) async {
-    let library = SongLibrary.shared
     guard library.modelContext != nil, !files.isEmpty, !Task.isCancelled else { return }
 
     let knownPaths = storedReferencedPaths(in: library)
@@ -424,8 +571,7 @@ final class LibraryMonitorService {
     }
     guard !possibleNewFiles.isEmpty else { return }
 
-    let excludedHashes = Set(library.songs.map(\.fileHash))
-      .union(library.liveMonitoringIgnoredHashes)
+    let excludedHashes = referencedImportExclusions
     let newFiles = await Self.uniqueFiles(possibleNewFiles, excluding: excludedHashes)
 
     guard !Task.isCancelled, !newFiles.isEmpty else { return }
@@ -466,13 +612,23 @@ final class LibraryMonitorService {
   }
 
   nonisolated private static func audioFiles(in folderURL: URL) -> [URL]? {
+    // An enumerator can yield a partial tree then fail (offline provider,
+    // permissions). That must never become an authoritative deletion list.
+    guard let values = try? folderURL.resourceValues(forKeys: [.isDirectoryKey]),
+      values.isDirectory == true
+    else { return nil }
+    var enumerationFailed = false
     guard
       let enumerator = FileManager.default.enumerator(
         at: folderURL,
         includingPropertiesForKeys: [
           .isRegularFileKey, .fileSizeKey, .contentModificationDateKey,
         ],
-        options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        options: [.skipsHiddenFiles, .skipsPackageDescendants],
+        errorHandler: { _, _ in
+          enumerationFailed = true
+          return false
+        }
       )
     else { return nil }
 
@@ -482,7 +638,7 @@ final class LibraryMonitorService {
     {
       files.append(url)
     }
-    return files
+    return enumerationFailed ? nil : files
   }
 
   nonisolated private static func normalizedPath(_ url: URL) -> String {

@@ -94,7 +94,7 @@ struct ContentView: View {
     try? await Task.sleep(nanoseconds: nanoseconds)
   }
 
-  /// Loads and reconciles the local library before revealing the app. Keeping
+  /// Loads the saved library before revealing the app. Keeping
   /// the tab hierarchy unmounted prevents Home recommendation tasks from
   /// competing with the splash animation during launch.
   private func initializeServices() async {
@@ -105,7 +105,7 @@ struct ContentView: View {
     // the persistent store.
     await Task.yield()
 
-    SongLibrary.shared.setModelContext(modelContext)
+    SongLibrary.shared.setModelContext(modelContext, loadImmediately: false)
     PlaylistManager.shared.setModelContext(modelContext)
     ListeningHistoryTracker.shared.setModelContext(modelContext)
     LyricsService.shared.setModelContext(modelContext)
@@ -118,21 +118,27 @@ struct ContentView: View {
     _ = UserPreferences.getOrCreate(in: modelContext)
     WidgetSyncService.shared.refreshTheme()
 
-    // Fetch the visible library, reconcile Ampwave's managed directory, then
-    // reconcile live-monitored folders while the launch animation remains on
-    // screen. Network metadata is deliberately deferred below.
+    // Read saved records here. Provider scans and audio metadata extraction
+    // must not hold the launch screen open; playback checks source availability
+    // independently before restoring or starting any player item.
     await SongLibrary.shared.loadSongs(performMaintenance: false)
-    await SongLibrary.shared.indexOnStartup(performAutomaticMetadataFetch: false)
-    await LibraryMonitorService.shared.startAndWaitForInitialReconciliation()
     PlaybackController.shared.setModelContext(modelContext)
-    PlaybackController.shared.restoreStateAfterLoading()
   }
 
   private func startDeferredServices() {
+    let generation = SongLibrary.shared.importGeneration
     Task {
       // Let the splash fade finish before beginning optional online work.
       try? await Task.sleep(nanoseconds: 500_000_000)
-
+      guard !Task.isCancelled, generation == SongLibrary.shared.importGeneration,
+        !SongLibrary.shared.isResetting else { return }
+      await SongLibrary.shared.finishDeferredLoading()
+      guard generation == SongLibrary.shared.importGeneration,
+        !SongLibrary.shared.isResetting else { return }
+      LibraryMonitorService.shared.start()
+      PlaybackController.shared.restoreStateAfterLoading()
+      await SongLibrary.shared.indexOnStartup(performAutomaticMetadataFetch: false)
+      LibraryMonitorService.shared.start()
       guard SongLibrary.shared.hasPendingMetadataWork else { return }
       Task.detached(priority: .background) {
         await SongLibrary.shared.resumeIncompleteMetadataFetches()

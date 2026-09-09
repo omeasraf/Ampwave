@@ -75,13 +75,13 @@ struct FullArtworkBackgroundView: View {
       return
     }
 
-    if let cached = await ImageCache.shared.image(for: path) {
+    if let cached = ImageCache.shared.image(for: path) {
       self.image = cached
       return
     }
 
+    guard let url = PathManager.resolve(path) else { return }
     let task = Task.detached(priority: .userInitiated) { () -> PlatformImage? in
-      guard let url = PathManager.resolve(path) else { return nil }
       do {
         let data = try Data(contentsOf: url)
         #if os(iOS)
@@ -93,7 +93,7 @@ struct FullArtworkBackgroundView: View {
     }
 
     if let loadedImage = await task.value {
-      await ImageCache.shared.insert(loadedImage, for: path)
+      ImageCache.shared.insert(loadedImage, for: path)
       self.image = loadedImage
     }
   }

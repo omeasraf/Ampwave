@@ -16,7 +16,6 @@ struct MacOSLyricsWindowView: View {
   var body: some View {
     GeometryReader { geometry in
       let w = geometry.size.width
-      let h = geometry.size.height
 
       ZStack(alignment: .top) {
 

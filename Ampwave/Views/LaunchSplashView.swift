@@ -15,14 +15,8 @@ struct LaunchSplashView: View {
 
   var body: some View {
     ZStack {
-      RadialGradient(
-        colors: [Color(red: 0.125, green: 0.043, blue: 0.251),
-          Color(red: 0.027, green: 0.008, blue: 0.051)],
-        center: UnitPoint(x: 0.5, y: 0.42),
-        startRadius: 0,
-        endRadius: 520
-      )
-      .ignoresSafeArea()
+      Color.black
+        .ignoresSafeArea()
 
       AmpwaveEqualizerMark(
         isAnimated: barsArePlaying,

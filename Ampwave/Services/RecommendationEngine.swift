@@ -16,8 +16,8 @@ final class RecommendationEngine {
   static let shared = RecommendationEngine()
 
   var modelContext: ModelContext?
-  private let library = SongLibrary.shared
-  private let historyTracker = ListeningHistoryTracker.shared
+  private let library: SongLibrary
+  private let historyTracker: ListeningHistoryTracker
 
   // Cached recommendations
   private(set) var forYouRecommendations: [Recommendation] = []
@@ -28,7 +28,13 @@ final class RecommendationEngine {
   private var lastGenerationTime: Date?
   private let cacheValidityDuration: TimeInterval = 300  // 5 minutes
 
-  private init() {
+  convenience init() {
+    self.init(library: .shared, historyTracker: .shared)
+  }
+
+  init(library: SongLibrary, historyTracker: ListeningHistoryTracker) {
+    self.library = library
+    self.historyTracker = historyTracker
     NotificationCenter.default.addObserver(
       forName: .songsWereDeleted,
       object: nil,
@@ -36,8 +42,8 @@ final class RecommendationEngine {
     ) { notification in
       guard let ids = notification.object as? Set<UUID> else { return }
       let albumIDs = notification.userInfo?["albumIDs"] as? Set<UUID> ?? []
-      MainActor.assumeIsolated {
-        RecommendationEngine.shared.removeDeletedContentFromCache(
+      MainActor.assumeIsolated { [weak self] in
+        self?.removeDeletedContentFromCache(
           songIDs: ids,
           albumIDs: albumIDs
         )
@@ -88,10 +94,13 @@ final class RecommendationEngine {
     guard let modelContext,
       UserPreferences.getOrCreate(in: modelContext).enableRecommendations
     else {
+      forYouRecommendations = []
       genreRecommendations = []
       return
     }
-    genreRecommendations = await generateGenreRecommendations()
+    async let forYou = generateForYouRecommendations()
+    async let genres = generateGenreRecommendations()
+    (forYouRecommendations, genreRecommendations) = await (forYou, genres)
   }
 
   // MARK: - Generate All Recommendations
@@ -152,7 +161,7 @@ final class RecommendationEngine {
   /// Generates personalized "For You" recommendations
   /// Based on: listening history, liked songs, similar artists/genres
   func generateForYouRecommendations(limit: Int = 20) async -> [Recommendation] {
-    let recentlyPlayed = historyTracker.getRecentlyPlayed(limit: 10)
+    let recentlyPlayed = historyTracker.getRecentlyPlayed(limit: 10, library: library)
     let mostPlayed = historyTracker.getMostPlayed(limit: 20)
     let likedSongs = await getLikedSongs() ?? []
     let favoriteGenres = extractGenres(from: recentlyPlayed + likedSongs + mostPlayed.map(\.song))
@@ -160,6 +169,7 @@ final class RecommendationEngine {
       recentlyPlayed.prefix(6).map(\.artist) + mostPlayed.prefix(10).map { $0.song.artist }
     )
     let recentIds = Set(recentlyPlayed.map(\.id))
+    let likedIds = Set(likedSongs.map(\.id))
     let nowPlayingId = PlaybackController.shared.currentItem?.id
     let statsBySongId = statisticsBySongID()
 
@@ -169,6 +179,14 @@ final class RecommendationEngine {
 
       var score = baseRecommendationScore(for: song, statsBySongId: statsBySongId)
       var reason: RecommendationReason = .discovery
+      let statistics = statsBySongId[song.id]
+
+      if likedIds.contains(song.id) || (statistics?.userRating ?? 0) >= 4 {
+        score += 1.6
+        reason = .favorite
+      } else if (statistics?.playCount ?? 0) >= 4 {
+        reason = .heavyRotation
+      }
 
       if recentIds.contains(song.id) {
         score -= 2.8
@@ -177,7 +195,7 @@ final class RecommendationEngine {
       let artistMatch = favoriteArtists.contains(song.artist)
       let genreOverlap = favoriteGenres.intersection(extractGenres(from: [song])).count
 
-      if artistMatch {
+      if artistMatch && reason == .discovery {
         score += 2.2
         reason = .fromFavoriteArtist
       }
@@ -192,8 +210,16 @@ final class RecommendationEngine {
       let similarity = similarityScore(for: song, references: recentlyPlayed)
       if similarity > 0 {
         score += similarity
-        if similarity >= 1.3 {
-          reason = .similarToRecent
+        if similarity >= 1.3, reason == .discovery {
+          let songGenres = extractGenres(from: [song])
+          if let inspiration = recentlyPlayed.first(where: {
+            $0.artist == song.artist
+              || !extractGenres(from: [$0]).isDisjoint(with: songGenres)
+          }) {
+            reason = .becauseYouListenedTo(inspiration.title)
+          } else {
+            reason = .similarToRecent
+          }
         }
       }
 
@@ -409,7 +435,7 @@ final class RecommendationEngine {
 
   /// Finds songs similar to a given set of songs
   func generateSimilarSongs(limit: Int = 20) async -> [Recommendation] {
-    let recentlyPlayed = historyTracker.getRecentlyPlayed(limit: 5)
+    let recentlyPlayed = historyTracker.getRecentlyPlayed(limit: 5, library: library)
 
     guard !recentlyPlayed.isEmpty else {
       // Fallback: return random songs from library
@@ -615,7 +641,7 @@ final class RecommendationEngine {
 
   /// Recommends albums based on listening history
   func generateAlbumRecommendations(limit: Int = 10) async -> [Recommendation] {
-    let recentlyPlayed = historyTracker.getRecentlyPlayed(limit: 20)
+    let recentlyPlayed = historyTracker.getRecentlyPlayed(limit: 20, library: library)
     let playedAlbums = Set(recentlyPlayed.compactMap { $0.album })
 
     // Find albums from same artists as recently played

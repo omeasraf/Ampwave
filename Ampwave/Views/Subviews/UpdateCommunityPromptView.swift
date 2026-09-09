@@ -19,6 +19,8 @@ enum UpdateCommunityPromptState {
   }
 
   private static var currentReleaseID: String {
+    // Include both values so TestFlight builds with the same marketing
+    // version still receive their own update prompt.
     "\(currentVersion)-\(currentBuild)"
   }
 
@@ -55,7 +57,7 @@ struct UpdateCommunityPromptView: View {
         header
 
         VStack(spacing: 8) {
-          Text("Thanks for updating Ampwave")
+          Text("Thank you for updating Ampwave")
             .font(.title2.bold())
             .foregroundStyle(themeManager.primaryTextColor)
             .multilineTextAlignment(.center)
@@ -89,32 +91,29 @@ struct UpdateCommunityPromptView: View {
         .font(.subheadline.weight(.semibold))
         .foregroundStyle(themeManager.secondaryTextColor)
       }
-      .padding(.horizontal, 24)
+      .frame(maxWidth: .infinity)
+      .padding(.leading, 24)
+      .padding(.trailing, 20)
       .padding(.top, 24)
       .padding(.bottom, 16)
     }
+    // Explicitly occupy the full presentation width. Keeping the horizontal
+    // inset on the content, rather than sizing the root narrower, prevents the
+    // sheet background from exposing a strip along its trailing edge.
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   private var header: some View {
     HStack(spacing: 15) {
       ZStack {
         RoundedRectangle(cornerRadius: 18, style: .continuous)
-          .fill(
-            LinearGradient(
-              colors: [
-                themeManager.accentColor,
-                themeManager.accentColor.lighter(by: 0.18),
-              ],
-              startPoint: .topLeading,
-              endPoint: .bottomTrailing
-            )
-          )
+          .fill(.white)
 
-        AmpwaveEqualizerMark(isAnimated: false, showsGlow: false, showsSheen: true)
+        AmpwaveEqualizerMark(isAnimated: false, showsGlow: false, showsSheen: false)
           .frame(width: 58, height: 37)
       }
       .frame(width: 74, height: 74)
-      .shadow(color: themeManager.accentColor.opacity(0.28), radius: 14, y: 7)
+      .shadow(color: .black.opacity(0.16), radius: 14, y: 7)
 
       VStack(alignment: .leading, spacing: 5) {
         Text("AMPWAVE")

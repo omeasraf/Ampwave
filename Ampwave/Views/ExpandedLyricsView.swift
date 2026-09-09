@@ -112,14 +112,16 @@ struct ExpandedLyricsView: View {
                     withTimeInterval: 1.5,
                     repeats: false
                   ) { _ in
-                    isUserScrolling = false
-                    if let currentIndex = playback.currentLyricIndex {
-                      isProgrammaticScroll = true
-                      withAnimation(.easeInOut(duration: 0.35)) {
-                        proxy.scrollTo(
-                          currentIndex,
-                          anchor: .center
-                        )
+                    MainActor.assumeIsolated {
+                      isUserScrolling = false
+                      if let currentIndex = playback.currentLyricIndex {
+                        isProgrammaticScroll = true
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                          proxy.scrollTo(
+                            currentIndex,
+                            anchor: .center
+                          )
+                        }
                       }
                     }
                   }
@@ -479,14 +481,16 @@ struct CompactLyricsView: View {
                 withTimeInterval: 1.5,
                 repeats: false
               ) { _ in
-                isUserScrolling = false
-                if let currentIndex = playback.currentLyricIndex {
-                  isProgrammaticScroll = true
-                  withAnimation(.easeInOut(duration: 0.3)) {
-                    proxy.scrollTo(
-                      currentIndex,
-                      anchor: .center
-                    )
+                MainActor.assumeIsolated {
+                  isUserScrolling = false
+                  if let currentIndex = playback.currentLyricIndex {
+                    isProgrammaticScroll = true
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                      proxy.scrollTo(
+                        currentIndex,
+                        anchor: .center
+                      )
+                    }
                   }
                 }
               }

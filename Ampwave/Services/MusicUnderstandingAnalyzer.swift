@@ -22,6 +22,17 @@ nonisolated enum MusicUnderstandingAnalyzer {
   static var isAvailable: Bool {
     #if canImport(MusicUnderstanding)
       if #available(iOS 27.0, macOS 27.0, tvOS 27.0, watchOS 27.0, visionOS 27.0, *) {
+        // MusicUnderstanding's instrument model can terminate the process
+        // with a native Metal/MPSGraph assertion on iOS 27 (the failure is
+        // outside Swift and cannot be handled by `do/catch`). Keep this
+        // opt-in until Apple fixes the tensor-allocation crash. The DSP
+        // analysis remains available and is used by the caller as fallback.
+        let enabled = UserDefaults.standard.bool(
+          forKey: "com.ampwave.enableMusicUnderstanding"
+        )
+        if !enabled {
+          return false
+        }
         return true
       }
     #endif

@@ -316,18 +316,7 @@ struct CapsuleDetailView: View {
       }
       .listRowBackground(themeManager.cardBackgroundColor)
 
-      Section("Track List") {
-        ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
-          SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
-            .contentShape(Rectangle())
-            .onTapGesture {
-              playback.playQueue(songs, startingAt: index, from: .playlist)
-            }
-        }
-        .onDelete(perform: removeSongs)
-        .onMove(perform: moveSongs)
-      }
-      .listRowBackground(themeManager.cardBackgroundColor)
+      trackListSection
     }
     #if os(iOS)
         .listStyle(.insetGrouped)
@@ -405,6 +394,35 @@ struct CapsuleDetailView: View {
     } message: {
       Text(exportError ?? "The Capsule could not be prepared.")
     }
+  }
+
+  private var trackListSection: some View {
+    let resolvedSongs = songs
+    return Section("Track List") {
+      ForEach(Array(resolvedSongs.enumerated()), id: \.element.id) { entry in
+        capsuleTrackRow(
+          song: entry.element,
+          index: entry.offset,
+          queue: resolvedSongs
+        )
+      }
+      .onDelete(perform: removeSongs)
+      .onMove(perform: moveSongs)
+    }
+    .listRowBackground(themeManager.cardBackgroundColor)
+  }
+
+  private func capsuleTrackRow(
+    song: LibrarySong,
+    index: Int,
+    queue: [LibrarySong]
+  ) -> some View {
+    let isCurrent = playback.currentItem?.id == song.id
+    return SongRow(song: song, isCurrent: isCurrent)
+      .contentShape(Rectangle())
+      .onTapGesture {
+        playback.playQueue(queue, startingAt: index, from: .playlist)
+      }
   }
 
   private var header: some View {

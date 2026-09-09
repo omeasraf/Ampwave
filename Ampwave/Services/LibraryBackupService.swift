@@ -250,14 +250,16 @@ enum LibraryBackupService {
     let playbackState = try modelContext.fetch(FetchDescriptor<PlaybackState>()).first
 
     return BackupDocument(
+      format: "ampwave-backup",
+      version: 1,
       exportedAt: Date(),
-      songs: songs.map(BackupSong.init),
-      playlists: playlists.map(BackupPlaylist.init),
-      statistics: stats.map(BackupStatistics.init),
-      history: history.prefix(500).map(BackupHistoryEntry.init),
-      appSettings: appSettings.map(BackupAppSettings.init),
-      userPreferences: userPreferences.map(BackupUserPreferences.init),
-      playbackState: playbackState.map(BackupPlaybackState.init)
+      songs: songs.map { BackupSong($0) },
+      playlists: playlists.map { BackupPlaylist($0) },
+      statistics: stats.map { BackupStatistics($0) },
+      history: history.prefix(500).map { BackupHistoryEntry($0) },
+      appSettings: appSettings.map { BackupAppSettings($0) },
+      userPreferences: userPreferences.map { BackupUserPreferences($0) },
+      playbackState: playbackState.map { BackupPlaybackState($0) }
     )
   }
 }
@@ -274,8 +276,8 @@ struct BackupRestoreSummary {
 }
 
 private struct BackupDocument: Codable {
-  let format: String = "ampwave-backup"
-  let version: Int = 1
+  let format: String
+  let version: Int
   let exportedAt: Date
   let songs: [BackupSong]
   let playlists: [BackupPlaylist]

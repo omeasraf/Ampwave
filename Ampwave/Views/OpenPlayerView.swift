@@ -555,7 +555,7 @@ struct OpenPlayerView: View {
 
             Button {
               HapticManager.shared.like()
-              PlaylistManager.shared.toggleLike(song: song)
+              _ = PlaylistManager.shared.toggleLike(song: song)
             } label: {
               Image(
                 systemName: PlaylistManager.shared.isLiked(
@@ -810,26 +810,19 @@ struct OpenPlayerView: View {
       return
     }
 
-    let colors = await Task.detached(priority: .userInitiated) { () -> (Color, Color) in
+    let image = await Task.detached(priority: .userInitiated) { () -> PlatformImage? in
       #if os(iOS)
-        if let image = UIImage(contentsOfFile: url.path),
-           let dominant = image.dominantColor() {
-          return (dominant.opacity(0.3), dominant)
-        }
+        return UIImage(contentsOfFile: url.path)
       #else
-        if let image = NSImage(contentsOfFile: url.path),
-           let dominant = image.dominantColor() {
-          return (dominant.opacity(0.3), dominant)
-        }
+        return NSImage(contentsOfFile: url.path)
       #endif
-      return (.clear, .clear)
     }.value
+    let dominant = image?.dominantColor()
+    let colors = (dominant?.opacity(0.3) ?? .clear, dominant ?? .clear)
 
-    await MainActor.run {
-      withAnimation(.easeInOut) {
-        artworkColor = colors.0
-        rawArtworkColor = colors.1
-      }
+    withAnimation(.easeInOut) {
+      artworkColor = colors.0
+      rawArtworkColor = colors.1
     }
   }
 

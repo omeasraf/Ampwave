@@ -26,12 +26,13 @@ final class ListeningHistoryTracker {
   private var currentPlayDuration: TimeInterval = 0
   private var currentSourceRaw: String?
   private var currentPlaylistId: UUID?
+  private var currentHistoryId: UUID?
   /// When the current track first started, kept across pauses. Scrobbles are
   /// timestamped from when playback began, and `currentPlayStartTime` is reset
   /// every time the user pauses.
   private var currentTrackStartedAt: Date?
 
-  private init() {
+  init() {
     // Deleting a song removes its statistics rows behind this cache's back.
     NotificationCenter.default.addObserver(
       forName: .songsWereDeleted,
@@ -67,7 +68,7 @@ final class ListeningHistoryTracker {
 
       // Record the previous song with its known source
       let usedSource = PlaySource(rawValue: currentSourceRaw ?? source.rawValue) ?? .library
-      recordPlay(
+      finishCurrentHistory(
         song: previousSong, duration: totalDuration, source: usedSource,
         playlistId: currentPlaylistId ?? playlistId)
       scrobblePlay(previousSong, playedDuration: totalDuration)
@@ -79,6 +80,7 @@ final class ListeningHistoryTracker {
     currentPlayDuration = 0
     currentSourceRaw = source.rawValue
     currentPlaylistId = playlistId
+    beginHistory(for: song, source: source, playlistId: playlistId)
 
     LastFMScrobbler.shared.nowPlaying(song)
   }
@@ -107,11 +109,12 @@ final class ListeningHistoryTracker {
     }
 
     if skipped {
+      finishCurrentHistory(song: song, duration: currentPlayDuration, countsAsPlay: false)
       recordSkip(song: song)
     } else {
       let usedSource =
         PlaySource(rawValue: currentSourceRaw ?? PlaySource.library.rawValue) ?? .library
-      recordPlay(
+      finishCurrentHistory(
         song: song, duration: currentPlayDuration, source: usedSource, playlistId: currentPlaylistId
       )
     }
@@ -127,6 +130,7 @@ final class ListeningHistoryTracker {
     currentPlayDuration = 0
     currentSourceRaw = nil
     currentPlaylistId = nil
+    currentHistoryId = nil
   }
 
   /// Completes a specific track only if it is still the one being tracked.
@@ -148,6 +152,7 @@ final class ListeningHistoryTracker {
     currentPlayDuration = 0
     currentSourceRaw = nil
     currentPlaylistId = nil
+    currentHistoryId = nil
     LastFMScrobbler.shared.cancelCurrentTracking()
   }
 
@@ -159,25 +164,44 @@ final class ListeningHistoryTracker {
     )
   }
 
-  /// Records a play in the database
-  private func recordPlay(
-    song: LibrarySong, duration: TimeInterval, source: PlaySource, playlistId: UUID? = nil
-  ) {
+  /// Adds the song to Recently Played as soon as playback starts. Only its ID
+  /// is retained, so reset cannot leave a detached history model in memory.
+  private func beginHistory(for song: LibrarySong, source: PlaySource, playlistId: UUID?) {
     guard let modelContext = modelContext else { return }
-
-    // Create history entry
     let history = ListeningHistory(
-      song: song,
-      playDuration: duration,
-      source: source,
-      playlistId: playlistId
+      song: song, playDuration: 0, source: source, playlistId: playlistId
     )
     modelContext.insert(history)
+    currentHistoryId = history.id
+    try? modelContext.save()
+    notifyStatisticsChanged()
+  }
 
-    // Update or create statistics
-    updateStatistics(for: song, duration: duration)
+  private func finishCurrentHistory(
+    song: LibrarySong, duration: TimeInterval, source: PlaySource? = nil,
+    playlistId: UUID? = nil, countsAsPlay: Bool = true
+  ) {
+    guard let modelContext else { return }
+    let history: ListeningHistory
+    if let historyID = currentHistoryId,
+      let live = try? modelContext.fetch(FetchDescriptor<ListeningHistory>(
+        predicate: #Predicate { $0.id == historyID }
+      )).first
+    {
+      history = live
+    } else {
+      history = ListeningHistory(
+        song: song, playDuration: duration,
+        source: source ?? .library, playlistId: playlistId
+      )
+      modelContext.insert(history)
+    }
+    history.playDuration = max(0, duration)
+    history.songDuration = song.duration
+    history.completionPercentage = song.duration > 0
+      ? min(max(duration / song.duration, 0), 1) : 0
+    if countsAsPlay { updateStatistics(for: song, duration: duration) }
 
-    // Save
     try? modelContext.save()
     notifyStatisticsChanged()
   }
@@ -313,6 +337,10 @@ final class ListeningHistoryTracker {
 
   /// Gets recently played songs (unique, ordered by most recent)
   func getRecentlyPlayed(limit: Int = 20) -> [LibrarySong] {
+    getRecentlyPlayed(limit: limit, library: .shared)
+  }
+
+  func getRecentlyPlayed(limit: Int = 20, library: SongLibrary) -> [LibrarySong] {
     guard let modelContext = modelContext else { return [] }
 
     let descriptor = FetchDescriptor<ListeningHistory>(
@@ -335,7 +363,7 @@ final class ListeningHistoryTracker {
       }
     }
 
-    return SongLibrary.shared.songs(ids: uniqueHistory.map(\.songId))
+    return library.songs(ids: uniqueHistory.map(\.songId))
   }
 
   /// Gets most played songs

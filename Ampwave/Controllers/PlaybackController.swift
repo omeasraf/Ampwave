@@ -16,6 +16,70 @@ import MusicKit
 import SwiftData
 internal import SwiftUI
 
+/// Coalesces activation requests while allowing interruptions to invalidate an
+/// in-flight result. Only a successful, current activation is cached.
+@MainActor
+final class AudioSessionActivation {
+  private(set) var isActive = false
+  private var generation = UUID()
+  private var inFlight: (id: UUID, generation: UUID, task: Task<Bool, Never>)?
+  private let activate: @Sendable () async throws -> Void
+
+  init(activate: @escaping @Sendable () async throws -> Void = AudioSessionActivation.activateSystemSession) {
+    self.activate = activate
+  }
+
+  func invalidate() {
+    isActive = false
+    generation = UUID()
+  }
+
+  func ensureActive() async -> Bool {
+    guard !Task.isCancelled else { return false }
+    if isActive { return true }
+    let requestedGeneration = generation
+    let flight: (id: UUID, generation: UUID, task: Task<Bool, Never>)
+    if let inFlight { flight = inFlight }
+    else {
+      let operation = activate
+      flight = (UUID(), generation, Task {
+        do { try await operation(); return true }
+        catch {
+          DiagnosticLog.shared.log("audio-session", "Activation failed: \(error)")
+          return false
+        }
+      })
+      inFlight = flight
+    }
+    let succeeded = await flight.task.value
+    if inFlight?.id == flight.id { inFlight = nil }
+    guard generation == requestedGeneration, !Task.isCancelled else { return false }
+    if flight.generation != generation { return await ensureActive() }
+    isActive = succeeded
+    return succeeded
+  }
+
+  nonisolated private static let queue = DispatchQueue(label: "com.ampwave.audio-session", qos: .userInitiated)
+
+  nonisolated static func activateSystemSession() async throws {
+    #if os(iOS)
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        queue.async {
+          do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [])
+            // `activate(options:completionHandler:)` is unavailable on iOS.
+            // Keep the supported blocking API off the main actor on this
+            // dedicated serial queue, then bridge its result back to async.
+            try session.setActive(true)
+            continuation.resume()
+          } catch { continuation.resume(throwing: error) }
+        }
+      }
+    #endif
+  }
+}
+
 /// Finds long, effectively-silent tails without modifying the source file.
 /// Native AVQueuePlayer handoff removes player-created gaps; this additionally
 /// prevents several seconds of encoded digital silence from sounding like a
@@ -137,12 +201,16 @@ final class PlaybackController {
   private var itemSongIDs: [ObjectIdentifier: UUID] = [:]
   private var authoritativeItemDurations: [ObjectIdentifier: TimeInterval] = [:]
   private var gaplessPlaybackEndTimes: [ObjectIdentifier: TimeInterval] = [:]
-  private var itemSecurityScopedURLs: [ObjectIdentifier: URL] = [:]
+  private var itemSecurityScopes: [ObjectIdentifier: SecurityScopedAccessPool.Lease] = [:]
   private var gaplessPreloadToken: UUID?
   private var gaplessPreloadSongID: UUID?
   private let library = SongLibrary.shared
   private let historyTracker = ListeningHistoryTracker.shared
-  private var audioSessionConfigured = false
+  private let audioSessionActivation = AudioSessionActivation()
+  private var audioSessionConfigured: Bool {
+    get { audioSessionActivation.isActive }
+    set { if !newValue { audioSessionActivation.invalidate() } }
+  }
   #if os(iOS)
     private var shouldResumeAfterSystemInterruption = false
   #endif
@@ -366,11 +434,11 @@ final class PlaybackController {
   private func resetVocalSliderTimer() {
     vocalSliderTimer?.invalidate()
     vocalSliderTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) {
-      [weak self] _ in
-      Task { @MainActor in
+      [unowned self] _ in
+      Task { @MainActor [unowned self] in
         withAnimation(.easeInOut(duration: 0.5)) {
-          self?.isVocalSliderVisible = false
-          self?.saveState()
+          self.isVocalSliderVisible = false
+          self.saveState()
         }
       }
     }
@@ -520,6 +588,9 @@ final class PlaybackController {
 
   // MARK: - Source Tracking
 
+  private var playbackRequestID = UUID()
+  private var lastSourceValidation = Date.distantPast
+
   private(set) var currentSource: PlaySource = .library
   private var currentPlaylistId: UUID?
 
@@ -530,6 +601,7 @@ final class PlaybackController {
   }
 
   private func cleanupPlayer() {
+    playbackRequestID = UUID()
     if let (observer, obsPlayer) = timeObserver {
       obsPlayer.removeTimeObserver(observer)
       timeObserver = nil
@@ -560,9 +632,7 @@ final class PlaybackController {
     itemSongIDs.removeValue(forKey: key)
     authoritativeItemDurations.removeValue(forKey: key)
     gaplessPlaybackEndTimes.removeValue(forKey: key)
-    if let url = itemSecurityScopedURLs.removeValue(forKey: key) {
-      url.stopAccessingSecurityScopedResource()
-    }
+    itemSecurityScopes.removeValue(forKey: key)?.release()
   }
 
   private func releaseResourcesForQueuedItems() {
@@ -572,8 +642,8 @@ final class PlaybackController {
   }
 
   private func releaseAllSecurityScopes() {
-    itemSecurityScopedURLs.values.forEach { $0.stopAccessingSecurityScopedResource() }
-    itemSecurityScopedURLs.removeAll()
+    itemSecurityScopes.values.forEach { $0.release() }
+    itemSecurityScopes.removeAll()
   }
 
   /// Native queue handoff is used only when both items can stay on
@@ -655,23 +725,11 @@ final class PlaybackController {
     self.updateCurrentLyric()
   }
 
-  private func setupAudioSession() {
-    #if os(iOS)
-      guard !audioSessionConfigured else { return }
-      let session = AVAudioSession.sharedInstance()
-      do {
-        try session.setCategory(
-          .playback,
-          mode: .default,
-          options: []
-        )
-        try session.setActive(true)
-        audioSessionConfigured = true
-      } catch {
-        DiagnosticLog.shared.log("audio-session", "Activation failed: \(error)")
-        print("Audio session error: \(error)")
-      }
-    #endif
+  private func setupAudioSession() async -> Bool {
+    let started = Date()
+    let activated = await audioSessionActivation.ensureActive()
+    DiagnosticLog.shared.log("audio-session", "Activation completed success=\(activated) elapsed=\(Date().timeIntervalSince(started))s")
+    return activated
   }
 
   private func setupNotifications() {
@@ -791,8 +849,18 @@ final class PlaybackController {
   /// skip to the next survivor rather than just stopping.
   private func evictDeletedSongs(_ ids: Set<UUID>) {
     guard !ids.isEmpty else { return }
-
+    guard queue.contains(where: { ids.contains($0.id) })
+      || currentItem.map({ ids.contains($0.id) }) == true
+      || crossfadeNextSong.map({ ids.contains($0.id) }) == true
+    else { return }
     let currentWasDeleted = currentItem.map { ids.contains($0.id) } ?? false
+    if currentWasDeleted {
+      playbackRequestID = UUID()
+      isLoading = false
+      player?.pause()
+      cleanupCrossfade()
+    }
+    if let next = crossfadeNextSong, ids.contains(next.id) { cleanupCrossfade() }
 
     // Pick the successor while the queue still has its original ordering.
     var successor: LibrarySong?
@@ -805,6 +873,18 @@ final class PlaybackController {
 
     queue.removeAll { ids.contains($0.id) }
     originalQueue.removeAll { ids.contains($0.id) }
+
+    // AVQueuePlayer retains open files and decoded buffers independently of
+    // the SwiftData queue. Evict preloaded items too, even if the current song
+    // survived, or a deleted next song can still play at the gapless handoff.
+    if let player {
+      for item in player.items() {
+        if let id = itemSongIDs[ObjectIdentifier(item)], ids.contains(id) {
+          player.remove(item)
+          releaseResources(for: item)
+        }
+      }
+    }
 
     guard currentWasDeleted else {
       // Keep the index pointing at the same song after the queue shrank.
@@ -1088,7 +1168,9 @@ final class PlaybackController {
       // Local/referenced files should recover as soon as their security scope
       // or Bluetooth route is available again.
       self.audioSessionConfigured = false
-      self.setupAudioSession()
+      let request = self.playbackRequestID
+      guard await self.setupAudioSession(), self.playbackRequestID == request,
+        self.isPlaying, self.player?.currentItem === stalledItem else { return }
       self.player?.play()
     }
   }
@@ -1096,11 +1178,9 @@ final class PlaybackController {
   private func observePlayerItemChange() {
     guard let player = player else { return }
     let obs = player.observe(\.currentItem, options: [.new]) {
-      [weak self] player, _ in
-      Task { @MainActor in
-        guard let self = self, let newItem = player.currentItem else {
-          return
-        }
+      [unowned self] player, _ in
+      Task { @MainActor [unowned self] in
+        guard let newItem = player.currentItem else { return }
 
         self.reconcileCurrentPlayerItem(newItem, source: "KVO")
       }
@@ -1108,9 +1188,9 @@ final class PlaybackController {
     playerObservers.append(obs)
 
     let timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) {
-      [weak self] player, _ in
-      Task { @MainActor in
-        guard let self, self.player === player else { return }
+      [unowned self] player, _ in
+      Task { @MainActor [unowned self] in
+        guard self.player === player else { return }
         let reason = player.reasonForWaitingToPlay?.rawValue ?? "none"
         DiagnosticLog.shared.log(
           "player",
@@ -1121,16 +1201,18 @@ final class PlaybackController {
           self.isPlaying
         else { return }
 
-        Task { @MainActor [weak self, weak player] in
+        Task { @MainActor [unowned self] in
           try? await Task.sleep(for: .seconds(2))
-          guard let self, let player, self.player === player,
+          guard self.player === player,
             self.isPlaying,
             player.timeControlStatus == .waitingToPlayAtSpecifiedRate
           else { return }
 
           DiagnosticLog.shared.log("stall", "Recovering player still waiting after 2 seconds")
           self.audioSessionConfigured = false
-          self.setupAudioSession()
+          let request = self.playbackRequestID
+          guard await self.setupAudioSession(), self.playbackRequestID == request,
+            self.player === player, self.isPlaying else { return }
           if player.currentItem == nil {
             self.playNext()
           } else {
@@ -1189,6 +1271,11 @@ final class PlaybackController {
     }
 
     let song = queue[index]
+    guard library.fileExists(for: song) else {
+      player?.pause()
+      rejectUnavailableSource(song)
+      return
+    }
     if currentItem?.id != song.id || currentQueueIndex != index {
       DiagnosticLog.shared.log(
         "transition",
@@ -1282,13 +1369,14 @@ final class PlaybackController {
     from source: PlaySource = .library,
     playlistId: UUID? = nil
   ) {
+    guard !library.isResetting else { return }
     DiagnosticLog.shared.log(
       "playback",
       "Play requested title=\(song.title) format=\(library.getFileURL(for: song).pathExtension.lowercased()) storage=\(song.storageMode) queueIndex=\(currentQueueIndex)/\(queue.count)"
     )
     print("[VALIDATION] PlaybackController: play triggered for \(song.title)")
 
-    if let current = currentItem {
+    if currentItem != nil {
       // Record end of current song before starting new one
       // Count as skip if listened for less than 10 seconds
       let isSkip = currentTime < 10
@@ -1299,8 +1387,6 @@ final class PlaybackController {
     currentSource = source
     currentPlaylistId = playlistId
 
-    setupAudioSession()
-
     // Must go through the library: a referenced song (Copy Imported Music
     // off) lives outside the container and its file is invisible to a plain
     // FileManager check until security-scoped access is opened.
@@ -1308,10 +1394,20 @@ final class PlaybackController {
       print(
         "[ERROR] PlaybackController: Audio file not found: \(library.getFileURL(for: song).path)")
       isLoading = false
+      rejectUnavailableSource(song)
       return
     }
 
+    let requestID = UUID()
+    playbackRequestID = requestID
+    let requestedSongID = song.id
     Task {
+      defer {
+        if playbackRequestID == requestID { isLoading = false }
+      }
+      guard await setupAudioSession(), playbackRequestID == requestID,
+        let song = library.song(id: requestedSongID)
+      else { return }
       let item = await createPlayerItem(
         for: song,
         trimTrailingSilence: shouldTrimGaplessEnding(
@@ -1321,6 +1417,13 @@ final class PlaybackController {
       )
 
       await MainActor.run {
+        guard self.playbackRequestID == requestID,
+          let song = self.library.song(id: requestedSongID),
+          self.library.fileExists(for: song)
+        else {
+          self.releaseResources(for: item)
+          return
+        }
         print(
           "[VALIDATION] PlaybackController: AVPlayerItem ready with audioMix: \(item.audioMix != nil)"
         )
@@ -1373,6 +1476,7 @@ final class PlaybackController {
   }
 
   func prepareForExternalPlayback() {
+    playbackRequestID = UUID()
     player?.pause()
     isPlaying = false
     isLoading = false
@@ -1385,9 +1489,8 @@ final class PlaybackController {
     includeAudioProcessing: Bool? = nil,
     trimTrailingSilence: Bool = false
   ) async -> AVPlayerItem {
+    let access = LibraryMonitorService.shared.acquirePlaybackAccess(for: song)
     let url = library.getFileURL(for: song)
-
-    let secured = song.storageMode == .referenced && url.startAccessingSecurityScopedResource()
 
     // Several valid FLAC files omit an optional SEEKTABLE metadata block.
     // AVFoundation's default approximate-timing mode then reports that an
@@ -1404,7 +1507,7 @@ final class PlaybackController {
     let songID = song.id
     let songTitle = song.title
     itemSongIDs[itemKey] = songID
-    if secured { itemSecurityScopedURLs[itemKey] = url }
+    if let access { itemSecurityScopes[itemKey] = access }
 
     if trimTrailingSilence {
       // This never delays playback. For the current item it runs alongside
@@ -1446,7 +1549,7 @@ final class PlaybackController {
         self.authoritativeItemDurations[itemKey] = resolved
         DiagnosticLog.shared.log(
           "duration",
-          "Resolved asset=\(assetDuration) tracks=\(trackDurations) fixed=\(resolved) song=\(song.title)"
+          "Resolved asset=\(assetDuration) tracks=\(trackDurations) fixed=\(resolved) song=\(songTitle)"
         )
         guard self.player?.currentItem === item else { return }
         self.applyResolvedDuration(resolved, source: "asset timeline")
@@ -1462,6 +1565,9 @@ final class PlaybackController {
     if shouldProcess {
       do {
       let tracks = try await asset.loadTracks(withMediaType: .audio)
+      guard let song = library.song(id: songID), itemSongIDs[itemKey] == songID else {
+        return item
+      }
       if let audioTrack = tracks.first {
         let instrumentActivity = SonicRecommendationService.shared.instrumentActivity(for: song)
         if let audioMix = VocalIsolator.shared.createAudioMix(
@@ -1485,14 +1591,14 @@ final class PlaybackController {
         print("[ERROR] PlaybackController: No audio track found for \(song.title)")
       }
       } catch {
-        DiagnosticLog.shared.log("error", "Audio processing setup failed title=\(song.title): \(error)")
+        DiagnosticLog.shared.log("error", "Audio processing setup failed title=\(songTitle): \(error)")
         print("[ERROR] PlaybackController: Failed to load tracks: \(error)")
       }
     }
 
     DiagnosticLog.shared.log(
       "player-item",
-      "Created title=\(song.title) preciseTiming=true processing=\(shouldProcess) referencedScope=\(secured)"
+      "Created title=\(songTitle) preciseTiming=true processing=\(shouldProcess) sourceLease=\(access != nil)"
     )
     observePlayerItem(item)
     return item
@@ -1500,18 +1606,18 @@ final class PlaybackController {
 
   private func observePlayerItem(_ item: AVPlayerItem) {
     let statusObs = item.observe(\.status, options: [.new]) {
-      [weak self] item, _ in
-      Task { @MainActor in
+      [unowned self] item, _ in
+      Task { @MainActor [unowned self] in
         if item.status == .readyToPlay {
-          DiagnosticLog.shared.log("player-item", "Ready song=\(self?.itemSongIDs[ObjectIdentifier(item)]?.uuidString ?? "unknown")")
+          DiagnosticLog.shared.log("player-item", "Ready song=\(self.itemSongIDs[ObjectIdentifier(item)]?.uuidString ?? "unknown")")
           print("[VALIDATION] PlaybackController: AVPlayerItem status .readyToPlay")
           // Only the item actually playing may set the duration. Gapless
           // preloads the *next* track while this one is still going, and it
           // becomes ready mid-playback — without this guard it overwrote the
           // current track's duration with the next one's, so the scrubber hit
           // the end early and playback appeared to run past it.
-          guard self?.player?.currentItem === item else { return }
-          self?.applyDurationReportedByPlayer(
+          guard self.player?.currentItem === item else { return }
+          self.applyDurationReportedByPlayer(
             CMTimeGetSeconds(item.duration),
             for: item,
             source: "player item"
@@ -1523,9 +1629,9 @@ final class PlaybackController {
           // Only the actively-playing item failing needs a response — a
           // preloaded next-item failure just gets discovered fresh when
           // play() reaches it. Skip ahead rather than sitting on a dead item.
-          if self?.player?.currentItem === item {
-            self?.playNext()
-          } else if let self, self.player?.items().contains(where: { $0 === item }) == true {
+          if self.player?.currentItem === item {
+            self.playNext()
+          } else if self.player?.items().contains(where: { $0 === item }) == true {
             self.player?.remove(item)
             self.releaseResources(for: item)
             self.prepareNextItem()
@@ -1534,9 +1640,9 @@ final class PlaybackController {
       }
     }
     let durationObs = item.observe(\.duration, options: [.new]) {
-      [weak self] item, _ in
-      Task { @MainActor in
-        guard let self, self.player?.currentItem === item else { return }
+      [unowned self] item, _ in
+      Task { @MainActor [unowned self] in
+        guard self.player?.currentItem === item else { return }
         self.applyDurationReportedByPlayer(
           item.duration.seconds,
           for: item,
@@ -1617,6 +1723,7 @@ final class PlaybackController {
       print("[VALIDATION] PlaybackController: preparing next item \(nextSong.title)")
 
       Task {
+        guard let nextSong = library.song(id: expectedNextSongID) else { return }
         let nextItem = await createPlayerItem(
           for: nextSong,
           includeAudioProcessing: false,
@@ -1639,7 +1746,8 @@ final class PlaybackController {
             self.currentItem?.id == expectedCurrentSongID,
             self.currentQueueIndex + 1 == nextIndex,
             nextIndex < self.queue.count,
-            self.queue[nextIndex].id == expectedNextSongID
+            self.queue[nextIndex].id == expectedNextSongID,
+            self.library.fileExists(for: self.queue[nextIndex])
           else {
             self.releaseResources(for: nextItem)
             return
@@ -1739,7 +1847,10 @@ final class PlaybackController {
   }
 
   func play() {
-    setupAudioSession()
+    if let song = currentItem, !library.fileExists(for: song) {
+      rejectUnavailableSource(song)
+      return
+    }
     guard let player = player else {
       if let song = currentItem {
         play(song, from: currentSource, playlistId: currentPlaylistId)
@@ -1747,15 +1858,47 @@ final class PlaybackController {
       return
     }
 
-    player.play()
-    DiagnosticLog.shared.log("playback", "Resume title=\(currentItem?.title ?? "unknown") at=\(currentTime)")
-    isPlaying = true
-    historyTracker.songResumed()
-    refreshAnimatedArtworkForCurrentSong()
-    updateNowPlaying()
+    let request = UUID()
+    playbackRequestID = request
+    let songID = currentItem?.id
+    isLoading = true
+    Task {
+      defer { if playbackRequestID == request { isLoading = false } }
+      guard await setupAudioSession(), playbackRequestID == request,
+        self.player === player, currentItem?.id == songID, !library.isResetting else { return }
+      if let song = currentItem, !library.fileExists(for: song) {
+        rejectUnavailableSource(song)
+        return
+      }
+      player.play()
+      DiagnosticLog.shared.log("playback", "Resume title=\(currentItem?.title ?? "unknown") at=\(currentTime)")
+      isPlaying = true
+      historyTracker.songResumed()
+      refreshAnimatedArtworkForCurrentSong()
+      updateNowPlaying()
+    }
+  }
+
+  private func rejectUnavailableSource(_ song: LibrarySong) {
+    let wasCurrent = currentItem?.id == song.id
+    let wasDeleted = library.referencedSourceWasDeleted(for: song)
+    if wasCurrent {
+      player?.pause()
+      cleanupCrossfade()
+      cleanupPlayer()
+      isPlaying = false
+      isLoading = false
+    }
+    if wasDeleted {
+      library.removeSongsWhoseFilesDisappeared([song])
+    } else if wasCurrent {
+      updateNowPlaying()
+    }
   }
 
   func pause() {
+    playbackRequestID = UUID()
+    isLoading = false
     #if os(iOS)
       // An explicit pause, including one from headphones or the Lock Screen,
       // cancels any pending automatic resume from an earlier interruption.
@@ -1775,6 +1918,8 @@ final class PlaybackController {
   }
 
   func stopForSleepTimer(resetPosition: Bool = false) {
+    playbackRequestID = UUID()
+    isLoading = false
     player?.pause()
     isPlaying = false
     historyTracker.songPaused()
@@ -1794,7 +1939,7 @@ final class PlaybackController {
 
   func playPause() {
     guard currentItem != nil else { return }
-    if isPlaying {
+    if isPlaying || isLoading {
       pause()
     } else {
       play()
@@ -1868,10 +2013,10 @@ final class PlaybackController {
     }
 
     seekingPlayer.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) {
-      [weak self] finished in
-      Task { @MainActor in
+      [unowned self] finished in
+      Task { @MainActor [unowned self] in
         // A newer seek has superseded this one; its own handler owns the state.
-        guard let self, self.seekToken == token else { return }
+        guard self.seekToken == token else { return }
         guard self.player === seekingPlayer,
           seekingPlayer.currentItem === seekingItem
         else {
@@ -2002,7 +2147,7 @@ final class PlaybackController {
   func playNext() {
     cleanupCrossfade()
 
-    if let current = currentItem, currentTime < 10 {
+    if currentItem != nil, currentTime < 10 {
       historyTracker.songEnded(skipped: true)
     } else {
       historyTracker.songEnded(skipped: false)
@@ -2123,10 +2268,17 @@ final class PlaybackController {
 
     // Insert into AVQueuePlayer
     if let player = player {
+      let songID = song.id
       let item = await createPlayerItem(
         for: song,
         trimTrailingSilence: insertIndex < queue.count - 1 || repeatMode == .all
       )
+      guard self.player === player, let song = library.song(id: songID),
+        queue.contains(where: { $0.id == songID }), library.fileExists(for: song)
+      else {
+        releaseResources(for: item)
+        return
+      }
       player.insert(item, after: player.currentItem)
     }
     saveState()
@@ -2200,7 +2352,10 @@ final class PlaybackController {
   /// Unlike `clearQueue`, this intentionally does not persist playback state,
   /// because that state is about to be deleted as part of the same operation.
   func prepareForLibraryReset() {
+    cleanupCrossfade()
     cleanupPlayer()
+    isLoading = false
+    duration = 0
     isPlaying = false
     queue.removeAll()
     originalQueue.removeAll()
@@ -2209,6 +2364,8 @@ final class PlaybackController {
     currentTime = 0
     lyricsClock.currentTime = 0
     currentLyricIndex = 0
+    currentLyrics = nil
+    persistentState = nil
     historyTracker.discardCurrentSong()
     updateNowPlaying()
   }
@@ -2588,8 +2745,14 @@ final class PlaybackController {
     let resolvedQueueIndex =
       nearestPlayableIndex(in: restoredQueue, startingAt: preferredIndex) ?? preferredIndex
 
+    let scheduledRequestID = playbackRequestID
+    let restoredIDs = restoredQueue.map(\.id)
+    let restoredTime = state.lastTime
+    let restoredSource = PlaySource(rawValue: state.lastSourceRaw ?? "library") ?? .library
+    let restoredPlaylistID = state.lastPlaylistId
     if !restoredQueue.isEmpty {
       Task { @MainActor in
+        guard playbackRequestID == scheduledRequestID, !library.isResetting else { return }
         print(
           "[DEBUG] PlaybackController.restoreState.MainActor: Setting up UI"
         )
@@ -2597,13 +2760,11 @@ final class PlaybackController {
         // Clean up any existing player before creating a new one
         self.cleanupPlayer()
 
-        self.queue = restoredQueue
-        self.originalQueue = restoredQueue
+        self.queue = library.songs(ids: restoredIDs)
+        self.originalQueue = queue
         self.currentQueueIndex = resolvedQueueIndex
-        self.currentSource =
-          PlaySource(rawValue: state.lastSourceRaw ?? "library")
-          ?? .library
-        self.currentPlaylistId = state.lastPlaylistId
+        self.currentSource = restoredSource
+        self.currentPlaylistId = restoredPlaylistID
 
         if currentQueueIndex < queue.count, library.fileExists(for: queue[currentQueueIndex]) {
           let song = queue[currentQueueIndex]
@@ -2611,11 +2772,13 @@ final class PlaybackController {
             "[DEBUG] PlaybackController.restoreState.MainActor: Current song: \(song.title)"
           )
           self.currentItem = song
-          self.currentTime = state.lastTime
-          self.lyricsClock.currentTime = state.lastTime
+          self.currentTime = restoredTime
+          self.lyricsClock.currentTime = restoredTime
           self.isPlaying = false
 
           // Prepare player but don't play
+          let restoreRequestID = playbackRequestID
+          let restoreSongID = song.id
           let item = await createPlayerItem(
             for: song,
             trimTrailingSilence: shouldTrimGaplessEnding(
@@ -2623,6 +2786,12 @@ final class PlaybackController {
               songID: song.id
             )
           )
+          guard playbackRequestID == restoreRequestID,
+            let song = library.song(id: restoreSongID), library.fileExists(for: song)
+          else {
+            releaseResources(for: item)
+            return
+          }
           self.player = AVQueuePlayer(items: [item])
           self.player?.automaticallyWaitsToMinimizeStalling = false
           self.applyRepeatModeToPlayer()
@@ -2630,7 +2799,7 @@ final class PlaybackController {
           self.applyPlayerOutputVolume()
           item.seek(
             to: CMTime(
-              seconds: state.lastTime,
+              seconds: restoredTime,
               preferredTimescale: 600
             ),
             completionHandler: nil
@@ -2669,16 +2838,23 @@ final class PlaybackController {
   private var crossfadeStarted = false
 
   private func startCrossfade(to nextSong: LibrarySong) {
-    guard repeatMode != .one, !crossfadeStarted else { return }
+    guard repeatMode != .one, !crossfadeStarted, library.fileExists(for: nextSong) else { return }
+    let nextSongID = nextSong.id
     crossfadeStarted = true
     crossfadeNextSong = nextSong
 
     Task {
+      guard let nextSong = library.song(id: nextSongID) else { return }
       let item = await createPlayerItem(for: nextSong)
       await MainActor.run {
         guard self.repeatMode != .one, self.crossfadeStarted,
-          self.crossfadeNextSong?.id == nextSong.id
-        else { return }
+          let nextSong = self.library.song(id: nextSongID),
+          self.crossfadeNextSong?.id == nextSongID,
+          self.library.fileExists(for: nextSong)
+        else {
+          self.releaseResources(for: item)
+          return
+        }
         let cf = AVPlayer(playerItem: item)
         cf.volume = 0
         self.crossfadePlayer = cf
@@ -2717,7 +2893,7 @@ final class PlaybackController {
       return
     }
 
-    guard currentQueueIndex + 1 < queue.count else {
+    guard currentQueueIndex + 1 < queue.count, library.fileExists(for: nextSong) else {
       cleanupCrossfade()
       return
     }
@@ -2751,6 +2927,9 @@ final class PlaybackController {
 
   private func cleanupCrossfade() {
     crossfadePlayer?.pause()
+    if let item = crossfadePlayer?.currentItem, item !== player?.currentItem {
+      releaseResources(for: item)
+    }
     crossfadePlayer = nil
     crossfadeNextSong = nil
     crossfadeStarted = false
@@ -2803,6 +2982,18 @@ final class PlaybackController {
       [weak self] time in
       MainActor.assumeIsolated {
         guard let self = self, !self.isScrubbing, !self.isSeeking else { return }
+        // Providers do not always deliver file-presenter events (especially
+        // while backgrounded). Stop a buffered/open item whose source vanished.
+        if Date().timeIntervalSince(self.lastSourceValidation) >= 2 {
+          self.lastSourceValidation = Date()
+          if let song = self.currentItem, !self.library.fileExists(for: song) {
+            self.rejectUnavailableSource(song)
+            return
+          }
+          if let next = self.crossfadeNextSong, !self.library.fileExists(for: next) {
+            self.cleanupCrossfade()
+          }
+        }
         if let activeItem = player.currentItem {
           self.reconcileCurrentPlayerItem(activeItem, source: "periodic clock")
         }

@@ -25,7 +25,7 @@
                             </label>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="launch-safe-area"/>
-                        <color key="backgroundColor" red="0.027" green="0.008" blue="0.051" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                        <color key="backgroundColor" white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                         <constraints>
                             <constraint firstItem="launch-mark" firstAttribute="width" constant="252" id="mark-width"/>
                             <constraint firstItem="launch-mark" firstAttribute="height" constant="160" id="mark-height"/>

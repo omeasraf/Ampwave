@@ -15,7 +15,7 @@ struct OnboardingView: View {
   @Environment(ThemeManager.self) private var themeManager
   @State private var page = 0
 
-  @AppStorage("com.ampwave.onboarding.copyToStorage") private var copyToStorage = true
+  @AppStorage("com.ampwave.onboarding.copyToStorage") private var copyToStorage = false
   @AppStorage("com.ampwave.onboarding.autoFetchMetadata") private var autoFetchMetadata = true
   @AppStorage("com.ampwave.onboarding.autoFetchLyrics") private var autoFetchLyrics = true
   @AppStorage("com.ampwave.onboarding.gaplessPlayback") private var gaplessPlayback = true

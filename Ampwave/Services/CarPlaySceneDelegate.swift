@@ -37,7 +37,8 @@
     }
 
     public func templateApplicationScene(
-      _ scene: CPTemplateApplicationScene, didDisconnect controller: CPInterfaceController
+      _ scene: CPTemplateApplicationScene,
+      didDisconnectInterfaceController controller: CPInterfaceController
     ) {
       print("[DEBUG] CarPlay: Disconnected")
       CPNowPlayingTemplate.shared.remove(self)
@@ -141,7 +142,7 @@
         let item = CPListItem(text: song.title, detailText: song.artist)
         item.setImage(loadUIImage(from: song.effectiveArtworkPath, size: 60))
         item.accessoryType = .none
-        item.handler = { [weak self] _, completion in
+        item.handler = { _, completion in
           Task { @MainActor in
             PlaybackController.shared.play(song, from: .library)
             completion()

@@ -28,7 +28,7 @@ enum ArtistParser {
   static func parseArtists(from artistString: String) -> [String] {
     guard !artistString.isEmpty else { return [] }
 
-    var remaining = artistString
+    let remaining = artistString
     var artists: [String] = []
 
     // Try to split by each delimiter in order of preference

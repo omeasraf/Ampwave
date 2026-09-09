@@ -28,14 +28,12 @@ enum UnicodeCleanup {
     
     private static func repairEncoding(_ input: String) -> String {
         // Handle common double-encoding cases or replacement characters
-        var result = input
-        
         // Replace replacement characters if we can guess them, otherwise leave them
         // result = result.replacingOccurrences(of: "", with: "") // Risky to just remove
         
         // Repair common mojibake if detected (highly specific to language, but let's stick to basics)
         
-        return result
+        return input
     }
     
     /// Normalizes a string for comparison (lowercase, stripped diacritics, noise removed)

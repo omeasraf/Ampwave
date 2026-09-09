@@ -17,6 +17,7 @@ enum RecommendationReason: Equatable {
   case trending
   case becauseYouListenedTo(String)
   case heavyRotation
+  case favorite
 }
 
 extension RecommendationReason {
@@ -44,6 +45,8 @@ extension RecommendationReason {
       return "Because you listened to \(item)"
     case .heavyRotation:
       return "On heavy rotation"
+    case .favorite:
+      return "One of your favorites"
     }
   }
 }

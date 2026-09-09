@@ -68,10 +68,8 @@ struct AlbumArtworkView: View {
     guard let path = artworkPath, !path.isEmpty else { return }
 
     // Check memory cache first
-    if let cached = await ImageCache.shared.image(for: path) {
-      await MainActor.run {
-        self.image = cached
-      }
+    if let cached = ImageCache.shared.image(for: path) {
+      self.image = cached
       return
     }
 
@@ -82,17 +80,13 @@ struct AlbumArtworkView: View {
       let data = try Data(contentsOf: url)
       #if os(iOS)
         if let loadedImage = UIImage(data: data) {
-          await ImageCache.shared.insert(loadedImage, for: path)
-          await MainActor.run {
-            self.image = loadedImage
-          }
+          ImageCache.shared.insert(loadedImage, for: path)
+          self.image = loadedImage
         }
       #else
         if let loadedImage = NSImage(data: data) {
-          await ImageCache.shared.insert(loadedImage, for: path)
-          await MainActor.run {
-            self.image = loadedImage
-          }
+          ImageCache.shared.insert(loadedImage, for: path)
+          self.image = loadedImage
         }
       #endif
     } catch {}

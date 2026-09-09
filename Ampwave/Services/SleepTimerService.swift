@@ -88,9 +88,9 @@ final class SleepTimerService {
     updateRemaining(until: endDate)
 
     countdownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) {
-      [weak self] _ in
-      Task { @MainActor in
-        self?.updateRemaining(until: endDate)
+      [unowned self] _ in
+      Task { @MainActor [unowned self] in
+        self.updateRemaining(until: endDate)
       }
     }
   }

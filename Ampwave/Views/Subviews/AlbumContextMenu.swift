@@ -14,8 +14,6 @@ struct AlbumContextMenuModifier: ViewModifier {
 
   @State private var showingAddToPlaylist = false
   @State private var isDeletingShown = false
-  @State private var showArtist = false
-  @State private var showAlbum = false
   @Query private var userPreferences: [UserPreferences]
 
   private var playback: PlaybackController { PlaybackController.shared }
@@ -31,23 +29,6 @@ struct AlbumContextMenuModifier: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .background {
-        ZStack {
-          if let artistName = (self as? AlbumContextMenuModifier)?.album.artist
-            ?? (self as? SongContextMenuModifier)?.song.artist,
-            let artist = library.getArtist(named: artistName)
-          {
-            NavigationLink("", destination: ArtistView(artist: artist), isActive: $showArtist)
-          }
-          if let song = (self as? SongContextMenuModifier)?.song,
-            let albumName = song.album,
-            let album = library.getAlbum(named: albumName, artist: song.artist)
-          {
-            NavigationLink("", destination: AlbumView(album: album), isActive: $showAlbum)
-          }
-        }
-        .hidden()
-      }
       .contextMenu {
         Button {
           playback.playAlbum(album)
@@ -66,7 +47,10 @@ struct AlbumContextMenuModifier: ViewModifier {
 
         if let artistName = album.artist, library.getArtist(named: artistName) != nil {
           Button {
-            showArtist = true
+            guard let artistName = album.artist,
+              let artist = library.getArtist(named: artistName)
+            else { return }
+            AppNavigator.shared.show(.artist(artist), collapsingPlayer: false)
           } label: {
             Label("Show Artist", systemImage: "person")
           }
@@ -184,8 +168,6 @@ struct SongContextMenuModifier: ViewModifier {
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
   @State private var isDeletingShown = false
-  @State private var showArtist = false
-  @State private var showAlbum = false
   @Query private var userPreferences: [UserPreferences]
 
   private var playback: PlaybackController { PlaybackController.shared }
@@ -199,23 +181,6 @@ struct SongContextMenuModifier: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .background {
-        ZStack {
-          if let artistName = (self as? AlbumContextMenuModifier)?.album.artist
-            ?? (self as? SongContextMenuModifier)?.song.artist,
-            let artist = library.getArtist(named: artistName)
-          {
-            NavigationLink("", destination: ArtistView(artist: artist), isActive: $showArtist)
-          }
-          if let song = (self as? SongContextMenuModifier)?.song,
-            let albumName = song.album,
-            let album = library.getAlbum(named: albumName, artist: song.artist)
-          {
-            NavigationLink("", destination: AlbumView(album: album), isActive: $showAlbum)
-          }
-        }
-        .hidden()
-      }
       .contextMenu {
         Button {
           playback.play(song)
@@ -279,17 +244,21 @@ struct SongContextMenuModifier: ViewModifier {
 
         if library.getArtist(named: song.artist) != nil {
           Button {
-            showArtist = true
+            guard let artist = library.getArtist(named: song.artist) else { return }
+            AppNavigator.shared.show(.artist(artist), collapsingPlayer: false)
           } label: {
             Label("Show Artist", systemImage: "person")
           }
         }
 
         if let albumName = song.album,
-          let album = library.getAlbum(named: albumName, artist: song.artist)
+          library.getAlbum(named: albumName, artist: song.artist) != nil
         {
           Button {
-            showAlbum = true
+            guard let albumName = song.album,
+              let album = library.getAlbum(named: albumName, artist: song.artist)
+            else { return }
+            AppNavigator.shared.show(.album(album), collapsingPlayer: false)
           } label: {
             Label("Show Album", systemImage: "square.stack")
           }

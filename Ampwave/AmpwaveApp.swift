@@ -35,7 +35,8 @@ private struct AppThemeChrome: ViewModifier {
 @main
 struct AmpwaveApp: App {
   // Shared model container for SwiftData
-  let modelContainer: ModelContainer
+  let modelContainer: ModelContainer?
+  let persistenceStartupError: String?
   @Environment(\.scenePhase) private var scenePhase
 
   init() {
@@ -86,15 +87,17 @@ struct AmpwaveApp: App {
 
     do {
       print("[DEBUG] Creating ModelContainer")
-      modelContainer = try ModelContainer(
+      let container = try ModelContainer(
         for: schema,
         configurations: [modelConfiguration]
       )
+      modelContainer = container
+      persistenceStartupError = nil
       print("[DEBUG] ModelContainer created successfully")
       if #available(iOS 17.0, macOS 14.0, *) {
-        SiriIntentEnvironment.configure(modelContext: modelContainer.mainContext)
+        SiriIntentEnvironment.configure(modelContext: container.mainContext)
       }
-      SonicRecommendationService.shared.setModelContext(modelContainer.mainContext)
+      SonicRecommendationService.shared.setModelContext(container.mainContext)
       SongLibrary.songWasImported = { song in
         SonicRecommendationService.shared.enqueueAnalysis(for: song)
       }
@@ -108,7 +111,12 @@ struct AmpwaveApp: App {
       }
 
     } catch {
-      fatalError("Could not initialize ModelContainer: \(error)")
+      modelContainer = nil
+      persistenceStartupError = error.localizedDescription
+      DiagnosticLog.shared.log(
+        "persistence",
+        "ModelContainer initialization failed without modifying the store: \(error)"
+      )
     }
 
   }
@@ -118,23 +126,31 @@ struct AmpwaveApp: App {
       // `ThemeManager` must be on an ancestor of `AppThemeChrome` — environment only flows down,
       // so it cannot be read from a ViewModifier applied after `.environment(...)` on the same leaf.
       Group {
-        #if os(macOS)
-          MacOSMainView()
-            .environment(\.modelContext, modelContainer.mainContext)
+        if let modelContainer {
+          Group {
+            #if os(macOS)
+              MacOSMainView()
+                .environment(\.modelContext, modelContainer.mainContext)
+                .modifier(AppThemeChrome())
+            #else
+              ContentView()
+                .environment(\.modelContext, modelContainer.mainContext)
+                .modifier(AppThemeChrome())
+                .onAppear {
+                  print("[DEBUG] App completely loaded and onAppear")
+                  // Re-register shortcuts once the scene is fully live so Siri
+                  // picks up the latest phrase list even if init() ran too early.
+                  if #available(iOS 17.0, macOS 14.0, *) {
+                    AmpwaveShortcuts.updateAppShortcutParameters()
+                  }
+                }
+            #endif
+          }
+          .modelContainer(modelContainer)
+        } else {
+          PersistenceUnavailableView(details: persistenceStartupError)
             .modifier(AppThemeChrome())
-        #else
-          ContentView()
-            .environment(\.modelContext, modelContainer.mainContext)
-            .modifier(AppThemeChrome())
-            .onAppear {
-              print("[DEBUG] App completely loaded and onAppear")
-              // Re-register shortcuts once the scene is fully live so Siri
-              // picks up the latest phrase list even if init() ran too early.
-              if #available(iOS 17.0, macOS 14.0, *) {
-                AmpwaveShortcuts.updateAppShortcutParameters()
-              }
-            }
-        #endif
+        }
       }
       .environment(ThemeManager.shared)
       .environment(SleepTimerService.shared)
@@ -165,14 +181,19 @@ struct AmpwaveApp: App {
         }
       #endif
     }
-    .modelContainer(modelContainer)
 
     #if os(macOS)
       Window("Lyrics", id: "lyrics") {
         Group {
-          MacOSLyricsWindowView()
-            .environment(\.modelContext, modelContainer.mainContext)
-            .modifier(AppThemeChrome())
+          if let modelContainer {
+            MacOSLyricsWindowView()
+              .environment(\.modelContext, modelContainer.mainContext)
+              .modifier(AppThemeChrome())
+              .modelContainer(modelContainer)
+          } else {
+            PersistenceUnavailableView(details: persistenceStartupError)
+              .modifier(AppThemeChrome())
+          }
         }
         .environment(ThemeManager.shared)
         .environment(SleepTimerService.shared)
@@ -186,6 +207,14 @@ struct AmpwaveApp: App {
   private func handleOpenURL(_ url: URL) {
     guard url.pathExtension.lowercased() == CapsulePackage.fileExtension else {
       AmpwaveURLRouter.handle(url)
+      return
+    }
+
+    guard let modelContainer else {
+      NotificationCenter.default.post(
+        name: .capsuleImportFailed,
+        object: "The library database is unavailable. Restart Ampwave and try again."
+      )
       return
     }
 
@@ -206,5 +235,40 @@ struct AmpwaveApp: App {
         )
       }
     }
+  }
+}
+
+private struct PersistenceUnavailableView: View {
+  let details: String?
+  @Environment(ThemeManager.self) private var themeManager
+
+  var body: some View {
+    VStack(spacing: 18) {
+      Image(systemName: "externaldrive.badge.exclamationmark")
+        .font(.system(size: 46, weight: .medium))
+        .foregroundStyle(themeManager.accentColor)
+
+      Text("Library Unavailable")
+        .font(.title2.bold())
+        .foregroundStyle(themeManager.primaryTextColor)
+
+      Text(
+        "Ampwave could not open its library database. Your music and database files were left untouched. Restart the app, and share the latest diagnostic log if the problem continues."
+      )
+      .font(.body)
+      .foregroundStyle(themeManager.secondaryTextColor)
+      .multilineTextAlignment(.center)
+
+      if let details, !details.isEmpty {
+        Text(details)
+          .font(.caption)
+          .foregroundStyle(themeManager.secondaryTextColor)
+          .multilineTextAlignment(.center)
+          .textSelection(.enabled)
+      }
+    }
+    .padding(32)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(themeManager.backgroundColor)
   }
 }

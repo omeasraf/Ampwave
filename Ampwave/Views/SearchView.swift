@@ -30,11 +30,7 @@ struct SearchView: View {
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      if !searchText.isEmpty {
-        filterPicker
-      }
-
+    Group {
       if searchText.isEmpty {
         SearchEmptyState(
           recentSearches: recentSearches,
@@ -42,19 +38,23 @@ struct SearchView: View {
           onClearRecent: clearRecentSearches
         )
       } else {
-        ZStack(alignment: .top) {
-          SearchResultsView(
-            query: debouncedQuery,
-            filter: selectedFilter,
-            onResultTapped: { persistSearchIfNeeded(debouncedQuery) }
-          )
-
+        SearchResultsView(
+          query: debouncedQuery,
+          filter: selectedFilter,
+          onResultTapped: { persistSearchIfNeeded(debouncedQuery) }
+        )
+        .overlay(alignment: .top) {
           if isDebouncing || searchManager.isIndexing {
             ProgressView()
               .controlSize(.small)
               .padding(.top, 12)
           }
         }
+      }
+    }
+    .safeAreaBar(edge: .top, spacing: 0) {
+      if !searchText.isEmpty {
+        filterPicker
       }
     }
     .background(themeManager.backgroundColor)

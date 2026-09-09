@@ -52,15 +52,14 @@ struct ArtworkImage: View {
     guard let path = artworkPath, !path.isEmpty else { return }
 
     // Check memory cache first
-    if let cached = await ImageCache.shared.image(for: path) {
+    if let cached = ImageCache.shared.image(for: path) {
       self.image = cached
       return
     }
 
     // Resolve path and load from disk in background
+    guard let url = PathManager.resolve(path) else { return }
     let task = Task.detached(priority: .userInitiated) { () -> PlatformImage? in
-      guard let url = PathManager.resolve(path) else { return nil }
-
       do {
         let data = try Data(contentsOf: url)
         #if os(iOS)
@@ -74,7 +73,7 @@ struct ArtworkImage: View {
     }
 
     if let loadedImage = await task.value {
-      await ImageCache.shared.insert(loadedImage, for: path)
+      ImageCache.shared.insert(loadedImage, for: path)
       self.image = loadedImage
     }
   }
@@ -120,14 +119,13 @@ struct ArtistImageView: View {
   private func loadImage() async {
     guard let path = artworkPath, !path.isEmpty else { return }
 
-    if let cached = await ImageCache.shared.image(for: path) {
+    if let cached = ImageCache.shared.image(for: path) {
       self.image = cached
       return
     }
 
+    guard let url = PathManager.resolve(path) else { return }
     let task = Task.detached(priority: .userInitiated) { () -> PlatformImage? in
-      guard let url = PathManager.resolve(path) else { return nil }
-
       do {
         let data = try Data(contentsOf: url)
         #if os(iOS)
@@ -141,7 +139,7 @@ struct ArtistImageView: View {
     }
 
     if let loadedImage = await task.value {
-      await ImageCache.shared.insert(loadedImage, for: path)
+      ImageCache.shared.insert(loadedImage, for: path)
       self.image = loadedImage
     }
   }

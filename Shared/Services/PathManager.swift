@@ -8,39 +8,71 @@
 import Foundation
 
 public enum PathManager {
-  static var baseDirectory: URL {
+  /// Audio references must not use the legacy artwork/managed-file repair
+  /// heuristics in `resolve`. An absent external path stays external.
+  nonisolated static func referencedURL(for path: String) -> URL {
+    if path.hasPrefix("/") {
+      return URL(fileURLWithPath: path).standardizedFileURL
+    }
+    return baseDirectory.appendingPathComponent(path).standardizedFileURL
+  }
+
+  nonisolated static func isInside(_ url: URL, directory: URL) -> Bool {
+    let components = url.standardizedFileURL.pathComponents
+    let root = directory.standardizedFileURL.pathComponents
+    return components.count > root.count && components.starts(with: root)
+  }
+
+  /// Bookmarks can follow a deleted item into the provider's trash. Such an
+  /// item is no longer part of the source library even while its bytes exist.
+  nonisolated static func isTrashed(_ url: URL) -> Bool {
+    url.standardizedFileURL.pathComponents.contains {
+      [".trash", ".trashes", ".recentlydeleted"].contains($0.lowercased())
+    }
+  }
+
+  nonisolated static func isDefinitelyMissing(_ url: URL) -> Bool {
+    do {
+      // Enumerated URLs can retain cached resource values after deletion.
+      // Ask the filesystem again instead of trusting that snapshot.
+      _ = try FileManager.default.attributesOfItem(atPath: url.path)
+      return false
+    } catch {
+      let error = error as NSError
+      // Permission, provider-offline and incomplete enumeration errors are
+      // not deletion evidence. Keep those records so reconnecting can recover.
+      return error.domain == NSCocoaErrorDomain
+        && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code)
+    }
+  }
+
+  nonisolated static var baseDirectory: URL {
     if let sharedURL = sharedContainerURL {
       return sharedURL
     }
     return documentsDirectory
   }
 
-  static var documentsDirectory: URL {
+  nonisolated static var documentsDirectory: URL {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
   }
 
-  static var sharedContainerURL: URL? {
+  nonisolated static var sharedContainerURL: URL? {
     FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.ome.ampwave")
   }
 
   /// Converts an absolute path to a relative path starting from the base directory.
-  static func relativePath(from absolutePath: String) -> String {
-    let absoluteURL = URL(fileURLWithPath: absolutePath)
+  nonisolated static func relativePath(from absolutePath: String) -> String {
     let basePath = baseDirectory.path
 
-    if absolutePath.hasPrefix(basePath) {
-      let relative = absolutePath.replacingOccurrences(of: basePath, with: "")
-      // Remove leading slash if present
-      if relative.hasPrefix("/") {
-        return String(relative.dropFirst())
-      }
-      return relative
+    if absolutePath.hasPrefix(basePath + "/") {
+      return String(absolutePath.dropFirst(basePath.count + 1))
     }
     return absolutePath
   }
 
   /// Converts a relative path back to an absolute URL in the current base directory.
-  static func absoluteURL(for relativePath: String?) -> URL? {
+  nonisolated static func absoluteURL(for relativePath: String?) -> URL? {
     guard let relativePath = relativePath, !relativePath.isEmpty else { return nil }
 
     // If it's already an absolute path that exists, return it (for transition)
@@ -52,7 +84,7 @@ public enum PathManager {
   }
 
   /// Resolves a path that might be absolute (stale) or relative to the current environment.
-  static func resolve(_ path: String?) -> URL? {
+  nonisolated static func resolve(_ path: String?) -> URL? {
     guard let path = path, !path.isEmpty else { return nil }
 
     // 1. Try as relative path against baseDirectory
@@ -109,10 +141,15 @@ public enum PathManager {
   // MARK: - Security Bookmarks
 
   /// Creates a security-scoped bookmark for an external URL.
-  static func createBookmark(for url: URL) -> Data? {
+  nonisolated static func createBookmark(for url: URL) -> Data? {
     do {
+      #if os(macOS)
+        let options: URL.BookmarkCreationOptions = .withSecurityScope
+      #else
+        let options: URL.BookmarkCreationOptions = .minimalBookmark
+      #endif
       return try url.bookmarkData(
-        options: .minimalBookmark,
+        options: options,
         includingResourceValuesForKeys: nil,
         relativeTo: nil
       )
@@ -123,7 +160,7 @@ public enum PathManager {
   }
 
   /// Resolves a security-scoped bookmark into a URL.
-  static func resolveBookmark(_ data: Data) -> URL? {
+  nonisolated static func resolveBookmark(_ data: Data) -> URL? {
     do {
       var isStale = false
       #if os(macOS)

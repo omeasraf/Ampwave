@@ -62,6 +62,10 @@ enum CapsulePackage {
     into modelContext: ModelContext,
     library: SongLibrary
   ) async throws -> AmpwaveCapsule {
+    let generation = library.importGeneration
+    guard UserPreferences.getOrCreate(in: modelContext).copyMusicToStorage else {
+      throw packageError("Capsules contain audio that must be copied into Ampwave. Enable Copy Imported Music in Settings to import this Capsule, or import its original music files using Link in Place.")
+    }
     let extractionURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("AmpwaveCapsuleImport-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: extractionURL) }
@@ -92,15 +96,17 @@ enum CapsulePackage {
     if library.modelContext == nil {
       library.setModelContext(modelContext)
     }
+    var importAccepted = false
     await BackgroundWorkCoordinator.performUserInitiated(
       title: "Importing Capsule",
       subtitle: "Adding \(audioURLs.count) songs…",
       totalUnitCount: audioURLs.count
     ) { reporter in
-      await library.importFiles(audioURLs, forceCopy: true) { completed, total, status in
+      importAccepted = await library.importFiles(audioURLs, forceCopy: true, expectedGeneration: generation) { completed, total, status in
         reporter.update(completed: completed, total: total, subtitle: status)
       }
     }
+    guard importAccepted else { throw packageError("Capsule import was cancelled or copying is disabled.") }
 
     let songs = document.tracks.compactMap { resolve($0, in: library) }
     guard songs.count == document.tracks.count else {

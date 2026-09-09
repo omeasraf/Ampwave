@@ -34,7 +34,7 @@ enum FilenameParser {
         metadata.isMedley = detectMedley(cleanName)
         
         // 3. Noise removal (Official Video, HD, etc.)
-        let (noisedFreeName, noiseFound) = stripNoise(cleanName)
+        let (noisedFreeName, _) = stripNoise(cleanName)
         
         // 4. Split by common separators
         let separators = [" - ", " : ", " – ", " — "]

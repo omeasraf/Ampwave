@@ -55,9 +55,8 @@
           currentURL = url
           let item = AVPlayerItem(url: url)
           player.replaceCurrentItem(with: item)
-          statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-            Task { @MainActor in
-              guard let self else { return }
+          statusObserver = item.observe(\.status, options: [.new]) { [unowned self] item, _ in
+            Task { @MainActor [unowned self] in
               switch item.status {
               case .readyToPlay:
                 DiagnosticLog.shared.log(

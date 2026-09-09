@@ -308,8 +308,6 @@ private struct LibraryToolbarControls: View {
 // MARK: - Genres grid
 
 struct GenresGridView: View {
-  var onScrollStateChange: (Bool) -> Void = { _ in }
-
   @Environment(ThemeManager.self) private var themeManager
   @AppStorage("com.ampwave.genreGridSize.v1") private var genreGridSizeRaw: String = "medium"
   @State private var gridWidth: CGFloat = 400
@@ -355,11 +353,6 @@ struct GenresGridView: View {
           .padding(.horizontal, gridSize.horizontalPadding)
           .padding(.top, 16)
           .padding(.bottom, 24)
-        }
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-          geometry.contentOffset.y + geometry.contentInsets.top > 1
-        } action: { _, isScrolled in
-          onScrollStateChange(isScrolled)
         }
       }
     }
@@ -473,7 +466,6 @@ struct LibraryView: View {
   @AppStorage("com.ampwave.albumGridSize.v2") private var albumGridSizeRaw = "medium"
   @AppStorage("com.ampwave.artistGridSize.v2") private var artistGridSizeRaw = "medium"
   @AppStorage("com.ampwave.genreGridSize.v1") private var genreGridSizeRaw = "medium"
-  @State private var scrollStates: [LibraryTab: Bool] = [:]
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -503,65 +495,20 @@ struct LibraryView: View {
   }
 
   var body: some View {
-    TabView(selection: $selectedTab) {
-      SongsListView { updateScrollState($0, for: .songs) }
-        .tag(LibraryTab.songs)
-
-      AlbumsGridView { updateScrollState($0, for: .albums) }
-        .tag(LibraryTab.albums)
-
-      ArtistsGridView { updateScrollState($0, for: .artists) }
-        .tag(LibraryTab.artists)
-
-      GenresGridView { updateScrollState($0, for: .genres) }
-        .tag(LibraryTab.genres)
-    }
-#if os(iOS)
-    .tabViewStyle(.page(indexDisplayMode: .never))
-#else
-    // Use the default tab view style on macOS
-    .tabViewStyle(.automatic)
-#endif
-    .safeAreaInset(edge: .top, spacing: 0) {
-      VStack(spacing: 0) {
-        HStack {
-          Text("Library")
-            .font(.largeTitle.bold())
-          Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 20)
-        .frame(height: currentPageHasScrolled ? 0 : 48, alignment: .bottom)
-        .opacity(currentPageHasScrolled ? 0 : 1)
-        .clipped()
-
-        libraryTabStrip
-          .overlay(alignment: .bottom) {
-            Divider().opacity(0.35)
-          }
-      }
-      .background(themeManager.backgroundColor)
-      .animation(.smooth(duration: 0.28), value: currentPageHasScrolled)
+    // The selected scroll view must receive the navigation/tab safe areas
+    // directly. A nested page-style TabView clips it above the mini player
+    // and prevents content from scrolling underneath the system bars.
+    libraryContent
+    .safeAreaBar(edge: .top, spacing: 0) {
+      libraryTabStrip
     }
     .background(themeManager.backgroundColor)
     .tint(themeManager.accentColor)
+    .navigationTitle("Library")
 #if os(iOS)
-    .navigationBarTitleDisplayMode(.inline)
-#endif
-#if os(iOS)
-    .toolbarBackground(themeManager.backgroundColor, for: .navigationBar)
-#else
-    .toolbarBackground(themeManager.backgroundColor, for: .automatic)
+    .navigationBarTitleDisplayMode(.large)
 #endif
     .toolbar {
-#if os(iOS)
-      ToolbarItem(placement: .principal) {
-        Text("Library")
-          .font(.headline)
-          .opacity(currentPageHasScrolled ? 1 : 0)
-          .animation(.easeInOut(duration: 0.2), value: currentPageHasScrolled)
-      }
-#endif
-
       ToolbarItem(placement: .primaryAction) {
         LibraryToolbarControls(
           selectedTab: selectedTab,
@@ -575,14 +522,17 @@ struct LibraryView: View {
     }
   }
 
-  private var currentPageHasScrolled: Bool {
-    scrollStates[selectedTab, default: false]
-  }
-
-  private func updateScrollState(_ isScrolled: Bool, for tab: LibraryTab) {
-    guard scrollStates[tab] != isScrolled else { return }
-    withAnimation(.smooth(duration: 0.28)) {
-      scrollStates[tab] = isScrolled
+  @ViewBuilder
+  private var libraryContent: some View {
+    switch selectedTab {
+    case .songs:
+      SongsListView()
+    case .albums:
+      AlbumsGridView()
+    case .artists:
+      ArtistsGridView()
+    case .genres:
+      GenresGridView()
     }
   }
 
@@ -644,8 +594,6 @@ struct LibraryView: View {
 // MARK: - Albums Grid View
 
 struct AlbumsGridView: View {
-  var onScrollStateChange: (Bool) -> Void = { _ in }
-
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
@@ -733,11 +681,6 @@ struct AlbumsGridView: View {
         .padding(.bottom, 24)
       }
     }
-    .onScrollGeometryChange(for: Bool.self) { geometry in
-      geometry.contentOffset.y + geometry.contentInsets.top > 1
-    } action: { _, isScrolled in
-      onScrollStateChange(isScrolled)
-    }
     // Capture available width for the large full-bleed column calculation
     .background {
       GeometryReader { geo in
@@ -752,8 +695,6 @@ struct AlbumsGridView: View {
 // MARK: - Artists Grid View
 
 struct ArtistsGridView: View {
-  var onScrollStateChange: (Bool) -> Void = { _ in }
-
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
@@ -825,11 +766,6 @@ struct ArtistsGridView: View {
         .padding(.bottom, 24)
       }
     }
-    .onScrollGeometryChange(for: Bool.self) { geometry in
-      geometry.contentOffset.y + geometry.contentInsets.top > 1
-    } action: { _, isScrolled in
-      onScrollStateChange(isScrolled)
-    }
     .background {
       GeometryReader { geo in
         Color.clear
@@ -858,4 +794,3 @@ extension String {
 #Preview {
   LibraryView()
 }
-

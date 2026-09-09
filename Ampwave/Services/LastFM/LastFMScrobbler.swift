@@ -379,7 +379,7 @@ final class LastFMScrobbler {
     }
   }
 
-  static let defaultThresholdPercent = 50
+  nonisolated static let defaultThresholdPercent = 50
 
   /// Last.fm's rules: longer than 30s, and played for at least `percent` of
   /// its length or 4 minutes — whichever is reached first.

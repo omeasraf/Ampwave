@@ -80,7 +80,7 @@ struct MacOSMainView: View {
 
     Task.detached(priority: .userInitiated) {
       await MainActor.run {
-        if library.modelContext == nil { library.setModelContext(modelContext) }
+        if library.modelContext == nil { library.setModelContext(modelContext, loadImmediately: false) }
         if playlistManager.modelContext == nil { playlistManager.setModelContext(modelContext) }
         if historyTracker.modelContext == nil { historyTracker.setModelContext(modelContext) }
         if lyricsService.modelContext == nil { lyricsService.setModelContext(modelContext) }

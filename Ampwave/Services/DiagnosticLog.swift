@@ -47,9 +47,11 @@ final class DiagnosticLog: @unchecked Sendable {
     let now = Date()
     let line = "\(timestampFormatter.string(from: now)) [\(category.uppercased())] \(message())\n"
     guard let data = line.data(using: .utf8) else { return }
-    // Mirror file diagnostics to the device/Xcode console so a connected
-    // development run and a shared session file contain the same evidence.
-    Swift.print(line, terminator: "")
+    // Mirror diagnostics while developing. TestFlight/App Store builds retain
+    // the shareable session file without flooding the production console.
+    #if DEBUG
+      Swift.print(line, terminator: "")
+    #endif
 
     do {
       if !fileManager.fileExists(atPath: sessionFileURL.path) {

@@ -9,6 +9,32 @@
 import SwiftData
 internal import SwiftUI
 
+@MainActor
+enum HomeRediscoverSelector {
+  static func select(
+    songs: [LibrarySong], stats: [UUID: SongPlayStatistics], now: Date = Date()
+  ) -> [LibrarySong] {
+    let lovedCutoff = now.addingTimeInterval(-30 * 86_400)
+    let fallbackCutoff = now.addingTimeInterval(-14 * 86_400)
+    let candidates = songs.compactMap { song -> (song: LibrarySong, date: Date, priority: Int)? in
+      guard let stat = stats[song.id], !stat.isDisliked, let date = stat.lastPlayedAt else { return nil }
+      let loved = stat.isLiked || (stat.userRating ?? 0) >= 4 || stat.playCount >= 3
+      if loved, date < lovedCutoff { return (song, date, 0) }
+      if date < fallbackCutoff { return (song, date, 1) }
+      return nil
+    }
+    var artistCounts: [String: Int] = [:]
+    return candidates.sorted {
+      $0.priority == $1.priority ? $0.date < $1.date : $0.priority < $1.priority
+    }.filter {
+      let count = artistCounts[$0.song.artist, default: 0]
+      guard count < 2 else { return false }
+      artistCounts[$0.song.artist] = count + 1
+      return true
+    }.prefix(10).map(\.song)
+  }
+}
+
 struct HomeView: View {
   @Environment(\.modelContext) private var modelContext
   @Environment(\.scenePhase) private var scenePhase
@@ -44,36 +70,12 @@ struct HomeView: View {
 
   @State private var rediscoverSongs: [LibrarySong] = []
 
-  /// Tracks the user clearly liked — played often, hearted, or rated highly —
-  /// that they haven't heard in a couple of months.
+  /// Prioritizes favorites not heard for a month, then other songs that have
+  /// fallen out of rotation for at least two weeks.
   private func computeRediscover() -> [LibrarySong] {
-    let stats = historyTracker.statisticsBySongId()
-    let cutoff = Date().addingTimeInterval(-60 * 24 * 60 * 60)
-
-    let candidates = library.songs.compactMap { song -> (LibrarySong, Date)? in
-      guard let stat = stats[song.id], !stat.isDisliked else { return nil }
-      // Needs a last-played date: a song never played isn't "rediscovery",
-      // it belongs in a discovery shelf instead.
-      guard let lastPlayed = stat.lastPlayedAt, lastPlayed < cutoff else { return nil }
-
-      let wasLoved = stat.isLiked || (stat.userRating ?? 0) >= 4 || stat.playCount >= 5
-      guard wasLoved else { return nil }
-      return (song, lastPlayed)
-    }
-
-    // Longest-forgotten first, capped so one artist can't fill the shelf.
-    var seenArtists: [String: Int] = [:]
-    return
-      candidates
-      .sorted { $0.1 < $1.1 }
-      .filter { song, _ in
-        let count = seenArtists[song.artist, default: 0]
-        guard count < 2 else { return false }
-        seenArtists[song.artist] = count + 1
-        return true
-      }
-      .prefix(10)
-      .map(\.0)
+    HomeRediscoverSelector.select(
+      songs: library.songs, stats: historyTracker.statisticsBySongId()
+    )
   }
 
   private var indexingMessage: String? {
@@ -205,6 +207,7 @@ struct HomeView: View {
       refreshHomeSections()
       Task {
         await recommendationEngine.listeningHistoryDidChange()
+        forYouRecommendations = recommendationEngine.forYouRecommendations
         genreRecommendations = recommendationEngine.genreRecommendations
       }
     }
@@ -401,39 +404,34 @@ struct HomeView: View {
   private func loadData(forceRefresh: Bool = false) async {
     isLoading = true
 
-    do {
-      // Ensure contexts are set
-      historyTracker.setModelContext(modelContext)
-      playlistManager.setModelContext(modelContext)
-      recommendationEngine.setModelContext(modelContext)
-      RadioMixGenerator.shared.setModelContext(modelContext)
+    // Ensure contexts are set
+    historyTracker.setModelContext(modelContext)
+    playlistManager.setModelContext(modelContext)
+    recommendationEngine.setModelContext(modelContext)
+    RadioMixGenerator.shared.setModelContext(modelContext)
 
-      // If library is already indexing, wait for it
-      if !forceRefresh && library.indexingStatus != .complete {
-        print(
-          "[DEBUG] HomeView.loadData: Library is indexing, waiting..."
-        )
-        while library.indexingStatus != .complete {
-          try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5s
-        }
-      }
-
-      // Load library if needed
-      if library.songs.isEmpty || forceRefresh {
-        await library.loadSongs()
-      }
-
-      // Generate recommendations
-      await recommendationEngine.generateAllRecommendations(
-        forceRefresh: forceRefresh
+    // If library is already indexing, wait for it
+    if !forceRefresh && library.indexingStatus != .complete {
+      print(
+        "[DEBUG] HomeView.loadData: Library is indexing, waiting..."
       )
-      forYouRecommendations = recommendationEngine.forYouRecommendations
-      genreRecommendations = recommendationEngine.genreRecommendations
-      refreshHomeSections()
-    } catch {
-      errorMessage = error.localizedDescription
-      showError = true
+      while library.indexingStatus != .complete {
+        try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5s
+      }
     }
+
+    // Load library if needed
+    if library.songs.isEmpty || forceRefresh {
+      await library.loadSongs()
+    }
+
+    // Generate recommendations
+    await recommendationEngine.generateAllRecommendations(
+      forceRefresh: forceRefresh
+    )
+    forYouRecommendations = recommendationEngine.forYouRecommendations
+    genreRecommendations = recommendationEngine.genreRecommendations
+    refreshHomeSections()
 
     isLoading = false
   }
@@ -1045,7 +1043,7 @@ struct GenreSongsView: View {
           .listRowBackground(themeManager.backgroundColor)
           .swipeActions(edge: .trailing) {
             Button {
-              playlistManager.toggleLike(song: song)
+              _ = playlistManager.toggleLike(song: song)
             } label: {
               Image(
                 systemName: playlistManager.isLiked(song: song)

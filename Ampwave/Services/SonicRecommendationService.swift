@@ -84,8 +84,13 @@ final class SonicRecommendationService {
   private var pending: [SonicTrackSnapshot] = []
   private var pendingHashes = Set<String>()
   private var analysisWorker: Task<Void, Never>?
+  private let resolveTrackURL: @MainActor (LibrarySong, SongLibrary) -> URL
 
-  private init() {}
+  init(resolveTrackURL: @escaping @MainActor (LibrarySong, SongLibrary) -> URL = { song, library in
+    library.getFileURL(for: song)
+  }) {
+    self.resolveTrackURL = resolveTrackURL
+  }
 
   func setModelContext(_ context: ModelContext) {
     modelContext = context
@@ -104,7 +109,7 @@ final class SonicRecommendationService {
     SonicTrackSnapshot(
       id: song.id,
       fileHash: song.fileHash.isEmpty ? "\(song.id)-\(song.size)" : song.fileHash,
-      url: library.getFileURL(for: song),
+      url: resolveTrackURL(song, library),
       requiresSecurityScope: song.storageMode == .referenced
     )
   }
@@ -114,6 +119,8 @@ final class SonicRecommendationService {
   }
 
   func enqueueAnalysis(for song: LibrarySong, library: SongLibrary) {
+    let hash = song.fileHash.isEmpty ? "\(song.id)-\(song.size)" : song.fileHash
+    guard !analysisIsComplete(hash: hash) else { return }
     enqueueAnalysis(snapshot(for: song, library: library))
     if hasPendingAnalysis {
       BackgroundWorkCoordinator.scheduleSonicAnalysis()
@@ -123,8 +130,9 @@ final class SonicRecommendationService {
   /// Moves the active song to the front of the LIFO worker so playback does
   /// not wait for an entire existing library backfill to finish first.
   func prioritizeAnalysis(for song: LibrarySong) {
+    let hash = song.fileHash.isEmpty ? "\(song.id)-\(song.size)" : song.fileHash
+    guard !analysisIsComplete(hash: hash) else { return }
     let track = snapshot(for: song)
-    guard !analysisIsComplete(hash: track.fileHash) else { return }
     if let index = pending.firstIndex(where: { $0.fileHash == track.fileHash }) {
       pending.remove(at: index)
       pending.append(track)
@@ -144,36 +152,47 @@ final class SonicRecommendationService {
 
   func enqueueMissingAnalysis(for songs: [LibrarySong], library: SongLibrary) {
     guard let modelContext else { return }
-    let records = (try? modelContext.fetch(FetchDescriptor<SonicAnalysisRecord>())) ?? []
-    let existingRecords = Dictionary(
-      records.lazy
-        .filter { $0.analysisVersion == self.analysisVersion }
-        .map { ($0.fileHash, $0) },
-      uniquingKeysWith: { newer, _ in newer }
-    )
+    let started = Date()
+    let index: (base: Set<String>, complete: Set<String>)
+    do { index = try Self.analysisIndex(in: modelContext) }
+    catch {
+      DiagnosticLog.shared.log("sonic", "Analysis index fetch failed: \(error)")
+      return
+    }
     var musicUnderstandingBackfillCount = 0
     for song in songs {
-      let track = snapshot(for: song, library: library)
-      let record = existingRecords[track.fileHash]
-      let needsBaseAnalysis = record == nil
+      let hash = song.fileHash.isEmpty ? "\(song.id)-\(song.size)" : song.fileHash
+      let needsBaseAnalysis = !index.base.contains(hash)
       let needsMusicUnderstanding = MusicUnderstandingAnalyzer.isAvailable
-        && (
-          record?.musicUnderstandingVersion != MusicUnderstandingAnalyzer.analysisVersion
-            || record?.instrumentActivityData == nil
-        )
+        && !index.complete.contains(hash)
       if needsBaseAnalysis || needsMusicUnderstanding {
+        let track = snapshot(for: song, library: library)
         if needsMusicUnderstanding { musicUnderstandingBackfillCount += 1 }
         enqueueAnalysis(track, databaseCheckAlreadyPerformed: true)
       }
     }
     DiagnosticLog.shared.log(
       "sonic",
-      "Analysis backfill songs=\(songs.count) baseRecords=\(existingRecords.count) "
-        + "musicUnderstanding=\(musicUnderstandingBackfillCount)"
+      "Analysis backfill songs=\(songs.count) baseRecords=\(index.base.count) "
+        + "musicUnderstanding=\(musicUnderstandingBackfillCount) elapsed=\(Date().timeIntervalSince(started))s"
     )
     if hasPendingAnalysis {
       BackgroundWorkCoordinator.scheduleSonicAnalysis()
     }
+  }
+
+  /// Ask the store whether activity data exists; never materialize the large
+  /// per-track activity blobs merely to decide whether analysis is complete.
+  static func analysisIndex(in context: ModelContext) throws -> (base: Set<String>, complete: Set<String>) {
+    let richVersion = MusicUnderstandingAnalyzer.analysisVersion
+    var base = FetchDescriptor<SonicAnalysisRecord>(predicate: #Predicate { $0.analysisVersion == 1 })
+    base.propertiesToFetch = [\.fileHash]
+    var rich = FetchDescriptor<SonicAnalysisRecord>(predicate: #Predicate {
+      $0.analysisVersion == 1 && $0.musicUnderstandingVersion == richVersion
+        && $0.instrumentActivityData != nil
+    })
+    rich.propertiesToFetch = [\.fileHash]
+    return (Set(try context.fetch(base).map(\.fileHash)), Set(try context.fetch(rich).map(\.fileHash)))
   }
 
   var hasPendingAnalysis: Bool {
@@ -325,8 +344,8 @@ final class SonicRecommendationService {
   }
 
   func instrumentActivity(for song: LibrarySong) -> SonicInstrumentActivity? {
-    let track = snapshot(for: song)
-    guard let data = fetchRecord(hash: track.fileHash)?.instrumentActivityData else { return nil }
+    let hash = song.fileHash.isEmpty ? "\(song.id)-\(song.size)" : song.fileHash
+    guard let data = fetchRecord(hash: hash)?.instrumentActivityData else { return nil }
     if let decoded = try? PropertyListDecoder().decode(SonicInstrumentActivity.self, from: data) {
       return decoded
     }
@@ -344,14 +363,23 @@ final class SonicRecommendationService {
   }
 
   private func fetchProfile(hash: String) -> SonicProfile? {
-    fetchRecord(hash: hash).map(SonicProfile.init(record:))
+    guard let modelContext else { return nil }
+    let cacheKey = "\(analysisVersion):\(hash)"
+    var descriptor = FetchDescriptor<SonicAnalysisRecord>(predicate: #Predicate { $0.cacheKey == cacheKey })
+    descriptor.propertiesToFetch = [\.loudness, \.dynamics, \.zeroCrossingRate, \.brightness, \.crestFactor, \.stereoWidth]
+    return (try? modelContext.fetch(descriptor).first).map(SonicProfile.init(record:))
   }
 
   private func analysisIsComplete(hash: String) -> Bool {
-    guard let record = fetchRecord(hash: hash) else { return false }
-    guard MusicUnderstandingAnalyzer.isAvailable else { return true }
-    return record.musicUnderstandingVersion == MusicUnderstandingAnalyzer.analysisVersion
-      && record.instrumentActivityData != nil
+    guard let modelContext else { return false }
+    let cacheKey = "\(analysisVersion):\(hash)"
+    let richVersion = MusicUnderstandingAnalyzer.analysisVersion
+    let needsRich = MusicUnderstandingAnalyzer.isAvailable
+    let descriptor = FetchDescriptor<SonicAnalysisRecord>(predicate: #Predicate {
+      $0.cacheKey == cacheKey && (!needsRich ||
+        ($0.musicUnderstandingVersion == richVersion && $0.instrumentActivityData != nil))
+    })
+    return ((try? modelContext.fetchCount(descriptor)) ?? 0) > 0
   }
 
   private func fetchRecord(hash: String) -> SonicAnalysisRecord? {

@@ -12,6 +12,7 @@
 		40B88AD0A40A2206056D0D4E /* MetadataConfidenceScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C26CE288281572E8DECF5F /* MetadataConfidenceScorer.swift */; };
 		488C5CCDD068FDA7EF964931 /* AppleMusicMetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE46362AAF3252EE4BD006A0 /* AppleMusicMetadataService.swift */; };
 		48EE978190F3189FCE41911E /* UnicodeCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB099B1137DA8F182593757 /* UnicodeCleanup.swift */; };
+		5A6FDD55062D72E905CF85A2 /* ReleaseReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAD57F75BABB6B807C9218D /* ReleaseReadinessTests.swift */; };
 		648D6563B066201A8F4F9B0A /* MetadataConfidenceScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C26CE288281572E8DECF5F /* MetadataConfidenceScorer.swift */; };
 		AC1820DC60D8B71ABD95305C /* FilenameParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60CDBA89F93E38F963A7E75B /* FilenameParser.swift */; };
 		B40A39302F411B23005DD316 /* MobileVLCKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40A392F2F411B23005DD316 /* MobileVLCKit.xcframework */; platformFilter = ios; };
@@ -163,6 +164,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		A434CB5ECC30C9FF2029DFC2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B40A39112F411B23005DD316 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B40A39182F411B23005DD316;
+			remoteInfo = Ampwave;
+		};
 		B45266242F8B190E007FDE40 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = B40A39112F411B23005DD316 /* Project object */;
@@ -219,6 +227,7 @@
 /* Begin PBXFileReference section */
 		1161437BA5F1224BF8176C35 /* MetadataMatcher.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetadataMatcher.swift; sourceTree = "<group>"; };
 		18C26CE288281572E8DECF5F /* MetadataConfidenceScorer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetadataConfidenceScorer.swift; sourceTree = "<group>"; };
+		4CAD57F75BABB6B807C9218D /* ReleaseReadinessTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReleaseReadinessTests.swift; sourceTree = "<group>"; };
 		60CDBA89F93E38F963A7E75B /* FilenameParser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FilenameParser.swift; sourceTree = "<group>"; };
 		9EB099B1137DA8F182593757 /* UnicodeCleanup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = UnicodeCleanup.swift; sourceTree = "<group>"; };
 		B40A39192F411B23005DD316 /* Ampwave.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ampwave.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -273,6 +282,7 @@
 		B461959B2F8B458F00FF14A5 /* PathManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathManager.swift; sourceTree = "<group>"; };
 		B461959C2F8B458F00FF14A5 /* SongLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongLibrary.swift; sourceTree = "<group>"; };
 		B461959D2F8B458F00FF14A5 /* UserPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserPreferences.swift; sourceTree = "<group>"; };
+		E39DC8E9E8D84BCD831C44B6 /* AmpwaveTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AmpwaveTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FE46362AAF3252EE4BD006A0 /* AppleMusicMetadataService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppleMusicMetadataService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -360,6 +370,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B8B5F30AAD80DEA71B0AE740 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -373,9 +390,18 @@
 			path = Metadata;
 			sourceTree = "<group>";
 		};
+		68FD4BB7E00D41ED6994A38C /* AmpwaveTests */ = {
+			isa = PBXGroup;
+			children = (
+				4CAD57F75BABB6B807C9218D /* ReleaseReadinessTests.swift */,
+			);
+			path = AmpwaveTests;
+			sourceTree = "<group>";
+		};
 		B40A39102F411B23005DD316 = {
 			isa = PBXGroup;
 			children = (
+				68FD4BB7E00D41ED6994A38C /* AmpwaveTests */,
 				B461959F2F8B458F00FF14A5 /* Shared */,
 				B46195722F8B433500FF14A5 /* LyricsExtension.entitlements */,
 				B40A391B2F411B23005DD316 /* Ampwave */,
@@ -392,6 +418,7 @@
 				B40A39192F411B23005DD316 /* Ampwave.app */,
 				B452661C2F8B190D007FDE40 /* Ampwave Watch App.app */,
 				B46195522F8B3AAE00FF14A5 /* LyricsExtension.appex */,
+				E39DC8E9E8D84BCD831C44B6 /* AmpwaveTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -554,6 +581,24 @@
 			productReference = B46195522F8B3AAE00FF14A5 /* LyricsExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		BEEE370B4FC018693679289E /* AmpwaveTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FA72011210CD5E4492F8E26F /* Build configuration list for PBXNativeTarget "AmpwaveTests" */;
+			buildPhases = (
+				43780E0CB500F6FAF148D9F9 /* Sources */,
+				B8B5F30AAD80DEA71B0AE740 /* Frameworks */,
+				ED28C0160C7309D4A130C8DF /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				5A1D856260D1B92E0B7B6E8A /* PBXTargetDependency */,
+			);
+			name = AmpwaveTests;
+			productName = AmpwaveTests;
+			productReference = E39DC8E9E8D84BCD831C44B6 /* AmpwaveTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -572,6 +617,10 @@
 					};
 					B46195512F8B3AAE00FF14A5 = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					BEEE370B4FC018693679289E = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = B40A39182F411B23005DD316;
 					};
 				};
 			};
@@ -592,6 +641,7 @@
 				B40A39182F411B23005DD316 /* Ampwave */,
 				B452661B2F8B190D007FDE40 /* Ampwave Watch App */,
 				B46195512F8B3AAE00FF14A5 /* LyricsExtension */,
+				BEEE370B4FC018693679289E /* AmpwaveTests */,
 			);
 		};
 /* End PBXProject section */
@@ -618,9 +668,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		ED28C0160C7309D4A130C8DF /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		43780E0CB500F6FAF148D9F9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5A6FDD55062D72E905CF85A2 /* ReleaseReadinessTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B40A39152F411B23005DD316 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -790,6 +855,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		5A1D856260D1B92E0B7B6E8A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B40A39182F411B23005DD316 /* Ampwave */;
+			targetProxy = A434CB5ECC30C9FF2029DFC2 /* PBXContainerItemProxy */;
+		};
 		B45266252F8B190E007FDE40 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = B452661B2F8B190D007FDE40 /* Ampwave Watch App */;
@@ -803,6 +873,23 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		93D92724C13C92BA26A1D5C3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = W4X9FBL6NZ;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ome.AmpwaveTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ampwave.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Ampwave";
+			};
+			name = Debug;
+		};
 		B40A39242F411B25005DD316 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -931,7 +1018,7 @@
 				CODE_SIGN_ENTITLEMENTS = Ampwave/Ampwave.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 40;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readonly;
@@ -997,7 +1084,7 @@
 				CODE_SIGN_ENTITLEMENTS = Ampwave/Ampwave.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 40;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readonly;
@@ -1064,7 +1151,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 40;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Ampwave;
@@ -1099,7 +1186,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 40;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Ampwave;
@@ -1135,7 +1222,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 40;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1181,7 +1268,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 40;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1215,6 +1302,24 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
 				XROS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Release;
+		};
+		E4A3D0E8F29E8F24A6540D87 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = W4X9FBL6NZ;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ome.AmpwaveTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ampwave.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Ampwave";
+				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
@@ -1253,6 +1358,15 @@
 			buildConfigurations = (
 				B46195652F8B3AAF00FF14A5 /* Debug */,
 				B46195662F8B3AAF00FF14A5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FA72011210CD5E4492F8E26F /* Build configuration list for PBXNativeTarget "AmpwaveTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				93D92724C13C92BA26A1D5C3 /* Debug */,
+				E4A3D0E8F29E8F24A6540D87 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

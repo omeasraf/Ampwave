@@ -15,10 +15,12 @@ final class LibraryResetCoordinator {
   private(set) var isResetting = false
   private(set) var progress: Double = 0
   private(set) var status = "Preparing…"
+  var errorMessage: String?
 
   private init() {}
 
   func begin() {
+    errorMessage = nil
     isResetting = true
     progress = 0
     status = "Preparing reset…"
@@ -32,6 +34,25 @@ final class LibraryResetCoordinator {
   func finish() {
     progress = 1
     isResetting = false
+  }
+
+  /// Deletes stored library links, never their external files. Kept separate
+  /// from the managed-file cleanup so reset's unlinking can be verified alone.
+  static func removeLibraryRecords(in context: ModelContext) throws {
+    func deleteAll<T: PersistentModel>(_ type: T.Type) throws {
+      for record in try context.fetch(FetchDescriptor<T>()) { context.delete(record) }
+    }
+    // Dependents first, then songs (including their paths/bookmarks), followed
+    // by containers. Listening history/statistics intentionally survive reset.
+    try deleteAll(SyncedLyric.self)
+    try deleteAll(SonicAnalysisRecord.self)
+    try deleteAll(RadioStation.self)
+    try deleteAll(PlaybackState.self)
+    try deleteAll(LibrarySong.self)
+    try deleteAll(Album.self)
+    try deleteAll(Artist.self)
+    try deleteAll(Playlist.self)
+    try context.save()
   }
 }
 
@@ -254,7 +275,7 @@ struct SettingsView: View {
         return Alert(
           title: Text("Reset Library?"),
           message: Text(
-            "This will remove all songs and playlists from Ampwave. This action cannot be undone."
+            "This removes all songs and playlists from Ampwave and disconnects imported folders and linked files. Originals outside Ampwave are not deleted. Any copies stored inside Ampwave are deleted. This action cannot be undone."
           ),
           primaryButton: .destructive(Text("Reset"), action: resetLibrary),
           secondaryButton: .cancel()
@@ -524,7 +545,7 @@ struct SettingsView: View {
     } header: {
       Text("Import")
     } footer: {
-      if userPreferences?.copyMusicToStorage ?? true {
+      if userPreferences?.copyMusicToStorage ?? false {
         Text(
           "Import audio files (MP3, FLAC, WAV, etc.) to your library. Files are copied to the app's storage."
         )
@@ -663,7 +684,7 @@ struct SettingsView: View {
   private var librarySettingsSection: some View {
     Section {
       if let settings = settings {
-        let isCopying = userPreferences?.copyMusicToStorage ?? true
+        let isCopying = userPreferences?.copyMusicToStorage ?? false
         VStack(alignment: .leading, spacing: 4) {
           Toggle(
             "Group by Album",
@@ -737,6 +758,9 @@ struct SettingsView: View {
             set: { preferences.copyMusicToStorage = $0 }
           )
         )
+        Text("Off by default. Linked songs play from their original files; deleting a source removes it from Ampwave. This setting applies to new imports. Existing intentional copies stay in Ampwave until removed.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
 
         VStack(alignment: .leading, spacing: 4) {
           Toggle(
@@ -765,7 +789,7 @@ struct SettingsView: View {
       Text("Library")
     } footer: {
       Text(
-        "Turn off 'Copy Imported Music' to keep files in their original location. Referenced folders are remembered when imported, and Live Library Monitoring discovers newly synced songs while Ampwave is running."
+        "Linked files are checked when Ampwave opens or returns to the foreground. Live Library Monitoring also watches imported folders for additions and deletions while the app is running."
       )
     }
   }
@@ -919,7 +943,7 @@ struct SettingsView: View {
       Text("Online Features")
     } footer: {
       Text(
-        "When online, the app can fetch metadata, lyrics, and artwork from online sources. All data is cached for offline use."
+        "Metadata, lyrics, and artwork can be fetched online and cached for offline use. Linked audio stays in its original location."
       )
     }
   }
@@ -1199,6 +1223,7 @@ struct SettingsView: View {
   }
 
   private func handleFileImport(_ result: Result<[URL], Error>) async {
+    let generation = library.importGeneration
     importError = nil
     isImporting = true
     importProgress = 0
@@ -1219,16 +1244,23 @@ struct SettingsView: View {
         library.setModelContext(modelContext)
       }
 
+      var importAccepted = false
       await BackgroundWorkCoordinator.performUserInitiated(
         title: "Importing Music",
         subtitle: "Preparing \(urls.count) songs…",
         totalUnitCount: urls.count
       ) { reporter in
-        await library.importFiles(urls) { completed, total, status in
+        importAccepted = await library.importFiles(urls, expectedGeneration: generation) { completed, total, status in
           reporter.update(completed: completed, total: total, subtitle: status)
         }
       }
+      guard importAccepted else {
+        importError = "Import was interrupted or the files are temporary. To link music, select the originals in a permanent folder."
+        isImporting = false
+        return
+      }
       importProgress = 1.0
+      LibraryMonitorService.shared.start()
 
     } catch {
       importError = error.localizedDescription
@@ -1266,6 +1298,7 @@ struct SettingsView: View {
   }
 
   private func handleFolderImport(_ result: Result<[URL], Error>) async {
+    let generation = library.importGeneration
     importError = nil
     isImporting = true
     importProgress = 0
@@ -1285,52 +1318,53 @@ struct SettingsView: View {
         }
       }
 
-      let fileManager = FileManager.default
-      var audioFiles: [URL] = []
+      let audioFiles = await Task.detached(priority: .userInitiated) {
+        let fileManager = FileManager.default
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey]
+        guard
+          let enumerator = fileManager.enumerator(
+            at: folderURL,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+          )
+        else { return [URL]() }
 
-      // Resource keys we want to pre-fetch for efficiency
-      let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey]
-
-      guard
-        let enumerator = fileManager.enumerator(
-          at: folderURL,
-          includingPropertiesForKeys: keys,
-          options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        )
-      else {
-        isImporting = false
-        return
-      }
-
-      let extensions = [
-        "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "aiff",
-        "wma", "alac", "m4b",
-      ]
-
-      for case let fileURL as URL in enumerator {
-        let ext = fileURL.pathExtension.lowercased()
-        if extensions.contains(ext) {
-          audioFiles.append(fileURL)
+        let supportedExtensions: Set<String> = [
+          "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "aiff",
+          "wma", "alac", "m4b",
+        ]
+        var matches: [URL] = []
+        while let fileURL = enumerator.nextObject() as? URL {
+          if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
+            matches.append(fileURL)
+          }
         }
-      }
+        return matches
+      }.value
 
       if !audioFiles.isEmpty {
         if library.modelContext == nil {
           library.setModelContext(modelContext)
         }
 
+        var importAccepted = false
         await BackgroundWorkCoordinator.performUserInitiated(
           title: "Importing Music",
           subtitle: "Preparing \(audioFiles.count) songs…",
           totalUnitCount: audioFiles.count
         ) { reporter in
-          await library.importFiles(audioFiles) { completed, total, status in
+          importAccepted = await library.importFiles(audioFiles, expectedGeneration: generation) { completed, total, status in
             reporter.update(completed: completed, total: total, subtitle: status)
           }
         }
+        guard importAccepted else {
+          importError = "Import was interrupted or the folder is temporary. Select a permanent music folder to link in place."
+          isImporting = false
+          return
+        }
         let preferences = UserPreferences.getOrCreate(in: modelContext)
-        if !preferences.copyMusicToStorage {
-          LibraryMonitorService.shared.registerReferencedFolder(folderURL)
+        if !preferences.copyMusicToStorage, generation == library.importGeneration, !library.isResetting {
+          LibraryMonitorService.shared.registerReferencedFolder(folderURL, expectedGeneration: generation)
         }
         importProgress = 1.0
       }
@@ -1401,6 +1435,7 @@ struct SettingsView: View {
   }
 
   private func resetLibrary() {
+    guard !libraryReset.isResetting else { return }
     libraryReset.begin()
     print("[DEBUG] SettingsView.resetLibrary: Starting full reset")
 
@@ -1410,13 +1445,22 @@ struct SettingsView: View {
         subtitle: "Preparing Ampwave…",
         totalUnitCount: 100
       ) { continuedProgress in
+      LibraryMonitorService.shared.prepareForLibraryReset()
+      await library.prepareForLibraryReset()
+      let autosaveWasEnabled = modelContext.autosaveEnabled
+      modelContext.autosaveEnabled = false
+      defer {
+        modelContext.autosaveEnabled = autosaveWasEnabled
+        library.finishLibraryReset()
+        WatchSyncService.shared.libraryResetDidFinish()
+        libraryReset.finish()
+      }
       // Release every long-lived reference before SwiftData detaches the rows.
       // Clearing after save is too late: SwiftUI or the player can resolve an
       // outstanding attribute fault during that gap and crash.
       PlaybackController.shared.prepareForLibraryReset()
       WatchSyncService.shared.prepareForLibraryReset()
       RecommendationEngine.shared.resetInMemoryState()
-      library.ignoreReferencedSongsForLiveMonitoring(library.songs)
       library.resetInMemoryState()
       // Flush every navigation stack and playlist reference before deleting
       // SwiftData rows. Otherwise a view can fault a Playlist attribute after
@@ -1437,63 +1481,23 @@ struct SettingsView: View {
         subtitle: "Removing library records…"
       )
 
-      // ── 1. Delete SwiftData records ───────────────────────────────────────
-      // We fetch-and-delete each type individually rather than using the batch
-      // `delete(model:)` API, which can throw silently due to relationship
-      // constraint conflicts and leaves data intact.
-      //
-      // Deletion order matters: delete child/dependent records first so that
-      // parent relationships are already nullified when parents are removed.
-      //
-      // Stats (ListeningHistory, SongPlayStatistics) are intentionally KEPT.
-
-      // SyncedLyric — depends on LibrarySong.id, must go first
-      deleteAll(SyncedLyric.self)
-
-      // Audio fingerprints belong to the library files and should be rebuilt
-      // after a reset/reimport.
-      deleteAll(SonicAnalysisRecord.self)
-
-      // Radio stations retain song relationships and otherwise survive as
-      // empty Home cards after the songs are removed.
-      deleteAll(RadioStation.self)
-
-      // PlaybackState — references song UUIDs; clear so no dangling references
-      deleteAll(PlaybackState.self)
-
-      // LibrarySong — nullifies Album.songs and Playlist.songs via inverse relationships
-      deleteAll(LibrarySong.self)
-
-      // Album, Artist, Playlist — safe to delete once songs are gone
-      deleteAll(Album.self)
-      deleteAll(Artist.self)
-      deleteAll(Playlist.self)
-
-      // ── 2. Save ───────────────────────────────────────────────────────────
       do {
-        try modelContext.save()
-        print("[DEBUG] SettingsView.resetLibrary: SwiftData save successful")
-      } catch {
-        print("[DEBUG] SettingsView.resetLibrary: SwiftData save error — \(error)")
-      }
+      try LibraryResetCoordinator.removeLibraryRecords(in: modelContext)
+      library.clearLiveMonitoringExclusions()
 
       // ── 3. Delete physical files & artwork cache ───────────────────────────
       libraryReset.update(progress: 0.55, status: "Removing audio files…")
       continuedProgress.update(completed: 55, subtitle: "Removing audio files…")
       let songsDirectory = library.songsDirectory
       let artworkCacheDirectory = library.artworkCacheDirectory
-      await Task.detached(priority: .userInitiated) {
+      try await Task.detached(priority: .userInitiated) {
         let fileManager = FileManager.default
-        try? fileManager.removeItem(at: songsDirectory)
-        try? fileManager.createDirectory(
-          at: songsDirectory,
-          withIntermediateDirectories: true
-        )
-        try? fileManager.removeItem(at: artworkCacheDirectory)
-        try? fileManager.createDirectory(
-          at: artworkCacheDirectory,
-          withIntermediateDirectories: true
-        )
+        for directory in [songsDirectory, artworkCacheDirectory] {
+          if fileManager.fileExists(atPath: directory.path) {
+            try fileManager.removeItem(at: directory)
+          }
+          try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
       }.value
       libraryReset.update(progress: 0.75, status: "Finishing reset…")
       continuedProgress.update(completed: 75, subtitle: "Finishing reset…")
@@ -1511,9 +1515,10 @@ struct SettingsView: View {
       ud.synchronize()
 
       // ── 5. Reload from (now empty) SwiftData ──────────────────────────────
+      library.finishLibraryReset()
       await library.loadSongs(force: true)
       await playlistManager.loadPlaylists()
-      WatchSyncService.shared.libraryResetDidFinish()
+      PlaybackController.shared.setModelContext(modelContext)
 
       // ── 6. Reset onboarding + notify tab view ─────────────────────────────
       // OpenTabView's .libraryDidReset handler increments libraryResetID (tears
@@ -1522,23 +1527,20 @@ struct SettingsView: View {
       OnboardingState.reset()
       NotificationCenter.default.post(name: .libraryDidReset, object: nil)
 
-      libraryReset.finish()
       continuedProgress.update(completed: 100, subtitle: "Library reset complete")
       print("[DEBUG] SettingsView.resetLibrary: Full reset completed")
+      } catch {
+        // Never remove audio after a failed database save. Roll back any
+        // unsaved deletions and rebind services to live models for retry.
+        modelContext.rollback()
+        library.finishLibraryReset()
+        await library.loadSongs(force: true)
+        await playlistManager.loadPlaylists()
+        PlaybackController.shared.setModelContext(modelContext)
+        libraryReset.errorMessage = "The reset could not finish. Your referenced originals were not changed. \(error.localizedDescription)"
+        DiagnosticLog.shared.log("reset", "Library reset failed: \(error)")
       }
-    }
-  }
-
-  /// Fetch-and-delete every record of a given SwiftData model type.
-  /// Using individual deletes (rather than the batch `delete(model:)` API) avoids
-  /// silent failures from relationship constraint errors in SwiftData.
-  private func deleteAll<T: PersistentModel>(_ type: T.Type) {
-    do {
-      let records = try modelContext.fetch(FetchDescriptor<T>())
-      print("[DEBUG] SettingsView.resetLibrary: Deleting \(records.count) \(T.self) records")
-      for record in records { modelContext.delete(record) }
-    } catch {
-      print("[DEBUG] SettingsView.resetLibrary: Error fetching \(T.self) — \(error)")
+      }
     }
   }
 

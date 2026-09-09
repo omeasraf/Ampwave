@@ -263,8 +263,14 @@ final class MetadataService {
     return extractGenreLabel(genres: details.genres, tags: details.tags)
   }
 
+  private struct AlbumLookup {
+    let name: String
+    let artist: String?
+  }
+
   /// Fetches metadata for an album
   func fetchMetadata(for album: Album) async -> FetchedMetadata? {
+    let album = AlbumLookup(name: album.name, artist: album.artist)
     await respectRateLimit()
 
     // Apple Music covers albums MusicBrainz misses, so ask it regardless of
@@ -315,14 +321,15 @@ final class MetadataService {
 
   /// Fetches metadata for an artist
   func fetchMetadata(for artist: Artist) async -> ArtistMetadata? {
+    let artistName = artist.name
     await respectRateLimit()
 
-    let artistInfo = await searchArtist(artist: artist)
-    let theAudioDBInfo = await searchTheAudioDBArtist(artist: artist)
+    let artistInfo = await searchArtist(name: artistName)
+    let theAudioDBInfo = await searchTheAudioDBArtist(name: artistName)
     // Apple Music has artist photos for far more artists than TheAudioDB, so
     // prefer it and fall back to the TheAudioDB thumbnail.
     let appleProfile = await AppleMusicMetadataService.shared.fetchArtistProfile(
-      name: artist.name
+      name: artistName
     )
 
     var genres: Set<String> = []
@@ -341,7 +348,7 @@ final class MetadataService {
     }
 
     return ArtistMetadata(
-      name: artistInfo?.name ?? theAudioDBInfo?.strArtist ?? artist.name,
+      name: artistInfo?.name ?? theAudioDBInfo?.strArtist ?? artistName,
       sortName: artistInfo?.sortName,
       disambiguation: artistInfo?.disambiguation,
       country: artistInfo?.country ?? theAudioDBInfo?.strCountry,
@@ -385,8 +392,9 @@ final class MetadataService {
   /// Refreshes metadata for an album
   @MainActor
   func refreshMetadata(for album: Album) async {
+    let albumID = album.id
     guard let metadata = await fetchMetadata(for: album) else { return }
-
+    guard let album = SongLibrary.shared.albums.first(where: { $0.id == albumID }) else { return }
     // Update album with new metadata
     await applyMetadata(metadata, to: album)
   }
@@ -517,7 +525,7 @@ final class MetadataService {
     return nil
   }
 
-  private func searchRelease(album: Album) async -> MusicBrainzRelease? {
+  private func searchRelease(album: AlbumLookup) async -> MusicBrainzRelease? {
     let artistName = album.artist ?? "Unknown Artist"
     let query = "release:\"\(album.name)\" AND artist:\"\(artistName)\""
 
@@ -542,8 +550,8 @@ final class MetadataService {
     }
   }
 
-  private func searchArtist(artist: Artist) async -> MusicBrainzArtist? {
-    let query = "\"\(artist.name)\""
+  private func searchArtist(name: String) async -> MusicBrainzArtist? {
+    let query = "\"\(name)\""
 
     var components = URLComponents(string: "\(musicBrainzDefaultURL)/artist")
     components?.queryItems = [
@@ -566,10 +574,10 @@ final class MetadataService {
     }
   }
 
-  private func searchTheAudioDBArtist(artist: Artist) async -> TheAudioDBArtist? {
+  private func searchTheAudioDBArtist(name: String) async -> TheAudioDBArtist? {
     var components = URLComponents(string: "\(theAudioDBURL)/search.php")
     components?.queryItems = [
-      URLQueryItem(name: "s", value: artist.name)
+      URLQueryItem(name: "s", value: name)
     ]
 
     guard let url = components?.url else { return nil }
@@ -698,17 +706,12 @@ final class MetadataService {
     let secureURL = forceHTTPS(url)
     print("[DEBUG] MetadataService.downloadArtwork: Downloading from \(secureURL.absoluteString)")
 
-    do {
-      // Use performRequest for consistent User-Agent and retry logic
-      if let data = await performRequest(url: secureURL) {
-        // Cache the artwork
-        return await cacheArtwork(data, for: nil)
-      }
-      return nil
-    } catch {
-      print("Failed to download artwork: \(error)")
-      return nil
+    // Use performRequest for consistent User-Agent and retry logic
+    if let data = await performRequest(url: secureURL) {
+      // Cache the artwork
+      return await cacheArtwork(data, for: nil)
     }
+    return nil
   }
 
   private func forceHTTPS(_ url: URL) -> URL {
@@ -929,6 +932,7 @@ final class MetadataService {
   @MainActor
   private func applyMetadata(_ metadata: FetchedMetadata, to album: Album) async {
     guard let modelContext = modelContext else { return }
+    let albumID = album.id
 
     // Update album fields
     if let artist = metadata.artist, !artist.isEmpty,
@@ -968,6 +972,7 @@ final class MetadataService {
       if (album.artworkPath == nil || (prefs.preferOnlineArtwork && !isUserSelected)),
         let artworkPath = await downloadArtwork(from: artworkURL)
       {
+        guard let album = SongLibrary.shared.albums.first(where: { $0.id == albumID }) else { return }
         album.artworkPath = artworkPath
         album.artworkSource = .online
         for song in album.songs where song.artworkSource != .user {
@@ -1024,7 +1029,7 @@ final class MetadataService {
   }
 
   private func bestReleaseMatch(
-    for album: Album,
+    for album: AlbumLookup,
     in candidates: [MusicBrainzRelease]
   ) -> MusicBrainzRelease? {
     let albumTitle = normalizedSearchText(album.name)

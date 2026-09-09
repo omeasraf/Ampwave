@@ -54,6 +54,25 @@ extension Notification.Name {
   /// monitoring events from inserting the same file while metadata extraction
   /// is suspended.
   private var importingFileHashes: Set<String> = []
+  private(set) var isResetting = false
+  private var mutationGeneration = UUID()
+  var importGeneration: UUID { mutationGeneration }
+  private var activeImports = 0
+
+  /// Stop new imports and invalidate suspended work before deleting models.
+  /// Waiting also ensures a copy already in flight finishes before reset
+  /// removes the managed directory.
+  func prepareForLibraryReset() async {
+    isResetting = true
+    mutationGeneration = UUID()
+    while activeImports > 0 {
+      try? await Task.sleep(for: .milliseconds(20))
+    }
+  }
+
+  func finishLibraryReset() {
+    isResetting = false
+  }
 
     /// song id → resolved audio-file URL.
     ///
@@ -101,11 +120,15 @@ extension Notification.Name {
   ]
   private static let liveMonitoringIgnoredHashesKey =
     "com.ampwave.liveLibraryMonitoringIgnoredHashes"
+  private static let mergedReferenceHashesKey = "com.ampwave.mergedReferenceHashes"
+  private let defaults: UserDefaults
 
-  private init() {
+  init(songsDirectory: URL? = nil, artworkCacheDirectory: URL? = nil,
+       defaults: UserDefaults = .standard) {
+    self.defaults = defaults
     let baseDir = PathManager.baseDirectory.standardizedFileURL
-    let songsDir = baseDir.appendingPathComponent("Songs", isDirectory: true).standardizedFileURL
-    let artworkDir = baseDir.appendingPathComponent("Artwork", isDirectory: true)
+    let songsDir = (songsDirectory ?? baseDir.appendingPathComponent("Songs", isDirectory: true)).standardizedFileURL
+    let artworkDir = (artworkCacheDirectory ?? baseDir.appendingPathComponent("Artwork", isDirectory: true))
       .standardizedFileURL
 
     self.songsDirectory = songsDir
@@ -286,6 +309,7 @@ extension Notification.Name {
       "[DEBUG] SongLibrary.mergeSongDuplicates: Found \(duplicateGroups.count) duplicate groups")
 
     var deletedCount = 0
+    var mergedReferences = defaults.dictionary(forKey: Self.mergedReferenceHashesKey) as? [String: String] ?? [:]
     for group in duplicateGroups {
       // Only auto-merge if identical hash or extremely high confidence metadata match
       // For metadata matches, we only auto-merge if both have the same album name (not "Unknown Album")
@@ -306,6 +330,16 @@ extension Notification.Name {
 
       let primary = sortedGroup[0]
       for duplicate in sortedGroup.dropFirst() {
+        if duplicate.storageMode == .referenced, !duplicate.fileHash.isEmpty,
+          duplicate.fileHash != primary.fileHash, !primary.fileHash.isEmpty
+        {
+          // Remember the retained source, not a permanent ignore. If it is
+          // later removed, the monitor may import this alternative again.
+          for hash in Array(mergedReferences.keys) where mergedReferences[hash] == duplicate.fileHash {
+            mergedReferences[hash] = primary.fileHash
+          }
+          mergedReferences[duplicate.fileHash] = primary.fileHash
+        }
         // Transfer playlist memberships
         if let playlists = duplicate.playlists {
           for playlist in playlists {
@@ -319,11 +353,11 @@ extension Notification.Name {
         }
 
         // Delete file if it's in the managed directory and not referenced by others
-        let url = getFileURL(for: duplicate)
-        if duplicate.storageMode == .copied && FileManager.default.fileExists(atPath: url.path) {
+        if duplicate.storageMode == .copied {
+          let url = getFileURL(for: duplicate)
           // Check if any other song uses this exact file path (rare but possible)
           let otherUsingFile = songs.contains {
-            $0.id != duplicate.id && getFileURL(for: $0).path == url.path
+            $0.id != duplicate.id && $0.storageMode == .copied && getFileURL(for: $0).path == url.path
           }
           if !otherUsingFile {
             try? FileManager.default.removeItem(at: url)
@@ -337,7 +371,12 @@ extension Notification.Name {
     }
 
     if deletedCount > 0 {
-      try? modelContext.save()
+      do {
+        try modelContext.save()
+        defaults.set(mergedReferences, forKey: Self.mergedReferenceHashesKey)
+      } catch {
+        print("[ERROR] Could not save merged songs: \(error)")
+      }
       print("[DEBUG] SongLibrary.mergeSongDuplicates: Deleted \(deletedCount) duplicate songs")
     }
   }
@@ -345,7 +384,7 @@ extension Notification.Name {
   // MARK: - Artists
 
   /// Gets all unique artists from the library
-  func allArtists() async -> [Artist] {
+  func allArtists(allowReindex: Bool = true) async -> [Artist] {
     guard let modelContext = modelContext else { return [] }
 
     do {
@@ -354,7 +393,7 @@ extension Notification.Name {
       )
       let fetchedArtists = try modelContext.fetch(descriptor)
 
-      if fetchedArtists.isEmpty && !songs.isEmpty {
+      if allowReindex && fetchedArtists.isEmpty && !songs.isEmpty {
         print(
           "[DEBUG] SongLibrary.allArtists: No artists in DB but songs exist. Reindexing artists.")
         return await reindexArtists()
@@ -509,7 +548,10 @@ extension Notification.Name {
   // MARK: - Loading
 
   func loadSongs(force: Bool = false, performMaintenance: Bool = true) async {
-    if !force && isLoaded && !songs.isEmpty {
+    guard !isResetting else { return }
+    let started = Date()
+    let generation = mutationGeneration
+    if !force && isLoaded {
       print("[DEBUG] SongLibrary.loadSongs: Already loaded, skipping")
       return
     }
@@ -531,12 +573,14 @@ extension Notification.Name {
       // Loading uses the main SwiftData context, but yielding between fetch
       // phases lets the launch equalizer commit animation frames.
       await Task.yield()
+      guard generation == mutationGeneration, !isResetting else { return }
 
       // Merge duplicate songs if setting is enabled
       let appSettings = AppSettings.getOrCreate(in: modelContext)
       if performMaintenance && appSettings.mergeSongDuplicates {
         print("[DEBUG] SongLibrary.loadSongs: Merging duplicate songs")
         await mergeSongDuplicates(in: modelContext)
+        guard generation == mutationGeneration, !isResetting else { return }
         // Refresh songs after merge
         songs = try modelContext.fetch(descriptor)
       }
@@ -550,9 +594,30 @@ extension Notification.Name {
 
     await loadAlbums(performMaintenance: performMaintenance)
     await Task.yield()
+    guard generation == mutationGeneration, !isResetting else { return }
+    artists = await allArtists(allowReindex: performMaintenance)
+    guard generation == mutationGeneration, !isResetting else { return }
+    if performMaintenance { Self.libraryDidLoad?(songs) }
+    print("[DEBUG] SongLibrary.loadSongs: Finished loading songs, albums, and artists elapsed=\(Date().timeIntervalSince(started))s maintenance=\(performMaintenance)")
+  }
+
+  /// Optional normalization/backfill runs after the tabs are visible, without
+  /// starting a second, competing startup database load.
+  func finishDeferredLoading() async {
+    guard let modelContext, !isResetting else { return }
+    let generation = mutationGeneration
+    let started = Date()
+    if AppSettings.getOrCreate(in: modelContext).mergeSongDuplicates {
+      await mergeSongDuplicates(in: modelContext)
+    }
+    guard generation == mutationGeneration, !isResetting else { return }
+    await loadAlbums()
+    guard generation == mutationGeneration, !isResetting else { return }
     artists = await allArtists()
+    guard generation == mutationGeneration, !isResetting else { return }
     Self.libraryDidLoad?(songs)
-    print("[DEBUG] SongLibrary.loadSongs: Finished loading songs, albums, and artists")
+    notifyLibraryChange()
+    print("[DEBUG] Deferred library maintenance finished elapsed=\(Date().timeIntervalSince(started))s")
   }
 
   private func loadAlbums(performMaintenance: Bool = true) async {
@@ -594,13 +659,14 @@ extension Notification.Name {
   private let embeddedMetadataRepairCutoff = Date(timeIntervalSince1970: 1_787_702_400)
 
   func indexOnStartup(performAutomaticMetadataFetch: Bool = true) async {
-    guard !isIndexing else {
+    guard !isIndexing, !isResetting else {
       print("[DEBUG] indexOnStartup - already indexing, skipping")
       return
     }
+    let generation = mutationGeneration
     isIndexing = true
 
-    print("[DEBUG] indexOnStartup started on thread: \(Thread.current.name)")
+    print("[DEBUG] indexOnStartup started")
     guard let modelContext = modelContext else {
       print("[DEBUG] indexOnStartup - no modelContext")
       isIndexing = false
@@ -619,6 +685,7 @@ extension Notification.Name {
       if modDate < lastScanDate {
         print("[DEBUG] indexOnStartup: Directory hasn't changed since last scan (\(lastScanDate)). Skipping scan.")
         await repairStoredFilePathsIfNeeded(in: modelContext)
+        guard generation == mutationGeneration, !isResetting else { return }
         let repairedLegacyMetadata = await repairLegacyEmbeddedMetadataIfNeeded()
         if repairedLegacyMetadata {
           await pruneEmptyAlbums()
@@ -641,6 +708,7 @@ extension Notification.Name {
     let audioURLs = await Task.detached(priority: .userInitiated) {
       self.findAudioFiles(in: songsDir)
     }.value
+    guard !isResetting, generation == mutationGeneration else { isIndexing = false; return }
 
     print("[DEBUG] Found \(audioURLs.count) audio files on disk")
 
@@ -651,7 +719,7 @@ extension Notification.Name {
 
     // Safety check: If we found no files on disk but have many in DB, 
     // it's likely a mount/permission issue or folder was moved. Don't mass delete.
-    if audioURLs.isEmpty && existingSongs.count > 0 {
+    if audioURLs.isEmpty && existingSongs.contains(where: { $0.storageMode == .copied }) {
       print("[DEBUG] indexOnStartup: Safety triggered. Found 0 files on disk but \(existingSongs.count) in DB. Aborting sync to prevent accidental deletion.")
       indexingStatus = .complete
       isIndexing = false
@@ -659,6 +727,12 @@ extension Notification.Name {
     }
 
     // 3. Process changes
+    if audioURLs.isEmpty {
+      print("[DEBUG] indexOnStartup: No managed audio to reconcile; referenced sources are monitored separately.")
+      indexingStatus = .complete
+      isIndexing = false
+      return
+    }
     let audioPathSet = Set(audioURLs.map { $0.standardizedFileURL.path })
     var fileNameToURLs: [String: [URL]] = [:]
     for url in audioURLs {
@@ -670,13 +744,9 @@ extension Notification.Name {
     var songsMissingFromExpectedPath: [LibrarySong] = []
 
     for song in existingSongs {
-      // REFERENCED SONGS: We don't delete these automatically in the startup scan.
-      // Bookmark resolution and permission issues make automatic deletion too risky.
+      // Referenced sources have a separate foreground reconciliation; an
+      // unreadable provider is not proof of deletion.
       if song.storageMode == .referenced {
-        if !fileExists(for: song) {
-          print("[DEBUG] indexOnStartup: Referenced song file not accessible/missing: \(song.title)")
-          // We still don't delete it automatically, just log it.
-        }
         continue
       }
 
@@ -721,6 +791,7 @@ extension Notification.Name {
       }.value
     }
 
+    guard !isResetting, generation == mutationGeneration else { isIndexing = false; return }
     for song in songsMissingFromExpectedPath {
       if let movedURL = relocatedURLs[song.id] {
         print("[DEBUG] indexOnStartup: Found moved file for \(song.title) at \(movedURL.lastPathComponent)")
@@ -763,7 +834,9 @@ extension Notification.Name {
     if !newFiles.isEmpty {
       indexingStatus = .indexing("Importing \(newFiles.count) new songs…")
       for url in newFiles {
+        guard !isResetting, generation == mutationGeneration else { isIndexing = false; return }
         guard let hash = await self.fileHash(at: url) else { continue }
+        guard !isResetting, generation == mutationGeneration else { return }
         if finalExistingHashes.insert(hash).inserted {
           _ = await importFileInPlace(at: url, modelContext: modelContext)
         }
@@ -793,6 +866,8 @@ extension Notification.Name {
   }
 
   private func repairStoredFilePathsIfNeeded(in modelContext: ModelContext) async {
+    guard !isResetting else { return }
+    let generation = mutationGeneration
     let descriptor = FetchDescriptor<LibrarySong>()
     let existingSongs = (try? modelContext.fetch(descriptor)) ?? []
     let copiedSongsNeedingRepair = existingSongs.filter { song in
@@ -811,6 +886,7 @@ extension Notification.Name {
     let audioURLs = await Task.detached(priority: .utility) {
       self.findAudioFiles(in: self.songsDirectory)
     }.value
+    guard !isResetting, generation == mutationGeneration else { return }
 
     var fileNameToURLs: [String: [URL]] = [:]
     for url in audioURLs {
@@ -860,6 +936,7 @@ extension Notification.Name {
       return resolved
     }.value
 
+    guard !isResetting, generation == mutationGeneration else { return }
     var repairedCount = 0
     for song in copiedSongsNeedingRepair {
       guard let url = resolvedPaths[song.id] else { continue }
@@ -973,16 +1050,32 @@ extension Notification.Name {
 
   // MARK: - Import
 
+  @discardableResult
   func importFiles(
     _ urls: [URL],
     forceCopy: Bool? = nil,
+    expectedGeneration: UUID? = nil,
     progress: ((Int, Int, String) -> Void)? = nil
-  ) async {
+  ) async -> Bool {
     print("[DEBUG] SongLibrary.importFiles: Starting import of \(urls.count) files")
-    guard let modelContext = modelContext else {
+    guard let modelContext = modelContext, !isResetting else {
       print("[DEBUG] SongLibrary.importFiles: Error - No modelContext")
-      return
+      return false
     }
+    let shouldCopy = UserPreferences.getOrCreate(in: modelContext).copyMusicToStorage
+    guard expectedGeneration == nil || expectedGeneration == mutationGeneration else { return false }
+    // Downloaded/archive imports must never silently override reference-only
+    // mode. Their callers explain why an explicit copy opt-in is required.
+    guard forceCopy != true || shouldCopy else { return false }
+    if !(forceCopy ?? shouldCopy), urls.contains(where: {
+      PathManager.isInside($0.resolvingSymlinksInPath(), directory: fileManager.temporaryDirectory.resolvingSymlinksInPath())
+    }) {
+      // A temporary download cannot become a durable external reference.
+      return false
+    }
+    let generation = mutationGeneration
+    activeImports += 1
+    defer { activeImports -= 1 }
 
     indexingStatus = .indexing("Importing \(urls.count) songs…")
     defer {
@@ -998,7 +1091,7 @@ extension Notification.Name {
     progress?(0, totalCount, "Preparing \(totalCount) songs…")
 
     for (index, url) in urls.enumerated() {
-      guard !Task.isCancelled else {
+      guard !Task.isCancelled, !isResetting, generation == mutationGeneration else {
         print("[DEBUG] SongLibrary.importFiles: Cancelled, stopping import")
         break
       }
@@ -1008,11 +1101,17 @@ extension Notification.Name {
       )
       indexingStatus = .indexing("Importing \(index + 1)/\(totalCount)…")
 
+      if PathManager.isInside(url, directory: songsDirectory) {
+        if await importFileInPlace(at: url, modelContext: modelContext) != nil { importedCount += 1 }
+        progress?(index + 1, totalCount, "Indexed \(index + 1) of \(totalCount) songs")
+        continue
+      }
+
       if await importFile(
         from: url,
         modelContext: modelContext,
         groupByAlbum: groupByAlbum,
-        forceCopy: forceCopy
+        forceCopy: forceCopy ?? shouldCopy
       ) != nil
       {
         importedCount += 1
@@ -1033,6 +1132,7 @@ extension Notification.Name {
       }
     }
 
+    guard !isResetting, generation == mutationGeneration, !Task.isCancelled else { return false }
     if importedCount > 0 {
       print("[DEBUG] SongLibrary.importFiles: Final save and reloading library")
       saveContext()
@@ -1047,6 +1147,7 @@ extension Notification.Name {
     }
     print(
       "[DEBUG] SongLibrary.importFiles: Completed. Imported \(importedCount)/\(totalCount) files")
+    return !isResetting && generation == mutationGeneration && !Task.isCancelled
   }
 
   /// Registers audio files that already live inside Ampwave's managed Songs
@@ -1054,13 +1155,17 @@ extension Notification.Name {
   /// indexed in place instead of being copied a second time or stored as an
   /// external reference.
   func importManagedFilesInPlace(_ urls: [URL]) async {
-    guard let modelContext, !urls.isEmpty else { return }
+    guard let modelContext, !urls.isEmpty, !isResetting else { return }
+    let generation = mutationGeneration
+    activeImports += 1
+    defer { activeImports -= 1 }
 
     indexingStatus = .indexing("Importing \(urls.count) new songs…")
     defer { indexingStatus = .complete }
 
     var importedCount = 0
     for (index, url) in urls.enumerated() {
+      guard !isResetting, generation == mutationGeneration, !Task.isCancelled else { return }
       indexingStatus = .indexing("Importing \(index + 1)/\(urls.count)…")
       if await importFileInPlace(at: url, modelContext: modelContext) != nil {
         importedCount += 1
@@ -1073,7 +1178,7 @@ extension Notification.Name {
       }
     }
 
-    guard importedCount > 0 else { return }
+    guard importedCount > 0, !isResetting, generation == mutationGeneration else { return }
     saveContext()
     await pruneEmptyAlbums()
     await loadSongs(force: true)
@@ -1085,14 +1190,14 @@ extension Notification.Name {
   /// still free to remove the hash from this set and restore the song.
   var liveMonitoringIgnoredHashes: Set<String> {
     Set(
-      UserDefaults.standard.stringArray(forKey: Self.liveMonitoringIgnoredHashesKey) ?? []
+      defaults.stringArray(forKey: Self.liveMonitoringIgnoredHashesKey) ?? []
     )
   }
 
   private func ignoreForLiveMonitoring(_ hashes: Set<String>) {
     guard !hashes.isEmpty else { return }
     let updated = liveMonitoringIgnoredHashes.union(hashes)
-    UserDefaults.standard.set(Array(updated), forKey: Self.liveMonitoringIgnoredHashesKey)
+    defaults.set(Array(updated), forKey: Self.liveMonitoringIgnoredHashesKey)
   }
 
   func ignoreReferencedSongsForLiveMonitoring(_ songs: [LibrarySong]) {
@@ -1101,10 +1206,24 @@ extension Notification.Name {
     )
   }
 
+  /// Reset forgets sources rather than keeping their hashes on an ignore list.
+  /// Relinking the same folder later should behave like a fresh import.
+  func clearLiveMonitoringExclusions() {
+    defaults.removeObject(forKey: Self.liveMonitoringIgnoredHashesKey)
+    defaults.removeObject(forKey: Self.mergedReferenceHashesKey)
+  }
+
+  var liveMonitoringMergedHashes: Set<String> {
+    guard let modelContext, AppSettings.getOrCreate(in: modelContext).mergeSongDuplicates else { return [] }
+    let retainedHashes = Set(songs.map(\.fileHash))
+    let mappings = defaults.dictionary(forKey: Self.mergedReferenceHashesKey) as? [String: String] ?? [:]
+    return Set(mappings.compactMap { retainedHashes.contains($0.value) ? $0.key : nil })
+  }
+
   private func allowLiveMonitoring(_ hash: String) {
     var ignored = liveMonitoringIgnoredHashes
     guard ignored.remove(hash) != nil else { return }
-    UserDefaults.standard.set(Array(ignored), forKey: Self.liveMonitoringIgnoredHashesKey)
+    defaults.set(Array(ignored), forKey: Self.liveMonitoringIgnoredHashesKey)
   }
 
   private func importFile(
@@ -1116,6 +1235,10 @@ extension Notification.Name {
     -> LibrarySong?
   {
     print("[DEBUG] SongLibrary.importFile: Starting for \(url.lastPathComponent)")
+    let generation = mutationGeneration
+    let preferences = UserPreferences.getOrCreate(in: modelContext)
+    let shouldCopy = forceCopy ?? preferences.copyMusicToStorage
+    guard !isResetting, !PathManager.isTrashed(url) else { return nil }
     // Start accessing the security-scoped resource
     let secured = url.startAccessingSecurityScopedResource()
     defer {
@@ -1130,6 +1253,7 @@ extension Notification.Name {
       print("[DEBUG] SongLibrary.importFile: Failed to calculate hash for \(url.lastPathComponent)")
       return nil
     }
+    guard !isResetting, generation == mutationGeneration, !Task.isCancelled else { return nil }
 
     // Reaching the regular importer represents an explicit import. It is the
     // user's way to intentionally restore a referenced song they deleted.
@@ -1144,6 +1268,7 @@ extension Notification.Name {
     // Perform SwiftData operations on Main Actor
     print("[DEBUG] SongLibrary.importFile: Checking for existing song with hash: \(fileHash)")
     var songToRepair: LibrarySong?
+    var supersededManagedCopy: URL?
     do {
       var descriptor = FetchDescriptor<LibrarySong>(
         predicate: #Predicate<LibrarySong> { $0.fileHash == fileHash }
@@ -1151,7 +1276,16 @@ extension Notification.Name {
       descriptor.fetchLimit = 1
       if let existingSong = try modelContext.fetch(descriptor).first {
         let existingURL = getFileURL(for: existingSong)
-        if fileManager.fileExists(atPath: existingURL.path) {
+        if !shouldCopy, existingSong.storageMode == .copied,
+          !PathManager.isInside(url, directory: songsDirectory)
+        {
+          // An explicit reimport in reference mode must not keep selecting
+          // the old copy merely because its content hash is identical.
+          songToRepair = existingSong
+          if PathManager.isInside(existingURL, directory: songsDirectory) {
+            supersededManagedCopy = existingURL
+          }
+        } else if fileExists(for: existingSong) {
           print(
             "[DEBUG] SongLibrary.importFile: Song already exists in library (hash: \(fileHash))"
           )
@@ -1169,8 +1303,7 @@ extension Notification.Name {
 
     // Offload remaining heavy I/O to a background task
     print("[DEBUG] SongLibrary.importFile: Offloading remaining I/O to background task")
-    let preferences = UserPreferences.getOrCreate(in: modelContext)
-    let shouldCopy = forceCopy ?? preferences.copyMusicToStorage
+    let referencedBookmark = shouldCopy ? nil : PathManager.createBookmark(for: url)
 
     let ioResult = await Task.detached(priority: .userInitiated) {
       // Extract metadata (this also does I/O)
@@ -1217,8 +1350,9 @@ extension Notification.Name {
         print(
           "[DEBUG] SongLibrary.importFile.detached: Using referenced mode for \(url.lastPathComponent)"
         )
-        let bookmark = PathManager.createBookmark(for: url)
-        return (metadata, url, fileSize, LibrarySong.StorageMode.referenced, bookmark)
+        return (
+          metadata, url, fileSize, LibrarySong.StorageMode.referenced, referencedBookmark
+        )
       }
     }.value
 
@@ -1226,6 +1360,12 @@ extension Notification.Name {
       print("[DEBUG] SongLibrary.importFile: I/O task failed for \(url.lastPathComponent)")
       return nil
     }
+    guard !isResetting, generation == mutationGeneration, !Task.isCancelled else {
+      if storageMode == .copied { try? fileManager.removeItem(at: destinationURL) }
+      return nil
+    }
+    // The source can be deleted while metadata extraction is suspended.
+    guard storageMode == .copied || fileManager.isReadableFile(atPath: url.path) else { return nil }
 
     let uniqueFileName = destinationURL.lastPathComponent
 
@@ -1256,6 +1396,21 @@ extension Notification.Name {
       songToRepair.storageMode = storageMode
       songToRepair.bookmarkData = bookmarkData
       invalidateResolvedURLCache(for: songToRepair.id)
+      // Only retire a known managed copy after its replacement reference is
+      // durably saved. Never delete a referenced source or another song's file.
+      if let supersededManagedCopy {
+        do {
+          try modelContext.save()
+          let allSongs = try modelContext.fetch(FetchDescriptor<LibrarySong>())
+          let isStillUsed = allSongs.contains {
+            $0.id != songToRepair.id && $0.storageMode == .copied
+              && getFileURL(for: $0).standardizedFileURL == supersededManagedCopy.standardizedFileURL
+          }
+          if !isStillUsed { try fileManager.removeItem(at: supersededManagedCopy) }
+        } catch {
+          print("[ERROR] Couldn't retire the previous managed copy: \(error)")
+        }
+      }
       await refreshEmbeddedMetadata(for: songToRepair)
       Self.songWasImported?(songToRepair)
       print("[DEBUG] SongLibrary.importFile: Repaired existing LibrarySong \(songToRepair.id)")
@@ -1271,6 +1426,10 @@ extension Notification.Name {
       artworkPath = nil
     }
 
+    guard !isResetting, generation == mutationGeneration, !Task.isCancelled else {
+      if storageMode == .copied { try? fileManager.removeItem(at: destinationURL) }
+      return nil
+    }
     print("[DEBUG] SongLibrary.importFile: Creating LibrarySong object")
     let song = LibrarySong(
       title: metadata.title,
@@ -1362,9 +1521,12 @@ extension Notification.Name {
   }
 
   private func importFileInPlace(at url: URL, modelContext: ModelContext) async -> LibrarySong? {
+    guard !isResetting, PathManager.isInside(url, directory: songsDirectory) else { return nil }
+    let generation = mutationGeneration
     let fileName = url.lastPathComponent
 
     guard let fileHash = await fileHash(at: url) else { return nil }
+    guard !isResetting, generation == mutationGeneration, !Task.isCancelled else { return nil }
     guard importingFileHashes.insert(fileHash).inserted else { return nil }
     defer { importingFileHashes.remove(fileHash) }
     let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
@@ -1384,6 +1546,7 @@ extension Notification.Name {
     let metadata = await Task.detached(priority: .userInitiated) {
       await AudioMetadataExtractor.extract(from: url)
     }.value
+    guard !isResetting, generation == mutationGeneration, !Task.isCancelled else { return nil }
 
     // Check for companion .lrc file
     var songLyrics = metadata.lyrics
@@ -1402,14 +1565,10 @@ extension Notification.Name {
       }
     }()
 
-    // For in-place indexing (e.g. startup scan of Songs/ folder), it's always .copied
-    // because it's already in the app's managed directory.
-    // However, if we're importing from elsewhere via Files app, it follows the setting.
-    // This method is primarily used by indexOnStartup which scans self.songsDirectory.
-    let isAlreadyInLibraryDir = url.path.hasPrefix(songsDirectory.path)
-    let storageMode: LibrarySong.StorageMode =
-      isAlreadyInLibraryDir ? LibrarySong.StorageMode.copied : LibrarySong.StorageMode.referenced
-    let bookmarkData = isAlreadyInLibraryDir ? nil : PathManager.createBookmark(for: url)
+    guard !isResetting, generation == mutationGeneration, !Task.isCancelled else { return nil }
+    // This entry point only indexes files already in the managed directory.
+    let storageMode: LibrarySong.StorageMode = .copied
+    let bookmarkData: Data? = nil
 
     let song = LibrarySong(
       title: metadata.title,
@@ -1565,7 +1724,8 @@ extension Notification.Name {
     print(
       "[DEBUG] SongLibrary.reindexMissingTechnicalMetadata: Checking for songs with missing metadata"
     )
-    guard let modelContext = modelContext else { return }
+    guard let modelContext = modelContext, !isResetting else { return }
+    let generation = mutationGeneration
 
     // Fetch songs where format or sampleRate is nil
     let descriptor = FetchDescriptor<LibrarySong>(
@@ -1584,12 +1744,17 @@ extension Notification.Name {
       )
       indexingStatus = .indexing("Updating metadata…")
 
-      for (index, song) in missingSongs.enumerated() {
+      let missingIDs = missingSongs.map(\.id)
+      for (index, songID) in missingIDs.enumerated() {
+        guard !isResetting, generation == mutationGeneration else { return }
+        guard let song = self.song(id: songID) else { continue }
         let url = getFileURL(for: song)
         if fileManager.fileExists(atPath: url.path) {
           let metadata = await Task.detached(priority: .utility) {
             await AudioMetadataExtractor.extract(from: url)
           }.value
+          guard !isResetting, generation == mutationGeneration else { return }
+          guard let song = self.song(id: songID) else { continue }
           song.sampleRate = metadata.sampleRate
           song.bitDepth = metadata.bitDepth
           song.bitRate = metadata.bitRate
@@ -1799,7 +1964,9 @@ extension Notification.Name {
   /// Runs the normal song pass followed by the optional, slower artist/album
   /// enrichment pass. Both use MetadataService's shared API rate limiter.
   func fetchAutomaticMetadata() async {
+    guard !isResetting else { return }
     await fetchMetadataForNewSongs()
+    guard !isResetting else { return }
     await fetchArtistAlbumMetadataIfEnabled()
   }
 
@@ -1831,23 +1998,30 @@ extension Notification.Name {
     guard total > 0 else { return }
 
     var completed = 0
-    for album in targetAlbums {
-      guard !Task.isCancelled else { break }
+    let albumIDs = targetAlbums.map(\.id)
+    let artistIDs = targetArtists.map(\.id)
+    for albumID in albumIDs {
+      guard !Task.isCancelled, !isResetting else { break }
+      guard let album = albums.first(where: { $0.id == albumID }) else { continue }
       indexingStatus = .indexing("Fetching album info (\(completed + 1)/\(total))…")
       await metadataService.refreshMetadata(for: album)
-      guard !Task.isCancelled else { break }
+      guard !Task.isCancelled, !isResetting else { break }
+      guard let album = albums.first(where: { $0.id == albumID }) else { continue }
       album.metadataCheckAttempted = true
       completed += 1
       if completed.isMultiple(of: 5) { saveContext() }
     }
 
-    for artist in targetArtists {
-      guard !Task.isCancelled else { break }
+    for artistID in artistIDs {
+      guard !Task.isCancelled, !isResetting else { break }
+      guard let artist = artists.first(where: { $0.id == artistID }) else { continue }
       indexingStatus = .indexing("Fetching artist info (\(completed + 1)/\(total))…")
       if let metadata = await metadataService.fetchMetadata(for: artist) {
+        guard let artist = artists.first(where: { $0.id == artistID }), !isResetting else { continue }
         await applyFetchedArtistMetadata(metadata, to: artist, using: metadataService)
       }
-      guard !Task.isCancelled else { break }
+      guard !Task.isCancelled, !isResetting else { break }
+      guard let artist = artists.first(where: { $0.id == artistID }) else { continue }
       artist.metadataCheckAttempted = true
       completed += 1
       if completed.isMultiple(of: 5) { saveContext() }
@@ -1860,6 +2034,7 @@ extension Notification.Name {
   private func applyFetchedArtistMetadata(
     _ metadata: ArtistMetadata, to artist: Artist, using metadataService: MetadataService
   ) async {
+    let artistID = artist.id
     if let genres = metadata.genres, !genres.isEmpty {
       artist.genres = genres
       artist.cachedGenres = genres
@@ -1881,15 +2056,19 @@ extension Notification.Name {
     if let artworkURL = metadata.artworkURL,
       let path = await metadataService.downloadArtwork(from: artworkURL)
     {
+      guard let artist = artists.first(where: { $0.id == artistID }), !isResetting else { return }
       artist.artworkPath = path
       artist.isDedicatedArtwork = true
     }
+    guard let artist = artists.first(where: { $0.id == artistID }), !isResetting else { return }
     if let fanartURL = metadata.fanartURL {
       artist.fanartURL = fanartURL.absoluteString
       if let path = await metadataService.downloadArtwork(from: fanartURL) {
+        guard let artist = artists.first(where: { $0.id == artistID }), !isResetting else { return }
         artist.fanartPath = path
       }
     }
+    guard let artist = artists.first(where: { $0.id == artistID }), !isResetting else { return }
     artist.lastUpdatedDate = Date()
   }
 
@@ -1952,7 +2131,7 @@ extension Notification.Name {
 
       for songID in songIDs {
         // Double check if context is still valid
-        guard self.modelContext != nil else { break }
+        guard self.modelContext != nil, !isResetting else { break }
 
         // The OS cancels us when a background window expires; stop cleanly so
         // the remaining songs keep their unattempted flag for the next pass.
@@ -1972,7 +2151,7 @@ extension Notification.Name {
         await fetchMetadataForSong(song, isPartOfBatch: true)
 
         // Decrement here to ensure it happens regardless of what fetchMetadataForSong does
-        pendingMetadataFetches -= 1
+        pendingMetadataFetches = max(0, pendingMetadataFetches - 1)
 
         // Smaller pause
         try? await Task.sleep(nanoseconds: 50_000_000)  // 0.05s
@@ -2085,7 +2264,7 @@ extension Notification.Name {
     let secured = url.startAccessingSecurityScopedResource()
     defer { if secured { url.stopAccessingSecurityScopedResource() } }
 
-    guard fileManager.fileExists(atPath: url.path) else {
+    guard FileManager.default.fileExists(atPath: url.path) else {
       print("[DEBUG] SongLibrary.refreshEmbeddedMetadata: Missing file for \(songTitle)")
       return
     }
@@ -2647,6 +2826,7 @@ extension Notification.Name {
   func fileExists(for song: LibrarySong) -> Bool {
     let url = getFileURL(for: song)
     if song.storageMode == .referenced {
+      guard !PathManager.isTrashed(url), !PathManager.isInside(url, directory: songsDirectory) else { return false }
       // A monitored parent folder may already own the security scope. Calling
       // startAccessing again on each child produces sandbox_extension_consume
       // EINVAL spam on iOS 27 even though the file is already readable.
@@ -2666,10 +2846,101 @@ extension Notification.Name {
   }
 
   func getFileURL(for song: LibrarySong) -> URL {
+    if song.storageMode == .referenced {
+      return referencedFileURL(for: song)
+    }
     if let cached = resolvedURLCache[song.id] { return cached }
     let url = resolveFileURL(for: song)
     resolvedURLCache[song.id] = url
     return url
+  }
+
+  private func referencedFileURL(for song: LibrarySong) -> URL {
+    let storedURL = song.filePath.flatMap { $0.isEmpty ? nil : PathManager.referencedURL(for: $0) }
+    if let cached = resolvedURLCache[song.id],
+      !PathManager.isTrashed(cached),
+      !PathManager.isInside(cached, directory: songsDirectory),
+      fileManager.isReadableFile(atPath: cached.path)
+    {
+      return cached
+    }
+
+    if let storedURL, !PathManager.isInside(storedURL, directory: songsDirectory),
+      !PathManager.isTrashed(storedURL), fileManager.isReadableFile(atPath: storedURL.path)
+    {
+      resolvedURLCache[song.id] = storedURL
+      return storedURL
+    }
+
+    if let data = song.bookmarkData, let bookmarkedURL = PathManager.resolveBookmark(data),
+      !PathManager.isTrashed(bookmarkedURL),
+      !PathManager.isInside(bookmarkedURL, directory: songsDirectory)
+    {
+      // A bookmark grants access, but must not follow a deleted source into
+      // another location. Also recover records whose old fallback overwrote
+      // the source path with a managed copy, using their original bookmark.
+      let canUseBookmark = storedURL.map {
+        PathManager.isInside($0, directory: songsDirectory)
+          || $0.resolvingSymlinksInPath() == bookmarkedURL.resolvingSymlinksInPath()
+      } ?? true
+      if canUseBookmark
+      {
+        resolvedURLCache[song.id] = bookmarkedURL
+        return bookmarkedURL
+      }
+    }
+    return storedURL ?? songsDirectory.deletingLastPathComponent()
+      .appendingPathComponent(".missing-references/\(song.id.uuidString)")
+  }
+
+  /// Missing is different from an inaccessible provider. Only the former is
+  /// grounds for pruning records; either must prevent buffered playback.
+  func referencedSourceWasDeleted(for song: LibrarySong) -> Bool {
+    guard song.storageMode == .referenced else { return false }
+    let url = referencedFileURL(for: song)
+    if PathManager.isTrashed(url) { return true }
+    let secured = url.startAccessingSecurityScopedResource()
+    defer { if secured { url.stopAccessingSecurityScopedResource() } }
+    return PathManager.isDefinitelyMissing(url)
+  }
+
+  func reconcileReferencedSources() async {
+    guard !isResetting else { return }
+    let generation = mutationGeneration
+    invalidateResolvedURLCache()
+    let sources = songs.filter { $0.storageMode == .referenced }.compactMap { song in
+      song.filePath.map { (id: song.id, path: $0, bookmark: song.bookmarkData) }
+    }
+    let managedDirectory = songsDirectory
+    let missingIDs = await Task.detached(priority: .utility) {
+      var ids = Set<UUID>()
+      for source in sources {
+        var url = PathManager.referencedURL(for: source.path)
+        // A retained parent-folder scope already grants access. Resolving
+        // every child bookmark again is expensive and can consume stale
+        // sandbox extensions. Only retry a bookmark when access is needed.
+        if !PathManager.isInside(url, directory: managedDirectory),
+          !PathManager.isTrashed(url), FileManager.default.isReadableFile(atPath: url.path)
+        {
+          continue
+        }
+        let bookmarkedURL = source.bookmark.flatMap(PathManager.resolveBookmark)
+        if PathManager.isInside(url, directory: managedDirectory), let bookmarkedURL,
+          !PathManager.isInside(bookmarkedURL, directory: managedDirectory)
+        {
+          url = bookmarkedURL
+        }
+        let scopeURL = bookmarkedURL ?? url
+        let secured = scopeURL.startAccessingSecurityScopedResource()
+        if PathManager.isTrashed(url) || PathManager.isDefinitelyMissing(url) {
+          ids.insert(source.id)
+        }
+        if secured { scopeURL.stopAccessingSecurityScopedResource() }
+      }
+      return ids
+    }.value
+    guard !isResetting, generation == mutationGeneration, !Task.isCancelled else { return }
+    removeSongsWhoseFilesDisappeared(songs(ids: Array(missingIDs)))
   }
 
   /// Drops cached URL resolutions. Call whenever a song's stored path or
@@ -2714,6 +2985,7 @@ extension Notification.Name {
 
   private func resolvedStoredFileURL(for song: LibrarySong) -> URL? {
     guard let path = song.filePath, !path.isEmpty else { return nil }
+    if song.storageMode == .referenced { return PathManager.referencedURL(for: path) }
     return PathManager.resolve(path)?.standardizedFileURL
   }
 
@@ -2786,7 +3058,7 @@ extension Notification.Name {
   nonisolated private func getUniqueFileName(baseName: String, in directory: URL) -> String {
     let url = directory.appendingPathComponent(baseName)
 
-    guard fileManager.fileExists(atPath: url.path) else {
+    guard FileManager.default.fileExists(atPath: url.path) else {
       return baseName
     }
 
@@ -2798,7 +3070,7 @@ extension Notification.Name {
     while counter < 1000 {
       let newName = "\(nameWithoutExt) (\(counter))\(ext)"
       let newURL = directory.appendingPathComponent(newName)
-      if !fileManager.fileExists(atPath: newURL.path) {
+      if !FileManager.default.fileExists(atPath: newURL.path) {
         return newName
       }
       counter += 1
@@ -2875,7 +3147,7 @@ extension Notification.Name {
   /// list. If a sync provider restores one of these files later, that is a real
   /// filesystem addition and it should be imported again.
   func removeSongsWhoseFilesDisappeared(_ candidates: [LibrarySong]) {
-    guard let modelContext else { return }
+    guard let modelContext, !isResetting else { return }
     let missing = candidates.filter { songIndex[$0.id] != nil }
     guard !missing.isEmpty else { return }
 
@@ -3213,22 +3485,23 @@ extension Notification.Name {
       }
   }
 
-  func setModelContext(_ context: ModelContext) {
+  func setModelContext(_ context: ModelContext, loadImmediately: Bool = true) {
+    guard modelContext !== context else { return }
     let start = Date()
-    print(
-      "[\(Date()).ISO8601Format()] [DEBUG] SongLibrary.setModelContext called on thread: \(Thread.current.name)"
-    )
-    print("[\(Date()).ISO8601Format()] [DEBUG] About to assign context...")
+    print("[\(Date().ISO8601Format())] [DEBUG] SongLibrary.setModelContext called")
+    print("[\(Date().ISO8601Format())] [DEBUG] About to assign context...")
     modelContext = context
+    isLoaded = false
     print(
-      "[\(Date()).ISO8601Format()] [DEBUG] Context assigned, took \(Date().timeIntervalSince(start))s"
+      "[\(Date().ISO8601Format())] [DEBUG] Context assigned, took \(Date().timeIntervalSince(start))s"
     )
 
     // Load songs immediately to ensure library is ready for other services
-    Task {
-      await loadSongs()
-      // Notify that library is loaded so other services (like PlaybackController) can react
-      NotificationCenter.default.post(name: Notification.Name("SongLibraryDidLoad"), object: nil)
+    if loadImmediately {
+      Task {
+        await loadSongs()
+        NotificationCenter.default.post(name: Notification.Name("SongLibraryDidLoad"), object: nil)
+      }
     }
   }
 }
