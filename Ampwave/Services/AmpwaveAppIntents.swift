@@ -194,6 +194,7 @@ public struct PlayMusicIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Play Music"
   public static var description = IntentDescription(
     "Plays music in Ampwave based on a search query.")
+  public static var isDiscoverable: Bool = false
   public static var openAppWhenRun: Bool = false
 
   @Parameter(title: "Query", description: "The song, artist, album, or playlist to play")
@@ -243,6 +244,7 @@ public struct PlayMusicIntent: AudioPlaybackIntent {
 public struct PlayArtistIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Play Artist"
   public static var description = IntentDescription("Plays songs by a specific artist in Ampwave.")
+  public static var isDiscoverable: Bool = false
   public static var openAppWhenRun: Bool = false
 
   @Parameter(title: "Artist", requestValueDialog: IntentDialog("Which artist?"))
@@ -269,6 +271,7 @@ public struct PlayArtistIntent: AudioPlaybackIntent {
 public struct PlaySpecificPlaylistIntent: AudioPlaybackIntent {
   public static var title: LocalizedStringResource = "Play Playlist"
   public static var description = IntentDescription("Plays a specific playlist in Ampwave.")
+  public static var isDiscoverable: Bool = false
   public static var openAppWhenRun: Bool = false
 
   @Parameter(title: "Playlist", requestValueDialog: IntentDialog("Which playlist?"))
@@ -328,58 +331,10 @@ public struct AddToPlaylistIntent: AppIntent {
 struct AmpwaveShortcuts: AppShortcutsProvider {
   @AppShortcutsBuilder
   static var appShortcuts: [AppShortcut] {
-    // The content parameter is interpolated directly into the phrase, so
-    // "Play <title> on Ampwave" is understood in one shot. That only works
-    // because these are AppEntity parameters — Siri refuses to slot a String
-    // into a phrase, which is why these used to read "Play a song on Ampwave"
-    // and anything more natural fell through to the system media handler.
-    AppShortcut(
-      intent: PlaySongIntent(),
-      phrases: [
-        "Play \(\.$song) on \(.applicationName)",
-        "Play \(\.$song) in \(.applicationName)",
-        "Play the song \(\.$song) on \(.applicationName)",
-        "Play a song on \(.applicationName)",
-      ],
-      shortTitle: "Play Song",
-      systemImageName: "music.note"
-    )
-
-    // ── Generic search — String param, so Siri prompts for it ────────────────
-    AppShortcut(
-      intent: PlayMusicIntent(),
-      phrases: [
-        "Play music on \(.applicationName)",
-        "Play something on \(.applicationName)",
-        "Search and play on \(.applicationName)",
-      ],
-      shortTitle: "Play Music",
-      systemImageName: "magnifyingglass"
-    )
-
-    AppShortcut(
-      intent: PlayArtistIntent(),
-      phrases: [
-        "Play \(\.$artist) on \(.applicationName)",
-        "Play music by \(\.$artist) on \(.applicationName)",
-        "Play songs by \(\.$artist) on \(.applicationName)",
-        "Play an artist on \(.applicationName)",
-      ],
-      shortTitle: "Play Artist",
-      systemImageName: "music.mic"
-    )
-
-    AppShortcut(
-      intent: PlaySpecificPlaylistIntent(),
-      phrases: [
-        "Play \(\.$playlist) on \(.applicationName)",
-        "Play my \(\.$playlist) playlist on \(.applicationName)",
-        "Start \(\.$playlist) on \(.applicationName)",
-        "Play a playlist on \(.applicationName)",
-      ],
-      shortTitle: "Play Playlist",
-      systemImageName: "music.note.list"
-    )
+    // Song, artist, album, and playlist requests deliberately aren't App
+    // Shortcuts. Their natural "Play … on Ampwave" phrasing belongs to
+    // SiriKit's INPlayMediaIntent. Advertising the same grammar here makes
+    // Siri run a shortcut first, lose the spoken title, and then prompt for it.
 
     // ── Transport controls — previously unreachable by voice at all ──────────
     AppShortcut(

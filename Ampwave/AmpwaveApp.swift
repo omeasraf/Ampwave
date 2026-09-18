@@ -34,6 +34,11 @@ private struct AppThemeChrome: ViewModifier {
 
 @main
 struct AmpwaveApp: App {
+  #if os(iOS)
+    @UIApplicationDelegateAdaptor(AmpwaveApplicationDelegate.self)
+    private var applicationDelegate
+  #endif
+
   // Shared model container for SwiftData
   let modelContainer: ModelContainer?
   let persistenceStartupError: String?
@@ -160,6 +165,7 @@ struct AmpwaveApp: App {
           switch phase {
           case .active:
             DiagnosticLog.shared.log("lifecycle", "Scene became active")
+            SonicRecommendationService.shared.applicationDidBecomeActive()
             PlaybackController.shared.applicationDidBecomeActive()
             LibraryMonitorService.shared.applicationDidBecomeActive()
           case .background:
@@ -167,6 +173,7 @@ struct AmpwaveApp: App {
               "lifecycle",
               "Scene entered background playing=\(PlaybackController.shared.isPlaying) song=\(PlaybackController.shared.currentItem?.title ?? "none")"
             )
+            SonicRecommendationService.shared.applicationWillResignActive()
             LibraryMonitorService.shared.applicationDidEnterBackground()
             // Leaving the app: ask for a later window so anything the
             // post-backgrounding grace period doesn't finish still gets done.
@@ -174,7 +181,7 @@ struct AmpwaveApp: App {
               BackgroundWorkCoordinator.scheduleMetadataRefresh()
             }
           case .inactive:
-            break
+            SonicRecommendationService.shared.applicationWillResignActive()
           @unknown default:
             break
           }

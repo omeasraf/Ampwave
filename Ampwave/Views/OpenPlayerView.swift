@@ -850,25 +850,10 @@ private struct PlayerProgressView: View {
       ?? playback.interpolatedCurrentTime()
 
     VStack(spacing: 8) {
-      Group {
-        if usesWavySlider {
-          animatedWavySlider(
-            duration: duration,
-            displayedProgress: displayedProgress
-          )
-        } else {
-          Slider(
-            value: Binding(
-              get: { displayedProgress },
-              set: updateScrubProgress
-            ),
-            in: 0...1,
-            onEditingChanged: updateScrubbing
-          )
-          .tint(.primary)
-        }
-      }
-      .frame(height: 24)
+      animatedProgressSlider(
+        duration: duration,
+        displayedProgress: displayedProgress
+      )
       .padding(.top, 2)
 
       HStack {
@@ -885,7 +870,7 @@ private struct PlayerProgressView: View {
     }
   }
 
-  private func animatedWavySlider(
+  private func animatedProgressSlider(
     duration: TimeInterval,
     displayedProgress: Double
   ) -> some View {
@@ -895,12 +880,12 @@ private struct PlayerProgressView: View {
         paused: !playback.isPlaying || isScrubbing
       )
     ) { _ in
-      WavyPlayerSlider(
+      PlayerTimelineSlider(
         value: smoothProgress(
           duration: duration,
           fallback: displayedProgress
         ),
-        isWavy: playback.isPlaying,
+        isWavy: usesWavySlider && playback.isPlaying,
         onChanged: updateScrubProgress,
         onEditingChanged: updateScrubbing
       )
@@ -954,7 +939,7 @@ private struct PlayerProgressView: View {
   }
 }
 
-private struct WavyPlayerSlider: View {
+private struct PlayerTimelineSlider: View {
   let value: Double
   let isWavy: Bool
   let onChanged: (Double) -> Void
@@ -1041,7 +1026,10 @@ private struct WavyPlayerSlider: View {
         }
       }
     }
-    .frame(height: 24)
+    // Keep the visible track compact while making the entire row draggable.
+    // Unlike SwiftUI's Slider, this lets a tap begin anywhere along the
+    // timeline and meets the recommended minimum touch-target height.
+    .frame(height: 44)
   }
 }
 

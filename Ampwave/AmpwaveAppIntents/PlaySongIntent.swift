@@ -14,6 +14,9 @@ public struct PlaySongIntent: AudioPlaybackIntent {
   public static var description = IntentDescription(
     "Searches your music library and starts playback in Ampwave."
   )
+  // Native voice playback is handled by INPlayMediaIntent. Keeping this
+  // action hidden prevents Siri from treating it as a two-step shortcut.
+  public static var isDiscoverable: Bool = false
   // AudioPlaybackIntent exists so playback can start without foregrounding the
   // app — forcing it open also made this fail from a locked screen.
   public static var openAppWhenRun: Bool = false

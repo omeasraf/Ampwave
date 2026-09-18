@@ -84,6 +84,7 @@ final class SonicRecommendationService {
   private var pending: [SonicTrackSnapshot] = []
   private var pendingHashes = Set<String>()
   private var analysisWorker: Task<Void, Never>?
+  private var isAnalysisSuspended = false
   private let resolveTrackURL: @MainActor (LibrarySong, SongLibrary) -> URL
 
   init(resolveTrackURL: @escaping @MainActor (LibrarySong, SongLibrary) -> URL = { song, library in
@@ -199,6 +200,19 @@ final class SonicRecommendationService {
     analysisWorker != nil || !pending.isEmpty
   }
 
+  /// Music Understanding uses GPU work that iOS doesn't permit after the app
+  /// resigns active. Cancel before background execution begins and retain the
+  /// current track so analysis can safely resume next time the scene is active.
+  func applicationWillResignActive() {
+    isAnalysisSuspended = true
+    analysisWorker?.cancel()
+  }
+
+  func applicationDidBecomeActive() {
+    isAnalysisSuspended = false
+    startWorkerIfNeeded()
+  }
+
   /// Keeps a BGProcessingTask associated with the existing low-priority
   /// worker without transferring SwiftData or AVFoundation work off its
   /// established executors. Cancellation stops waiting immediately; the
@@ -269,16 +283,26 @@ final class SonicRecommendationService {
   }
 
   private func startWorkerIfNeeded() {
-    guard analysisWorker == nil else { return }
+    guard !isAnalysisSuspended, analysisWorker == nil else { return }
     analysisWorker = Task(priority: .utility) { [weak self] in
       guard let self else { return }
       while !Task.isCancelled, !self.pending.isEmpty {
         let track = self.pending.removeLast()
         self.pendingHashes.remove(track.fileHash)
         _ = await self.analyzeAndCacheIfNeeded(track)
+        if Task.isCancelled {
+          if !self.pendingHashes.contains(track.fileHash) {
+            self.pending.append(track)
+            self.pendingHashes.insert(track.fileHash)
+          }
+          break
+        }
         await Task.yield()
       }
       self.analysisWorker = nil
+      if !self.isAnalysisSuspended {
+        self.startWorkerIfNeeded()
+      }
     }
   }
 

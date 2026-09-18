@@ -61,6 +61,10 @@ final class SiriPlaybackRouter {
     // before consulting MusicKit, which also keeps Siri working when Apple
     // Music permission or a catalog subscription is unavailable.
     if let localResult = resolveLocalLibrarySong(songTitle: title, artistName: artist) {
+      // Don't let a prior catalog session keep playing underneath the local
+      // player or resume its last item after Siri switches providers.
+      musicPlayer.stop()
+      musicPlayer.playbackTime = 0
       PlaybackController.shared.play(localResult.song, from: .search)
       return PlaybackResolution(
         source: .localLibrary,
@@ -108,6 +112,9 @@ final class SiriPlaybackRouter {
       for: [match.song],
       startingAt: match.song
     )
+    // A fresh Siri request means "start this song", not "resume whatever the
+    // application player remembers for the same catalog item."
+    musicPlayer.playbackTime = 0
     try await musicPlayer.play()
 
     return PlaybackResolution(
