@@ -12,9 +12,10 @@ struct AlbumContextMenuModifier: ViewModifier {
   let album: Album
   let onEdit: (() -> Void)?
 
+  @Environment(\.modelContext) private var modelContext
   @State private var showingAddToPlaylist = false
   @State private var isDeletingShown = false
-  @Query private var userPreferences: [UserPreferences]
+  @State private var deletesReferencedOriginals = false
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -81,6 +82,8 @@ struct AlbumContextMenuModifier: ViewModifier {
         #endif
 
         Button(role: .destructive) {
+          deletesReferencedOriginals = UserPreferences.getOrCreate(in: modelContext)
+            .deleteReferencedFilesOnRemoval
           isDeletingShown = true
         } label: {
           Label("Delete Album", systemImage: "trash")
@@ -134,10 +137,6 @@ struct AlbumContextMenuModifier: ViewModifier {
     album.songs.contains { $0.storageMode == .copied }
   }
 
-  private var deletesReferencedOriginals: Bool {
-    userPreferences.first?.deleteReferencedFilesOnRemoval ?? false
-  }
-
   private var albumDeletesAudioFiles: Bool {
     albumHasCopiedFiles
       || (deletesReferencedOriginals && album.songs.contains { $0.storageMode == .referenced })
@@ -165,10 +164,11 @@ struct SongContextMenuModifier: ViewModifier {
   let onEdit: (() -> Void)?
   let onDelete: (() -> Void)?
 
+  @Environment(\.modelContext) private var modelContext
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
   @State private var isDeletingShown = false
-  @Query private var userPreferences: [UserPreferences]
+  @State private var deletesReferencedOriginals = false
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -285,6 +285,8 @@ struct SongContextMenuModifier: ViewModifier {
           if let onDelete {
             onDelete()
           } else {
+            deletesReferencedOriginals = UserPreferences.getOrCreate(in: modelContext)
+              .deleteReferencedFilesOnRemoval
             isDeletingShown = true
           }
         } label: {
@@ -337,10 +339,6 @@ struct SongContextMenuModifier: ViewModifier {
           )
         }
       }
-  }
-
-  private var deletesReferencedOriginals: Bool {
-    userPreferences.first?.deleteReferencedFilesOnRemoval ?? false
   }
 
   private var songDeletesAudioFile: Bool {
