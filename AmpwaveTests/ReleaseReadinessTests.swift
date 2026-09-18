@@ -398,6 +398,33 @@ final class ImportStorageTests: XCTestCase {
     XCTAssertEqual(backfills, 1)
   }
 
+  func testLaunchLoadCanDeferAlbumsAndArtistsUntilAfterFirstFrame() async throws {
+    let fixture = try Fixture()
+    defer { fixture.cleanUp() }
+    await fixture.library.importFiles([try fixture.audioFile()])
+
+    let launchLibrary = SongLibrary(
+      songsDirectory: fixture.library.songsDirectory,
+      artworkCacheDirectory: fixture.library.artworkCacheDirectory,
+      defaults: fixture.defaults
+    )
+    launchLibrary.setModelContext(fixture.context, loadImmediately: false)
+    defer { launchLibrary.modelContext = nil }
+
+    await launchLibrary.loadSongs(
+      force: true,
+      performMaintenance: false,
+      includeCollections: false
+    )
+    XCTAssertEqual(launchLibrary.songs.count, 1)
+    XCTAssertTrue(launchLibrary.albums.isEmpty)
+    XCTAssertTrue(launchLibrary.artists.isEmpty)
+
+    await launchLibrary.finishDeferredLoading()
+    XCTAssertFalse(launchLibrary.albums.isEmpty)
+    XCTAssertFalse(launchLibrary.artists.isEmpty)
+  }
+
   func testPlaybackFolderLeaseSurvivesMonitorBackgroundAndIsReleasedOnLastOwner() async throws {
     let fixture = try Fixture()
     defer { fixture.cleanUp() }

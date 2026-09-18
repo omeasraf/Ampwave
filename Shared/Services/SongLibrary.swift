@@ -547,7 +547,11 @@ extension Notification.Name {
 
   // MARK: - Loading
 
-  func loadSongs(force: Bool = false, performMaintenance: Bool = true) async {
+  func loadSongs(
+    force: Bool = false,
+    performMaintenance: Bool = true,
+    includeCollections: Bool = true
+  ) async {
     guard !isResetting else { return }
     let started = Date()
     let generation = mutationGeneration
@@ -565,10 +569,7 @@ extension Notification.Name {
     invalidateResolvedURLCache()
 
     do {
-      let descriptor = FetchDescriptor<LibrarySong>(
-        sortBy: [SortDescriptor(\.importedDate, order: .reverse)]
-      )
-      songs = try modelContext.fetch(descriptor)
+      songs = try await fetchSongsInResponsiveBatches(from: modelContext)
       print("[DEBUG] SongLibrary.loadSongs: Fetched \(songs.count) songs")
       // Loading uses the main SwiftData context, but yielding between fetch
       // phases lets the launch equalizer commit animation frames.
@@ -582,7 +583,7 @@ extension Notification.Name {
         await mergeSongDuplicates(in: modelContext)
         guard generation == mutationGeneration, !isResetting else { return }
         // Refresh songs after merge
-        songs = try modelContext.fetch(descriptor)
+        songs = try await fetchSongsInResponsiveBatches(from: modelContext)
       }
       
       isLoaded = true
@@ -592,13 +593,46 @@ extension Notification.Name {
       songs = []
     }
 
-    await loadAlbums(performMaintenance: performMaintenance)
-    await Task.yield()
-    guard generation == mutationGeneration, !isResetting else { return }
-    artists = await allArtists(allowReindex: performMaintenance)
+    if includeCollections {
+      await loadAlbums(performMaintenance: performMaintenance)
+      await Task.yield()
+      guard generation == mutationGeneration, !isResetting else { return }
+      artists = await allArtists(allowReindex: performMaintenance)
+    }
     guard generation == mutationGeneration, !isResetting else { return }
     if performMaintenance { Self.libraryDidLoad?(songs) }
     print("[DEBUG] SongLibrary.loadSongs: Finished loading songs, albums, and artists elapsed=\(Date().timeIntervalSince(started))s maintenance=\(performMaintenance)")
+  }
+
+  /// Fetches a large saved library in bounded chunks. SwiftData's main context
+  /// is main-actor isolated, but yielding between batches lets SwiftUI commit
+  /// splash and transition frames instead of freezing for one long fetch.
+  private func fetchSongsInResponsiveBatches(
+    from modelContext: ModelContext,
+    batchSize: Int = 128
+  ) async throws -> [LibrarySong] {
+    var result: [LibrarySong] = []
+    var offset = 0
+
+    while true {
+      var descriptor = FetchDescriptor<LibrarySong>(
+        sortBy: [
+          SortDescriptor(\.importedDate, order: .reverse),
+          SortDescriptor(\.id, order: .forward),
+        ]
+      )
+      descriptor.fetchLimit = batchSize
+      descriptor.fetchOffset = offset
+
+      let batch = try modelContext.fetch(descriptor)
+      result.append(contentsOf: batch)
+      guard batch.count == batchSize else { break }
+
+      offset += batch.count
+      await Task.yield()
+    }
+
+    return result
   }
 
   /// Optional normalization/backfill runs after the tabs are visible, without

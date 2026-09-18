@@ -270,7 +270,10 @@ struct ArtistView: View {
   }
 
   private var allSongsList: some View {
-    VStack(spacing: 0) {
+    // This list lives inside the page's outer ScrollView, so a regular VStack
+    // eagerly creates every SongRow. Large artists could consequently start
+    // hundreds of artwork decodes in one render pass and exhaust the process.
+    LazyVStack(spacing: 0) {
       ForEach(viewModel.songs) { song in
         SongRow(
           song: song,
@@ -459,13 +462,15 @@ class ArtistDetailViewModel {
 
   func loadData() async {
     isLoading = true
-    defer { isLoading = false }
-
     await reloadLocalContent()
+    isLoading = false
+
+    guard !Task.isCancelled else { return }
 
     // Fetch when genres are missing, or when the artist still has no photo of
     // their own — `artworkPath` may just be borrowed album art, which leaves
     // the header looking like an album cover rather than an artist portrait.
+    // Do not keep the local library UI behind this optional network work.
     let needsGenres = artist.genres == nil || artist.genres?.isEmpty == true
     let needsArtwork = !artist.isDedicatedArtwork
     if needsGenres || needsArtwork {

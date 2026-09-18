@@ -13,6 +13,7 @@ struct ArtworkImage: View {
   let cornerRadius: CGFloat
 
   @State private var image: PlatformImage?
+  @Environment(\.displayScale) private var displayScale
 
   init(artworkPath: String?, size: CGFloat, cornerRadius: CGFloat = 8) {
     self.artworkPath = artworkPath
@@ -43,39 +44,26 @@ struct ArtworkImage: View {
     }
     .frame(width: size, height: size)
     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    .task(id: artworkPath) {
+    .task(id: loadKey) {
       await loadImage()
     }
+  }
+
+  private var loadKey: String {
+    "\(artworkPath ?? "")#\(Int(ceil(size * displayScale)))"
   }
 
   private func loadImage() async {
     guard let path = artworkPath, !path.isEmpty else { return }
 
-    // Check memory cache first
-    if let cached = ImageCache.shared.image(for: path) {
-      self.image = cached
-      return
-    }
-
-    // Resolve path and load from disk in background
     guard let url = PathManager.resolve(path) else { return }
-    let task = Task.detached(priority: .userInitiated) { () -> PlatformImage? in
-      do {
-        let data = try Data(contentsOf: url)
-        #if os(iOS)
-          return UIImage(data: data)
-        #else
-          return NSImage(data: data)
-        #endif
-      } catch {
-        return nil
-      }
-    }
-
-    if let loadedImage = await task.value {
-      ImageCache.shared.insert(loadedImage, for: path)
-      self.image = loadedImage
-    }
+    let loadedImage = await ImageCache.shared.thumbnail(
+      for: path,
+      url: url,
+      maxPixelSize: Int(ceil(size * displayScale))
+    )
+    guard !Task.isCancelled else { return }
+    self.image = loadedImage
   }
 }
 
@@ -86,6 +74,7 @@ struct ArtistImageView: View {
   let size: CGFloat
 
   @State private var image: PlatformImage?
+  @Environment(\.displayScale) private var displayScale
 
   var body: some View {
     Group {
@@ -111,36 +100,25 @@ struct ArtistImageView: View {
     }
     .frame(width: size, height: size)
     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .task(id: artworkPath) {
+    .task(id: loadKey) {
       await loadImage()
     }
+  }
+
+  private var loadKey: String {
+    "\(artworkPath ?? "")#\(Int(ceil(size * displayScale)))"
   }
 
   private func loadImage() async {
     guard let path = artworkPath, !path.isEmpty else { return }
 
-    if let cached = ImageCache.shared.image(for: path) {
-      self.image = cached
-      return
-    }
-
     guard let url = PathManager.resolve(path) else { return }
-    let task = Task.detached(priority: .userInitiated) { () -> PlatformImage? in
-      do {
-        let data = try Data(contentsOf: url)
-        #if os(iOS)
-          return UIImage(data: data)
-        #else
-          return NSImage(data: data)
-        #endif
-      } catch {
-        return nil
-      }
-    }
-
-    if let loadedImage = await task.value {
-      ImageCache.shared.insert(loadedImage, for: path)
-      self.image = loadedImage
-    }
+    let loadedImage = await ImageCache.shared.thumbnail(
+      for: path,
+      url: url,
+      maxPixelSize: Int(ceil(size * displayScale))
+    )
+    guard !Task.isCancelled else { return }
+    self.image = loadedImage
   }
 }

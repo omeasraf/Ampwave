@@ -121,7 +121,13 @@ struct ContentView: View {
     // Read saved records here. Provider scans and audio metadata extraction
     // must not hold the launch screen open; playback checks source availability
     // independently before restoring or starting any player item.
-    await SongLibrary.shared.loadSongs(performMaintenance: false)
+    // Songs are the only collection needed before the first interactive frame.
+    // Albums/artists are loaded by finishDeferredLoading after the splash fade,
+    // avoiding three back-to-back SwiftData fetches during the animation.
+    await SongLibrary.shared.loadSongs(
+      performMaintenance: false,
+      includeCollections: false
+    )
     PlaybackController.shared.setModelContext(modelContext)
   }
 
