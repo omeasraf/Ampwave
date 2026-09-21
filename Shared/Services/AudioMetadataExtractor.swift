@@ -8,6 +8,21 @@
 import AVFoundation
 import Foundation
 
+/// A compact, persistable representation of one ID3v2.4 frame. Text and URL
+/// payloads are retained in full. Binary payloads are represented by their
+/// declared type and size so artwork/provenance data is not duplicated in the
+/// SwiftData store.
+struct ID3v2Tag: Codable, Hashable, Sendable {
+  var frameID: String
+  var value: String?
+  var descriptor: String?
+  var language: String?
+  var mimeType: String?
+  var fileName: String?
+  var binaryDataSize: Int?
+  var flags: UInt16
+}
+
 /// All metadata extracted from an audio file.
 struct ExtractedAudioMetadata: Sendable {
   var title: String
@@ -25,6 +40,10 @@ struct ExtractedAudioMetadata: Sendable {
   var composer: String?
   var artwork: Data?
   var isExplicit: Bool?
+  var lyricist: String?
+  var isrc: String?
+  var id3v2Tags: [ID3v2Tag] = []
+  var isAIGenerated: Bool = false
   /// ReplayGain track gain in dB, when the file carries the tag.
   var replayGainDB: Double?
 
@@ -85,6 +104,10 @@ enum AudioMetadataExtractor: Sendable {
     var artwork: Data?
     var isCompilation: Bool = false
     var isExplicit: Bool?
+    var lyricist: String?
+    var isrc: String?
+    var id3v2Tags: [ID3v2Tag] = []
+    var isAIGenerated = false
     var replayGainDB: Double?
 
     for item in allMetadata {
@@ -94,10 +117,13 @@ enum AudioMetadataExtractor: Sendable {
       // FLAC/Ogg carry ReplayGain as a Vorbis comment and MP3 as a TXXX frame;
       // in both cases the tag name lands on `key` rather than the identifier.
       let keyLower = (stringValue(item.key) ?? "").lowercased()
+      let infoLower = (stringValue(item.extraAttributes?[.info]) ?? "").lowercased()
 
       if replayGainDB == nil,
-        idLower.contains("replaygain") || keyLower.contains("replaygain"),
-        keyLower.contains("track") || idLower.contains("track") || keyLower.isEmpty,
+        idLower.contains("replaygain") || keyLower.contains("replaygain")
+          || infoLower.contains("replaygain"),
+        keyLower.contains("track") || idLower.contains("track")
+          || infoLower.contains("track") || keyLower.isEmpty,
         let gain = parseReplayGain(value)
       {
         replayGainDB = gain
@@ -140,7 +166,11 @@ enum AudioMetadataExtractor: Sendable {
         }
 
         if idRaw.contains("lyrics") || idRaw.contains("Lyrics") { lyrics = stringValue(value) ?? lyrics }
-        else if idRaw.contains("comment") || idRaw.contains("Comment") || idRaw.contains("description") { songDescription = stringValue(value) ?? songDescription }
+        else if idLower == "id3/comm" || keyLower == "comm" || infoLower == "comment"
+          || idLower.contains("comment") || idLower.contains("description")
+        {
+          songDescription = stringValue(value) ?? songDescription
+        }
         else if idLower.contains("advisory") || idLower.contains("explicit") {
           if let num = value as? NSNumber { isExplicit = num.intValue != 0 }
           else if let str = stringValue(value) {
@@ -180,7 +210,9 @@ enum AudioMetadataExtractor: Sendable {
         else if idRaw.contains("TPE2") || idRaw.contains("aART")
              || idLower.contains("albumartist") || idLower.contains("album artist")
              || idLower.contains("album_artist") || keyLower.contains("albumartist")
-             || keyLower.contains("album artist") || keyLower.contains("album_artist") {
+             || keyLower.contains("album artist") || keyLower.contains("album_artist")
+             || infoLower == "albumartist" || infoLower == "album artist"
+             || infoLower == "album_artist" {
           if let v = stringValue(value) {
             albumArtist = v
           }
@@ -203,6 +235,31 @@ enum AudioMetadataExtractor: Sendable {
           albumArtist = v
         }
       }
+    }
+
+    // AVFoundation does not consistently expose ID3 frame descriptors or
+    // binary frames. Keep a compact snapshot of every v2.4 frame, and use the
+    // direct parser as the authoritative source for standard text fields.
+    if url.pathExtension.lowercased() == "mp3", let id3 = readID3Metadata(from: url) {
+      if id3.version == 4 { id3v2Tags = id3.tags }
+      lyrics = id3.lyrics ?? lyrics
+      embeddedTitle = id3.firstValue(for: "TIT2") ?? embeddedTitle
+      embeddedArtist = id3.firstValue(for: "TPE1") ?? embeddedArtist
+      album = id3.firstValue(for: "TALB") ?? album
+      albumArtist = id3.firstValue(for: "TPE2") ?? albumArtist
+      genre = id3.firstValue(for: "TCON") ?? genre
+      composer = id3.firstValue(for: "TCOM") ?? composer
+      lyricist = id3.firstValue(for: "TEXT") ?? lyricist
+      isrc = id3.firstValue(for: "TSRC") ?? isrc
+      trackNumber = id3.firstValue(for: "TRCK").flatMap(parseTrackNumber) ?? trackNumber
+      discNumber = id3.firstValue(for: "TPOS").flatMap(parseTrackNumber) ?? discNumber
+      year = id3.firstValue(for: "TDRC").flatMap(parseYear)
+        ?? id3.firstValue(for: "TYER").flatMap(parseYear) ?? year
+      songDescription = id3.firstValue(for: "COMM")
+        ?? id3.firstValue(for: "TXXX", descriptor: "comment") ?? songDescription
+      replayGainDB = id3.firstValue(for: "TXXX", descriptor: "REPLAYGAIN_TRACK_GAIN")
+        .flatMap { parseReplayGain($0) } ?? replayGainDB
+      isAIGenerated = id3.hasC2PAProvider(named: "Suno, Inc.")
     }
 
     // AVFoundation exposes FLAC/Vorbis fields as opaque Objective-C tag
@@ -320,6 +377,10 @@ enum AudioMetadataExtractor: Sendable {
       composer: composer,
       artwork: artwork,
       isExplicit: isExplicit,
+      lyricist: lyricist,
+      isrc: isrc,
+      id3v2Tags: id3v2Tags,
+      isAIGenerated: isAIGenerated,
       replayGainDB: replayGainDB,
       titleConfidence: titleConfidence,
       artistConfidence: artistConfidence,
@@ -433,6 +494,619 @@ enum AudioMetadataExtractor: Sendable {
 
     let trimmed = string?.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed?.isEmpty == false ? trimmed : nil
+  }
+
+  // MARK: - ID3 lyrics
+
+  private struct ID3LyricsCandidate {
+    let text: String
+    let priority: Int
+  }
+
+  private struct ID3SynchronizedText {
+    let text: String
+    let milliseconds: UInt32
+  }
+
+  private struct ID3MetadataResult {
+    let version: Int
+    let tags: [ID3v2Tag]
+    let lyrics: String?
+    let c2paProviders: [String]
+
+    func firstValue(for frameID: String, descriptor: String? = nil) -> String? {
+      tags.first { tag in
+        guard tag.frameID == frameID else { return false }
+        guard let descriptor else { return true }
+        return tag.descriptor?.caseInsensitiveCompare(descriptor) == .orderedSame
+      }?.value
+    }
+
+    func hasC2PAProvider(named expected: String) -> Bool {
+      c2paProviders.contains { $0.caseInsensitiveCompare(expected) == .orderedSame }
+    }
+  }
+
+  /// Reads every ID3v2.4 frame into a compact snapshot. This is intentionally
+  /// internal so parser tests do not depend on AVFoundation's metadata mapping.
+  static func readID3v2Tags(from url: URL) -> [ID3v2Tag] {
+    guard let metadata = readID3Metadata(from: url), metadata.version == 4 else { return [] }
+    return metadata.tags
+  }
+
+  static func readID3AIGeneratedFlag(from url: URL) -> Bool {
+    readID3Metadata(from: url)?.hasC2PAProvider(named: "Suno, Inc.") == true
+  }
+
+  /// Reads the ID3v2.3/v2.4 USLT and SYLT layouts defined by ID3.org.
+  static func readID3Lyrics(from url: URL) -> String? {
+    readID3Metadata(from: url)?.lyrics
+  }
+
+  private static func readID3Metadata(from url: URL) -> ID3MetadataResult? {
+    guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+    defer { try? handle.close() }
+
+    guard let header = try? handle.read(upToCount: 10), header.count == 10,
+      header.starts(with: [0x49, 0x44, 0x33])
+    else { return nil }
+
+    let version = Int(header[3])
+    guard version == 3 || version == 4,
+      let tagSize = synchsafeInteger(header[6..<10]),
+      tagSize > 0,
+      // ID3's four-byte synchsafe field permits 256 MB. Lyrics should never
+      // require reading an unbounded tag into memory, even for a malformed file.
+      tagSize <= 64 * 1_024 * 1_024,
+      let rawBody = try? handle.read(upToCount: tagSize), rawBody.count == tagSize
+    else { return nil }
+
+    let tagFlags = header[5]
+    var offset = 0
+    if tagFlags & 0x40 != 0 {
+      guard rawBody.count >= 4 else { return nil }
+      if version == 3 {
+        let extendedSize = bigEndianInteger(rawBody[0..<4])
+        offset = 4 + extendedSize
+      } else {
+        guard let extendedSize = synchsafeInteger(rawBody[0..<4]) else { return nil }
+        offset = extendedSize
+      }
+      guard offset >= 4, offset <= rawBody.count else { return nil }
+    }
+
+    var candidates: [ID3LyricsCandidate] = []
+    var tags: [ID3v2Tag] = []
+    var c2paProviders: [String] = []
+    while offset + 10 <= rawBody.count {
+      let idBytes = rawBody[offset..<(offset + 4)]
+      guard idBytes.allSatisfy({ byte in
+        (0x41...0x5A).contains(byte) || (0x30...0x39).contains(byte)
+      }) else { break }
+
+      let frameID = String(decoding: idBytes, as: UTF8.self)
+      let sizeBytes = rawBody[(offset + 4)..<(offset + 8)]
+      let frameSize: Int
+      if version == 4 {
+        guard let size = synchsafeInteger(sizeBytes) else { break }
+        frameSize = size
+      } else {
+        frameSize = bigEndianInteger(sizeBytes)
+      }
+
+      guard frameSize > 0, frameSize <= rawBody.count - offset - 10 else { break }
+      let frameFlags = UInt16(rawBody[offset + 8]) << 8 | UInt16(rawBody[offset + 9])
+      let formatFlags = rawBody[offset + 9]
+      var frameData = Data(rawBody[(offset + 10)..<(offset + 10 + frameSize)])
+      offset += 10 + frameSize
+
+      // Encrypted or compressed lyrics cannot be interpreted without their
+      // registered transform. Skip them, as required for unknown transforms.
+      if version == 3 {
+        guard formatFlags & 0xC0 == 0 else { continue }
+        if formatFlags & 0x20 != 0 {
+          guard !frameData.isEmpty else { continue }
+          frameData.removeFirst() // grouping identity
+        }
+        if tagFlags & 0x80 != 0 { frameData = resynchronised(frameData) }
+      } else {
+        guard formatFlags & 0x0C == 0 else { continue }
+        if formatFlags & 0x40 != 0 {
+          guard !frameData.isEmpty else { continue }
+          frameData.removeFirst() // grouping identity
+        }
+        if formatFlags & 0x01 != 0 {
+          guard frameData.count >= 4 else { continue }
+          frameData.removeFirst(4) // data length indicator
+        }
+        if tagFlags & 0x80 != 0 || formatFlags & 0x02 != 0 {
+          frameData = resynchronised(frameData)
+        }
+      }
+
+      if version == 4 {
+        let decoded = decodeID3v2Tag(frameID: frameID, data: frameData, flags: frameFlags)
+        tags.append(decoded.tag)
+        if let provider = decoded.c2paProvider { c2paProviders.append(provider) }
+      }
+
+      switch frameID {
+      case "USLT":
+        if let text = parseUSLT(frameData, version: version) {
+          // Prefer LRC-in-USLT over plain USLT, but prefer native SYLT over both.
+          candidates.append(
+            ID3LyricsCandidate(text: text, priority: LRCParser.isLRCFormatted(text) ? 2 : 1)
+          )
+        }
+      case "SYLT":
+        if let text = parseSYLT(frameData, version: version) {
+          candidates.append(ID3LyricsCandidate(text: text, priority: 3))
+        }
+      default:
+        continue
+      }
+    }
+
+    return ID3MetadataResult(
+      version: version,
+      tags: tags,
+      lyrics: candidates.max { lhs, rhs in lhs.priority < rhs.priority }?.text,
+      c2paProviders: c2paProviders
+    )
+  }
+
+  private static func decodeID3v2Tag(
+    frameID: String,
+    data: Data,
+    flags: UInt16
+  ) -> (tag: ID3v2Tag, c2paProvider: String?) {
+    func tag(
+      value: String? = nil,
+      descriptor: String? = nil,
+      language: String? = nil,
+      mimeType: String? = nil,
+      fileName: String? = nil,
+      binaryDataSize: Int? = nil
+    ) -> ID3v2Tag {
+      ID3v2Tag(
+        frameID: frameID,
+        value: value,
+        descriptor: descriptor,
+        language: language,
+        mimeType: mimeType,
+        fileName: fileName,
+        binaryDataSize: binaryDataSize,
+        flags: flags
+      )
+    }
+
+    if frameID == "TXXX", data.count >= 2 {
+      let encoding = data[0]
+      if isSupportedID3Encoding(encoding, version: 4),
+        let end = terminatedTextEnd(in: data, from: 1, encoding: encoding)
+      {
+        let descriptorBytes = Data(data[1..<end.contentEnd])
+        let littleEndian = utf16LittleEndianHint(from: descriptorBytes)
+        let descriptor = normalizedID3Text(
+          decodeID3Text(descriptorBytes, encoding: encoding, fallbackLittleEndian: nil)
+        )
+        let value = normalizedID3Text(
+          decodeID3Text(
+            Data(data[end.nextOffset...]),
+            encoding: encoding,
+            fallbackLittleEndian: littleEndian
+          )
+        )
+        return (tag(value: value, descriptor: descriptor), nil)
+      }
+    }
+
+    if frameID.first == "T", !data.isEmpty {
+      let encoding = data[0]
+      if isSupportedID3Encoding(encoding, version: 4) {
+        let value = normalizedID3Text(
+          decodeID3Text(Data(data.dropFirst()), encoding: encoding, fallbackLittleEndian: nil)
+        )
+        return (tag(value: value), nil)
+      }
+    }
+
+    if frameID == "WXXX", data.count >= 2 {
+      let encoding = data[0]
+      if isSupportedID3Encoding(encoding, version: 4),
+        let end = terminatedTextEnd(in: data, from: 1, encoding: encoding)
+      {
+        let descriptor = normalizedID3Text(
+          decodeID3Text(
+            Data(data[1..<end.contentEnd]), encoding: encoding, fallbackLittleEndian: nil)
+        )
+        let value = normalizedID3Text(
+          String(data: Data(data[end.nextOffset...]), encoding: .isoLatin1)
+        )
+        return (tag(value: value, descriptor: descriptor), nil)
+      }
+    }
+
+    if frameID.first == "W" {
+      return (tag(value: normalizedID3Text(String(data: data, encoding: .isoLatin1))), nil)
+    }
+
+    if (frameID == "COMM" || frameID == "USLT"), data.count >= 5 {
+      let encoding = data[0]
+      let language = String(data: Data(data[1..<4]), encoding: .isoLatin1)
+      if isSupportedID3Encoding(encoding, version: 4),
+        let end = terminatedTextEnd(in: data, from: 4, encoding: encoding)
+      {
+        let descriptorBytes = Data(data[4..<end.contentEnd])
+        let littleEndian = utf16LittleEndianHint(from: descriptorBytes)
+        let descriptor = normalizedID3Text(
+          decodeID3Text(descriptorBytes, encoding: encoding, fallbackLittleEndian: nil)
+        )
+        let value = normalizedID3Text(
+          decodeID3Text(
+            Data(data[end.nextOffset...]),
+            encoding: encoding,
+            fallbackLittleEndian: littleEndian
+          )
+        )
+        return (tag(value: value, descriptor: descriptor, language: language), nil)
+      }
+    }
+
+    if frameID == "SYLT" {
+      let language = data.count >= 4
+        ? String(data: Data(data[1..<4]), encoding: .isoLatin1) : nil
+      return (tag(value: parseSYLT(data, version: 4), language: language), nil)
+    }
+
+    if frameID == "APIC", data.count >= 4 {
+      let encoding = data[0]
+      if let mimeEnd = data[1...].firstIndex(of: 0), mimeEnd + 1 < data.count {
+        let mimeType = String(data: Data(data[1..<mimeEnd]), encoding: .isoLatin1)
+        let pictureType = data[mimeEnd + 1]
+        let descriptorStart = mimeEnd + 2
+        if let end = terminatedTextEnd(in: data, from: descriptorStart, encoding: encoding) {
+          let descriptor = normalizedID3Text(
+            decodeID3Text(
+              Data(data[descriptorStart..<end.contentEnd]),
+              encoding: encoding,
+              fallbackLittleEndian: nil
+            )
+          )
+          return (
+            tag(
+              value: id3PictureTypeName(pictureType),
+              descriptor: descriptor,
+              mimeType: mimeType,
+              binaryDataSize: data.count - end.nextOffset
+            ),
+            nil
+          )
+        }
+      }
+    }
+
+    if frameID == "GEOB", data.count >= 5 {
+      let encoding = data[0]
+      if let mimeEnd = data[1...].firstIndex(of: 0) {
+        let mimeType = String(data: Data(data[1..<mimeEnd]), encoding: .isoLatin1)
+        let fileNameStart = mimeEnd + 1
+        if let fileNameEnd = terminatedTextEnd(
+          in: data, from: fileNameStart, encoding: encoding
+        ) {
+          let fileNameBytes = Data(data[fileNameStart..<fileNameEnd.contentEnd])
+          let littleEndian = utf16LittleEndianHint(from: fileNameBytes)
+          let fileName = normalizedID3Text(
+            decodeID3Text(fileNameBytes, encoding: encoding, fallbackLittleEndian: nil)
+          )
+          if let descriptorEnd = terminatedTextEnd(
+            in: data, from: fileNameEnd.nextOffset, encoding: encoding
+          ) {
+            let descriptor = normalizedID3Text(
+              decodeID3Text(
+                Data(data[fileNameEnd.nextOffset..<descriptorEnd.contentEnd]),
+                encoding: encoding,
+                fallbackLittleEndian: littleEndian
+              )
+            )
+            let object = Data(data[descriptorEnd.nextOffset...])
+            let c2paFields = [
+              "providerName", "createdAt", "systemName", "systemVersion", "contentId",
+              "digitalSourceType",
+            ].compactMap { key -> String? in
+              cborTextValue(forKey: key, in: object).map { "\(key)=\($0)" }
+            }
+            let provider = cborTextValue(forKey: "providerName", in: object)
+            return (
+              tag(
+                value: c2paFields.isEmpty ? nil : c2paFields.joined(separator: "; "),
+                descriptor: descriptor,
+                mimeType: mimeType,
+                fileName: fileName,
+                binaryDataSize: object.count
+              ),
+              provider
+            )
+          }
+        }
+      }
+    }
+
+    return (tag(binaryDataSize: data.count), nil)
+  }
+
+  private static func normalizedID3Text(_ text: String?) -> String? {
+    let normalized = text?.replacingOccurrences(of: "\0", with: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
+    return normalized?.isEmpty == false ? normalized : nil
+  }
+
+  private static func id3PictureTypeName(_ type: UInt8) -> String {
+    let names = [
+      "Other", "32×32 file icon", "Other file icon", "Front cover", "Back cover",
+      "Leaflet", "Media", "Lead artist", "Artist", "Conductor", "Band", "Composer",
+      "Lyricist", "Recording location", "During recording", "During performance",
+      "Video capture", "Bright coloured fish", "Illustration", "Band logo", "Publisher logo",
+    ]
+    return Int(type) < names.count ? names[Int(type)] : "Picture type \(type)"
+  }
+
+  /// Finds a canonical CBOR text key followed immediately by a text value.
+  /// C2PA assertion payloads use this shape for provenance fields such as
+  /// providerName; no assumptions are made from free-form comments or URLs.
+  private static func cborTextValue(forKey key: String, in data: Data) -> String? {
+    guard let keyData = cborText(key), let range = data.range(of: keyData) else { return nil }
+    return decodeCBORText(in: data, at: range.upperBound)?.value
+  }
+
+  private static func cborText(_ value: String) -> Data? {
+    let bytes = Data(value.utf8)
+    guard bytes.count <= UInt32.max else { return nil }
+    var result = Data()
+    switch bytes.count {
+    case 0...23:
+      result.append(UInt8(0x60 + bytes.count))
+    case 24...255:
+      result.append(0x78)
+      result.append(UInt8(bytes.count))
+    case 256...65_535:
+      result.append(0x79)
+      result.append(UInt8((bytes.count >> 8) & 0xFF))
+      result.append(UInt8(bytes.count & 0xFF))
+    default:
+      result.append(0x7A)
+      result.append(contentsOf: bigEndianBytes32(UInt32(bytes.count)))
+    }
+    result.append(bytes)
+    return result
+  }
+
+  private static func decodeCBORText(in data: Data, at offset: Int) -> (value: String, end: Int)? {
+    guard offset < data.count else { return nil }
+    let initial = data[offset]
+    guard initial >> 5 == 3 else { return nil }
+    let additional = initial & 0x1F
+    let length: Int
+    let payloadStart: Int
+    switch additional {
+    case 0...23:
+      length = Int(additional)
+      payloadStart = offset + 1
+    case 24:
+      guard offset + 1 < data.count else { return nil }
+      length = Int(data[offset + 1])
+      payloadStart = offset + 2
+    case 25:
+      guard offset + 2 < data.count else { return nil }
+      length = Int(data[offset + 1]) << 8 | Int(data[offset + 2])
+      payloadStart = offset + 3
+    case 26:
+      guard offset + 4 < data.count else { return nil }
+      length = bigEndianInteger(data[(offset + 1)...(offset + 4)])
+      payloadStart = offset + 5
+    default:
+      return nil
+    }
+    guard length <= data.count - payloadStart,
+      let value = String(data: Data(data[payloadStart..<(payloadStart + length)]), encoding: .utf8)
+    else { return nil }
+    return (value, payloadStart + length)
+  }
+
+  private static func bigEndianBytes32(_ value: UInt32) -> [UInt8] {
+    [
+      UInt8((value >> 24) & 0xFF), UInt8((value >> 16) & 0xFF),
+      UInt8((value >> 8) & 0xFF), UInt8(value & 0xFF),
+    ]
+  }
+
+  private static func parseUSLT(_ data: Data, version: Int) -> String? {
+    guard data.count >= 5 else { return nil }
+    let encoding = data[0]
+    guard isSupportedID3Encoding(encoding, version: version),
+      let descriptorEnd = terminatedTextEnd(in: data, from: 4, encoding: encoding)
+    else { return nil }
+
+    let descriptorBytes = Data(data[4..<descriptorEnd.contentEnd])
+    let lyricsBytes = Data(data[descriptorEnd.nextOffset...])
+    let fallbackByteOrder = utf16LittleEndianHint(from: descriptorBytes)
+    guard let decoded = decodeID3Text(
+      lyricsBytes,
+      encoding: encoding,
+      fallbackLittleEndian: fallbackByteOrder
+    ) else { return nil }
+    return cleanLyricsText(decoded)
+  }
+
+  private static func parseSYLT(_ data: Data, version: Int) -> String? {
+    guard data.count >= 7 else { return nil }
+    let encoding = data[0]
+    let timestampFormat = data[4]
+    let contentType = data[5]
+    guard isSupportedID3Encoding(encoding, version: version),
+      timestampFormat == 0x02, // milliseconds; MPEG-frame timestamps need the audio timebase
+      contentType <= 0x02,
+      let descriptorEnd = terminatedTextEnd(in: data, from: 6, encoding: encoding)
+    else { return nil }
+
+    let descriptorBytes = Data(data[6..<descriptorEnd.contentEnd])
+    let fallbackByteOrder = utf16LittleEndianHint(from: descriptorBytes)
+    var cursor = descriptorEnd.nextOffset
+    var entries: [ID3SynchronizedText] = []
+
+    while cursor < data.count {
+      guard let textEnd = terminatedTextEnd(in: data, from: cursor, encoding: encoding),
+        textEnd.nextOffset + 4 <= data.count
+      else { break }
+
+      let textBytes = Data(data[cursor..<textEnd.contentEnd])
+      guard let decoded = decodeID3Text(
+        textBytes,
+        encoding: encoding,
+        fallbackLittleEndian: fallbackByteOrder
+      ) else { break }
+
+      let timestamp = UInt32(bigEndianInteger(data[textEnd.nextOffset..<(textEnd.nextOffset + 4)]))
+      if !decoded.isEmpty {
+        entries.append(ID3SynchronizedText(text: decoded, milliseconds: timestamp))
+      }
+      cursor = textEnd.nextOffset + 4
+    }
+
+    guard !entries.isEmpty else { return nil }
+    return syltAsLRC(entries)
+  }
+
+  private static func syltAsLRC(_ entries: [ID3SynchronizedText]) -> String {
+    let carriesLineBreaks = entries.contains { $0.text.contains("\n") || $0.text.contains("\r") }
+    if !carriesLineBreaks {
+      return entries.map { "[\(lrcTimestamp($0.milliseconds))]\($0.text)" }
+        .joined(separator: "\n")
+    }
+
+    var lines: [String] = []
+    var line = ""
+    var lineTimestamp: UInt32?
+
+    func flushLine() {
+      guard let timestamp = lineTimestamp else { return }
+      let text = line.trimmingCharacters(in: .whitespaces)
+      if !text.isEmpty { lines.append("[\(lrcTimestamp(timestamp))]\(line)") }
+      line = ""
+      lineTimestamp = nil
+    }
+
+    for entry in entries {
+      let normalized = entry.text.replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+      let parts = normalized.split(separator: "\n", omittingEmptySubsequences: false)
+      for (index, part) in parts.enumerated() {
+        if !part.isEmpty {
+          if lineTimestamp == nil { lineTimestamp = entry.milliseconds }
+          line += "<\(lrcTimestamp(entry.milliseconds))>\(part)"
+        }
+        if index < parts.count - 1 { flushLine() }
+      }
+    }
+    flushLine()
+    return lines.joined(separator: "\n")
+  }
+
+  private static func lrcTimestamp(_ milliseconds: UInt32) -> String {
+    let minutes = milliseconds / 60_000
+    let seconds = (milliseconds / 1_000) % 60
+    let remainder = milliseconds % 1_000
+    return String(format: "%02u:%02u.%03u", minutes, seconds, remainder)
+  }
+
+  private static func cleanLyricsText(_ text: String) -> String? {
+    let cleaned = text.trimmingCharacters(
+      in: .whitespacesAndNewlines.union(.controlCharacters)
+    )
+    return cleaned.isEmpty ? nil : cleaned
+  }
+
+  private static func isSupportedID3Encoding(_ encoding: UInt8, version: Int) -> Bool {
+    encoding <= (version == 3 ? 1 : 3)
+  }
+
+  private static func terminatedTextEnd(
+    in data: Data,
+    from start: Int,
+    encoding: UInt8
+  ) -> (contentEnd: Int, nextOffset: Int)? {
+    guard start >= 0, start <= data.count else { return nil }
+    if encoding == 0 || encoding == 3 {
+      guard let end = data[start...].firstIndex(of: 0) else { return nil }
+      return (end, end + 1)
+    }
+
+    guard start + 1 < data.count else { return nil }
+    var cursor = start
+    while cursor + 1 < data.count {
+      if data[cursor] == 0, data[cursor + 1] == 0 {
+        return (cursor, cursor + 2)
+      }
+      cursor += 2
+    }
+    return nil
+  }
+
+  private static func decodeID3Text(
+    _ data: Data,
+    encoding: UInt8,
+    fallbackLittleEndian: Bool?
+  ) -> String? {
+    let value: String?
+    switch encoding {
+    case 0:
+      value = String(data: data, encoding: .isoLatin1)
+    case 1:
+      if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]) {
+        value = String(data: data, encoding: .utf16)
+      } else if fallbackLittleEndian == true {
+        value = String(data: data, encoding: .utf16LittleEndian)
+      } else {
+        value = String(data: data, encoding: .utf16BigEndian)
+      }
+    case 2:
+      value = String(data: data, encoding: .utf16BigEndian)
+    case 3:
+      value = String(data: data, encoding: .utf8)
+    default:
+      value = nil
+    }
+    return value?.trimmingCharacters(in: .init(charactersIn: "\0"))
+  }
+
+  private static func utf16LittleEndianHint(from data: Data) -> Bool? {
+    if data.starts(with: [0xFF, 0xFE]) { return true }
+    if data.starts(with: [0xFE, 0xFF]) { return false }
+    return nil
+  }
+
+  private static func resynchronised(_ data: Data) -> Data {
+    var result = Data()
+    result.reserveCapacity(data.count)
+    var index = 0
+    while index < data.count {
+      let byte = data[index]
+      result.append(byte)
+      if byte == 0xFF, index + 1 < data.count, data[index + 1] == 0x00 {
+        index += 1
+      }
+      index += 1
+    }
+    return result
+  }
+
+  private static func synchsafeInteger(_ bytes: Data.SubSequence) -> Int? {
+    guard bytes.count == 4, bytes.allSatisfy({ $0 & 0x80 == 0 }) else { return nil }
+    return bytes.reduce(0) { ($0 << 7) | Int($1) }
+  }
+
+  private static func bigEndianInteger(_ bytes: Data.SubSequence) -> Int {
+    bytes.reduce(0) { ($0 << 8) | Int($1) }
   }
 
   private struct FLACMetadata {

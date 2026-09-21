@@ -324,6 +324,26 @@ struct SongEditSheet: View {
               ProgressView()
                 .controlSize(.small)
             } else {
+              Button("Reload File") {
+                Task {
+                  isLoadingLyrics = true
+                  lyricImportError = nil
+                  if let liveSong = library.song(id: songID),
+                    let embedded = await library.refreshEmbeddedMetadata(
+                      for: liveSong,
+                      overwriteLyrics: true
+                    )
+                  {
+                    lyrics = embedded
+                  } else {
+                    lyricImportError = "The audio file doesn’t contain readable embedded lyrics."
+                  }
+                  isLoadingLyrics = false
+                }
+              }
+              .font(.caption)
+              .buttonStyle(.bordered)
+
               Button("Fetch Online") {
                 Task {
                   isLoadingLyrics = true

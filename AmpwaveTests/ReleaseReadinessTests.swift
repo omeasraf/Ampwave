@@ -76,6 +76,154 @@ final class AudioSessionActivationTests: XCTestCase {
 }
 
 final class ReleaseReadinessTests: XCTestCase {
+  private func synchsafeBytes(_ value: Int) -> [UInt8] {
+    [
+      UInt8((value >> 21) & 0x7F),
+      UInt8((value >> 14) & 0x7F),
+      UInt8((value >> 7) & 0x7F),
+      UInt8(value & 0x7F),
+    ]
+  }
+
+  private func bigEndianBytes(_ value: Int) -> [UInt8] {
+    [
+      UInt8((value >> 24) & 0xFF),
+      UInt8((value >> 16) & 0xFF),
+      UInt8((value >> 8) & 0xFF),
+      UInt8(value & 0xFF),
+    ]
+  }
+
+  private func id3File(version: Int, frameID: String, payload: Data) throws -> URL {
+    try id3File(version: version, frames: [(frameID, payload)])
+  }
+
+  private func id3File(version: Int, frames: [(String, Data)]) throws -> URL {
+    var frameData = Data()
+    for (frameID, payload) in frames {
+      var frame = Data(frameID.utf8)
+      frame.append(
+        contentsOf: version == 4 ? synchsafeBytes(payload.count) : bigEndianBytes(payload.count)
+      )
+      frame.append(contentsOf: [0, 0])
+      frame.append(payload)
+      frameData.append(frame)
+    }
+
+    var tag = Data("ID3".utf8)
+    tag.append(UInt8(version))
+    tag.append(0)
+    tag.append(0)
+    tag.append(contentsOf: synchsafeBytes(frameData.count))
+    tag.append(frameData)
+
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("Ampwave-ID3Lyrics-\(UUID().uuidString).mp3")
+    try tag.write(to: url)
+    return url
+  }
+
+  private func utf8TextFrame(_ value: String) -> Data {
+    var payload = Data([3])
+    payload.append(contentsOf: value.utf8)
+    return payload
+  }
+
+  func testReadsTimestampedUTF8USLTFromID3v24() throws {
+    let expected = "[00:12.50] First example line\n[00:16.20] Second example line"
+    var payload = Data([3])
+    payload.append(contentsOf: "eng".utf8)
+    payload.append(0) // empty content descriptor
+    payload.append(contentsOf: expected.utf8)
+    let url = try id3File(version: 4, frameID: "USLT", payload: payload)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    XCTAssertEqual(AudioMetadataExtractor.readID3Lyrics(from: url), expected)
+  }
+
+  func testReadsUTF16USLTFromID3v23() throws {
+    let expected = "[00:01.00] Blertë\n[00:02.00] Këngë"
+    var payload = Data([1])
+    payload.append(contentsOf: "sqi".utf8)
+    payload.append(contentsOf: [0xFF, 0xFE, 0, 0]) // empty UTF-16 descriptor
+    payload.append(contentsOf: [0xFF, 0xFE])
+    payload.append(expected.data(using: .utf16LittleEndian)!)
+    let url = try id3File(version: 3, frameID: "USLT", payload: payload)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    XCTAssertEqual(AudioMetadataExtractor.readID3Lyrics(from: url), expected)
+  }
+
+  func testConvertsMillisecondSYLTToEnhancedLRC() throws {
+    var payload = Data([3])
+    payload.append(contentsOf: "eng".utf8)
+    payload.append(contentsOf: [2, 1, 0]) // milliseconds, lyrics, empty descriptor
+    payload.append(contentsOf: "First line\n".utf8)
+    payload.append(0)
+    payload.append(contentsOf: bigEndianBytes(12_500))
+    payload.append(contentsOf: "Second line".utf8)
+    payload.append(0)
+    payload.append(contentsOf: bigEndianBytes(16_200))
+    let url = try id3File(version: 4, frameID: "SYLT", payload: payload)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let parsed = AudioMetadataExtractor.readID3Lyrics(from: url)
+    XCTAssertEqual(
+      parsed,
+      "[00:12.500]<00:12.500>First line\n[00:16.200]<00:16.200>Second line"
+    )
+    XCTAssertEqual(LRCParser.parse(parsed ?? "").map(\.text), ["First line", "Second line"])
+  }
+
+  func testRetainsEveryID3v24FrameAndRecognizesSunoC2PAProvider() throws {
+    var custom = Data([3])
+    custom.append(contentsOf: "sga".utf8)
+    custom.append(0)
+    custom.append(contentsOf: "0.8".utf8)
+
+    var geob = Data([3])
+    geob.append(contentsOf: "application/c2pa".utf8)
+    geob.append(0)
+    geob.append(contentsOf: "c2pa".utf8)
+    geob.append(0)
+    geob.append(contentsOf: "c2pa manifest store".utf8)
+    geob.append(0)
+    geob.append(0x6C) // CBOR text(12)
+    geob.append(contentsOf: "providerName".utf8)
+    geob.append(0x6A) // CBOR text(10)
+    geob.append(contentsOf: "Suno, Inc.".utf8)
+
+    let url = try id3File(
+      version: 4,
+      frames: [
+        ("TIT2", utf8TextFrame("Generated song")),
+        ("TXXX", custom),
+        ("WOAS", Data("https://suno.com/song/example\0".utf8)),
+        ("GEOB", geob),
+      ]
+    )
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let tags = AudioMetadataExtractor.readID3v2Tags(from: url)
+    XCTAssertEqual(tags.map(\.frameID), ["TIT2", "TXXX", "WOAS", "GEOB"])
+    XCTAssertEqual(tags.first { $0.frameID == "TIT2" }?.value, "Generated song")
+    XCTAssertEqual(tags.first { $0.frameID == "TXXX" }?.descriptor, "sga")
+    XCTAssertEqual(tags.first { $0.frameID == "TXXX" }?.value, "0.8")
+    XCTAssertEqual(tags.first { $0.frameID == "WOAS" }?.value, "https://suno.com/song/example")
+    XCTAssertEqual(tags.first { $0.frameID == "GEOB" }?.mimeType, "application/c2pa")
+    XCTAssertTrue(AudioMetadataExtractor.readID3AIGeneratedFlag(from: url))
+  }
+
+  func testDoesNotInferAIFromLooseSunoText() throws {
+    let url = try id3File(
+      version: 4,
+      frames: [("COMM", Data([3]) + Data("eng\0made with suno".utf8))]
+    )
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    XCTAssertFalse(AudioMetadataExtractor.readID3AIGeneratedFlag(from: url))
+  }
+
   func testFilenameParserRemovesTrackNumberAndExtractsArtist() {
     let parsed = FilenameParser.parse("04 - Gracie Abrams - Good Reason.flac")
 

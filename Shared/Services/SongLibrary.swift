@@ -1482,6 +1482,8 @@ extension Notification.Name {
       discNumber: metadata.discNumber,
       year: metadata.year,
       composer: metadata.composer,
+      lyricist: metadata.lyricist,
+      isrc: metadata.isrc,
       artworkPath: artworkPath,
       embeddedArtworkPath: artworkPath,
       sampleRate: metadata.sampleRate,
@@ -1500,6 +1502,8 @@ extension Notification.Name {
       isLive: metadata.isLive,
       isMedley: metadata.isMedley,
       isExplicit: metadata.isExplicit ?? false,
+      isAIGenerated: metadata.isAIGenerated,
+      id3v2Tags: metadata.id3v2Tags,
       replayGainDB: metadata.replayGainDB
     )
 
@@ -1621,6 +1625,8 @@ extension Notification.Name {
       discNumber: metadata.discNumber,
       year: metadata.year,
       composer: metadata.composer,
+      lyricist: metadata.lyricist,
+      isrc: metadata.isrc,
       artworkPath: artworkPath,
       embeddedArtworkPath: artworkPath,
       sampleRate: metadata.sampleRate,
@@ -1639,6 +1645,8 @@ extension Notification.Name {
       isLive: metadata.isLive,
       isMedley: metadata.isMedley,
       isExplicit: metadata.isExplicit ?? false,
+      isAIGenerated: metadata.isAIGenerated,
+      id3v2Tags: metadata.id3v2Tags,
       replayGainDB: metadata.replayGainDB
     )
 
@@ -2289,9 +2297,14 @@ extension Notification.Name {
   }
 
   /// Re-reads metadata stored inside the audio file. User edits always win;
-  /// otherwise embedded values are authoritative for file-level tags.
+  /// otherwise embedded values are authoritative for file-level tags. An
+  /// explicit editor reload may replace user-edited lyrics with the file copy.
   @MainActor
-  private func refreshEmbeddedMetadata(for song: LibrarySong) async {
+  @discardableResult
+  func refreshEmbeddedMetadata(
+    for song: LibrarySong,
+    overwriteLyrics: Bool = false
+  ) async -> String? {
     let songID = song.id
     let songTitle = song.title
     let url = getFileURL(for: song)
@@ -2300,7 +2313,7 @@ extension Notification.Name {
 
     guard FileManager.default.fileExists(atPath: url.path) else {
       print("[DEBUG] SongLibrary.refreshEmbeddedMetadata: Missing file for \(songTitle)")
-      return
+      return nil
     }
 
     let metadata = await Task.detached(priority: .utility) {
@@ -2315,7 +2328,7 @@ extension Notification.Name {
 
     guard let song = self.song(id: songID), song.modelContext != nil else {
       print("[DEBUG] SongLibrary.refreshEmbeddedMetadata: Song was replaced during file read")
-      return
+      return nil
     }
 
     if !song.userEditedFields.contains("title"), metadata.metadataSourceTitle == "embedded" {
@@ -2348,6 +2361,12 @@ extension Notification.Name {
     if !song.userEditedFields.contains("composer"), let composer = metadata.composer {
       song.composer = composer
     }
+    if !song.userEditedFields.contains("lyricist"), let lyricist = metadata.lyricist {
+      song.lyricist = lyricist
+    }
+    if !song.userEditedFields.contains("isrc"), let isrc = metadata.isrc {
+      song.isrc = isrc
+    }
     if !song.userEditedFields.contains("songDescription"),
       let songDescription = metadata.songDescription
     {
@@ -2356,8 +2375,14 @@ extension Notification.Name {
     if !song.userEditedFields.contains("isExplicit"), let isExplicit = metadata.isExplicit {
       song.isExplicit = isExplicit
     }
-    if !song.userEditedFields.contains("lyrics"), let lyrics = metadata.lyrics, !lyrics.isEmpty {
+    song.id3v2Tags = metadata.id3v2Tags
+    song.isAIGenerated = metadata.isAIGenerated
+    if (overwriteLyrics || !song.userEditedFields.contains("lyrics")),
+      let lyrics = metadata.lyrics, !lyrics.isEmpty
+    {
+      if overwriteLyrics { song.userEditedFields.removeAll { $0 == "lyrics" } }
       song.lyrics = lyrics
+      song.lyricsCheckAttempted = false
       LyricsService.shared.saveLyrics(for: song, content: lyrics)
     }
 
@@ -2418,6 +2443,7 @@ extension Notification.Name {
     song.isLive = metadata.isLive
     song.isMedley = metadata.isMedley
     song.updateSearchIndex()
+    return metadata.lyrics
   }
 
   func refreshMetadata(for artist: Artist) async {

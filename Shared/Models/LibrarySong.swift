@@ -85,6 +85,11 @@ final class LibrarySong: Identifiable, Hashable {
   var isLive: Bool = false
   var isMedley: Bool = false
   var isExplicit: Bool = false
+  /// True only when embedded provenance identifies the provider as Suno, Inc.
+  var isAIGenerated: Bool = false
+  /// Compact JSON snapshot of all ID3v2.4 frames. Binary frame payloads are
+  /// summarized rather than duplicated here.
+  @Attribute(.externalStorage) var id3v2TagsData: Data?
   /// ReplayGain track gain in dB from the file's tags, used by volume
   /// normalization. Nil when the file carries no ReplayGain tag.
   var replayGainDB: Double?
@@ -115,6 +120,16 @@ final class LibrarySong: Identifiable, Hashable {
   var output: String?
   var mode: String?
   var processingChain: String?
+
+  var id3v2Tags: [ID3v2Tag] {
+    get {
+      guard let id3v2TagsData else { return [] }
+      return (try? JSONDecoder().decode([ID3v2Tag].self, from: id3v2TagsData)) ?? []
+    }
+    set {
+      id3v2TagsData = newValue.isEmpty ? nil : try? JSONEncoder().encode(newValue)
+    }
+  }
 
   // MARK: - Search Indexing
   /// Bumped whenever searchable text changes, so the in-memory search index
@@ -182,6 +197,8 @@ final class LibrarySong: Identifiable, Hashable {
     isLive: Bool = false,
     isMedley: Bool = false,
     isExplicit: Bool = false,
+    isAIGenerated: Bool = false,
+    id3v2Tags: [ID3v2Tag] = [],
     replayGainDB: Double? = nil
   ) {
     self.id = UUID()
@@ -236,6 +253,8 @@ final class LibrarySong: Identifiable, Hashable {
     self.isLive = isLive
     self.isMedley = isMedley
     self.isExplicit = isExplicit
+    self.isAIGenerated = isAIGenerated
+    self.id3v2TagsData = id3v2Tags.isEmpty ? nil : try? JSONEncoder().encode(id3v2Tags)
     self.replayGainDB = replayGainDB
   }
 

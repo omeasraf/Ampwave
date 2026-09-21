@@ -80,6 +80,12 @@ enum LibraryBackupService {
       match.metadataSourceTitle = backupSong.metadataSourceTitle
       match.metadataSourceArtist = backupSong.metadataSourceArtist
       match.metadataSourceAlbum = backupSong.metadataSourceAlbum
+      if let isAIGenerated = backupSong.isAIGenerated {
+        match.isAIGenerated = isAIGenerated
+      }
+      if let id3v2Tags = backupSong.id3v2Tags {
+        match.id3v2Tags = id3v2Tags
+      }
       if let lyrics = backupSong.lyrics {
         LyricsService.shared.saveLyrics(for: match, content: lyrics)
       }
@@ -322,6 +328,8 @@ private struct BackupSong: Codable {
   let metadataSourceTitle: String?
   let metadataSourceArtist: String?
   let metadataSourceAlbum: String?
+  let isAIGenerated: Bool?
+  let id3v2Tags: [ID3v2Tag]?
 
   init(_ song: LibrarySong) {
     id = song.id
@@ -357,6 +365,8 @@ private struct BackupSong: Codable {
     metadataSourceTitle = song.metadataSourceTitle
     metadataSourceArtist = song.metadataSourceArtist
     metadataSourceAlbum = song.metadataSourceAlbum
+    isAIGenerated = song.isAIGenerated
+    id3v2Tags = song.id3v2Tags
   }
 }
 
