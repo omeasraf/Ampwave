@@ -38,6 +38,9 @@ enum BackgroundWorkCoordinator {
         didRegister = true
 
         installAssertionHook()
+        SongLibrary.metadataWorkNeedsScheduling = {
+            scheduleMetadataRefresh()
+        }
 
 #if os(iOS)
         BGTaskScheduler.shared.register(
@@ -156,32 +159,50 @@ enum BackgroundWorkCoordinator {
 
     // MARK: - User-initiated continued processing
 
+    static var supportsUserInitiatedGPU: Bool {
+#if os(iOS)
+        if #available(iOS 26.0, *) {
+            return BGTaskScheduler.supportedResources.contains(.gpu)
+        }
+#endif
+        return false
+    }
+
+    @discardableResult
     static func performUserInitiated(
         title: String,
         subtitle: String,
         totalUnitCount: Int,
+        requiresGPU: Bool = false,
         operation: @escaping @MainActor (UserWorkProgress) async -> Void
-    ) async {
+    ) async -> Bool {
         let safeTotal = Int64(max(1, totalUnitCount))
 
 #if os(iOS)
         guard #available(iOS 26.0, *) else {
+            guard !requiresGPU else { return false }
             let reporter = UserWorkProgress(totalUnitCount: safeTotal)
             await operation(reporter)
-            return
+            return true
         }
+
+        // A foreground fallback is unsafe for GPU work: a pending Metal
+        // command can abort the process when the user backgrounds the app.
+        if requiresGPU && !supportsUserInitiatedGPU { return false }
 
         guard pendingContinuedWork == nil, !continuedWorkIsActive else {
+            guard !requiresGPU else { return false }
             let reporter = UserWorkProgress(totalUnitCount: safeTotal)
             await operation(reporter)
-            return
+            return true
         }
 
-        await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             pendingContinuedWork = PendingContinuedWork(
                 title: title,
                 operation: operation,
                 totalUnitCount: safeTotal,
+                requiresGPU: requiresGPU,
                 continuation: continuation
             )
 
@@ -191,6 +212,7 @@ enum BackgroundWorkCoordinator {
                 subtitle: subtitle
             )
             request.strategy = .fail
+            if requiresGPU { request.requiredResources = .gpu }
 
             do {
                 try BGTaskScheduler.shared.submit(request)
@@ -211,6 +233,13 @@ enum BackgroundWorkCoordinator {
                         taskRequestWithIdentifier: continuedTaskIdentifier
                     )
 
+                    if requiresGPU {
+                        pendingContinuedWork = nil
+                        DiagnosticLog.shared.log("background", "GPU continued task did not start")
+                        continuation.resume(returning: false)
+                        return
+                    }
+
                     DiagnosticLog.shared.log(
                         "background",
                         "Continued task did not start promptly; using foreground fallback"
@@ -219,6 +248,14 @@ enum BackgroundWorkCoordinator {
                     beginPendingContinuedWork(with: nil)
                 }
             } catch {
+                if requiresGPU {
+                    pendingContinuedWork = nil
+                    DiagnosticLog.shared.log(
+                        "background", "GPU continued task unavailable error=\(error.localizedDescription)"
+                    )
+                    continuation.resume(returning: false)
+                    return
+                }
                 DiagnosticLog.shared.log(
                     "background",
                     "Continued task unavailable; using foreground fallback error=\(error.localizedDescription)"
@@ -228,6 +265,7 @@ enum BackgroundWorkCoordinator {
             }
         }
 #elseif os(macOS)
+        guard !requiresGPU else { return false }
         let reporter = UserWorkProgress(totalUnitCount: safeTotal)
 
         let activity = ProcessInfo.processInfo.beginActivity(
@@ -239,9 +277,12 @@ enum BackgroundWorkCoordinator {
         }
 
         await operation(reporter)
+        return true
 #else
+        guard !requiresGPU else { return false }
         let reporter = UserWorkProgress(totalUnitCount: safeTotal)
         await operation(reporter)
+        return true
 #endif
     }
 
@@ -252,6 +293,12 @@ enum BackgroundWorkCoordinator {
     ) {
         guard let pending = pendingContinuedWork else {
             backgroundTask?.setTaskCompleted(success: false)
+            return
+        }
+
+        if pending.requiresGPU && backgroundTask == nil {
+            pendingContinuedWork = nil
+            pending.continuation.resume(returning: false)
             return
         }
 
@@ -280,7 +327,7 @@ enum BackgroundWorkCoordinator {
 
             backgroundTask?.setTaskCompleted(success: succeeded)
             continuedWorkIsActive = false
-            pending.continuation.resume()
+            pending.continuation.resume(returning: succeeded)
         }
 
         backgroundTask?.expirationHandler = {
@@ -334,7 +381,8 @@ private struct PendingContinuedWork {
     let title: String
     let operation: @MainActor (UserWorkProgress) async -> Void
     let totalUnitCount: Int64
-    let continuation: CheckedContinuation<Void, Never>
+    let requiresGPU: Bool
+    let continuation: CheckedContinuation<Bool, Never>
 }
 #endif
 

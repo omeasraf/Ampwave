@@ -168,6 +168,7 @@ struct AmpwaveApp: App {
             SonicRecommendationService.shared.applicationDidBecomeActive()
             PlaybackController.shared.applicationDidBecomeActive()
             LibraryMonitorService.shared.applicationDidBecomeActive()
+            Task { await RemoteLibraryService.shared.refreshAll(syncIfNeeded: false) }
           case .background:
             DiagnosticLog.shared.log(
               "lifecycle",

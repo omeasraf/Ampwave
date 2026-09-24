@@ -24,9 +24,17 @@ final class MetadataService {
   private let fanartTVURL = "https://webservice.fanart.tv/v3/music"
   private let theAudioDBURL = "https://www.theaudiodb.com/api/v1/json/2"
 
-  // Rate limiting - now MainActor isolated
-  @MainActor private var lastRequestTime: Date?
-  private let minimumRequestInterval: TimeInterval = 1.5  // Safer base rate limit
+  // MusicBrainz asks clients to serialize requests. Apple Music and the other
+  // providers can still run concurrently; only requests to MusicBrainz pass
+  // through this reservation timestamp.
+  private var lastMusicBrainzRequestTime: Date?
+  private let minimumMusicBrainzRequestInterval: TimeInterval = 1.1
+
+  // A throttle response from one concurrent lookup applies to every lookup
+  // using that host. Keeping the cooldown here prevents the other workers from
+  // immediately consuming all of their own retries against the same provider.
+  private var hostBackoffUntil: [String: Date] = [:]
+  private(set) var retryableFailureVersion: UInt64 = 0
 
   // App identifier for MusicBrainz (required)
   private let appIdentifier = "AmpwavePlayer/1.0 (https://github.com/omeasraf/Ampwave)"
@@ -39,7 +47,7 @@ final class MetadataService {
 
   // MARK: - Internal Request Helper
 
-  func performRequest(url: URL, retries: Int = 3) async -> Data? {
+  func performRequest(url: URL, retries: Int = 4) async -> Data? {
     // Every MusicBrainz / Cover Art / fanart request funnels through here, so
     // this is where Offline Mode is enforced rather than at each caller.
     guard UserPreferences.networkAllowed else {
@@ -47,15 +55,16 @@ final class MetadataService {
       return nil
     }
     var attempt = 0
-    var backoffDelay: TimeInterval = 1.5
+    var backoffDelay: TimeInterval = 0.75
 
     while attempt < retries {
-      if attempt > 0 {
-        print(
-          "[DEBUG] MetadataService: Retrying request (attempt \(attempt + 1)/\(retries)) after \(backoffDelay)s..."
-        )
-        try? await Task.sleep(nanoseconds: UInt64(backoffDelay * 1_000_000_000))
-        backoffDelay *= 2.0  // Exponential backoff
+      guard !Task.isCancelled else { return nil }
+
+      await waitForHostBackoff(url.host)
+      guard !Task.isCancelled else { return nil }
+
+      if url.host?.localizedCaseInsensitiveContains("musicbrainz.org") == true {
+        await respectMusicBrainzRateLimit()
       }
 
       var request = URLRequest(url: url)
@@ -66,24 +75,19 @@ final class MetadataService {
         let (data, response) = try await URLSession.shared.data(for: request)
 
         if let httpResponse = response as? HTTPURLResponse {
-          if httpResponse.statusCode == 200 {
+          if (200..<300).contains(httpResponse.statusCode) {
             return data
-          } else if httpResponse.statusCode == 503 || httpResponse.statusCode == 429 {
-            // Check for Retry-After header
-            var retryAfter: TimeInterval = backoffDelay
-            if let retryAfterHeader = httpResponse.value(forHTTPHeaderField: "Retry-After"),
-              let seconds = Double(retryAfterHeader)
-            {
-              retryAfter = seconds
-              print("[DEBUG] MetadataService: MusicBrainz requested Retry-After \(seconds)s")
-            } else {
-              print(
-                "[DEBUG] MetadataService: Rate limited (HTTP \(httpResponse.statusCode)) - no header found"
-              )
-            }
-
+          } else if httpResponse.statusCode == 429 || (500...599).contains(httpResponse.statusCode) {
+            let retryAfter = retryDelay(
+              from: httpResponse.value(forHTTPHeaderField: "Retry-After")
+            ) ?? backoffDelay
             attempt += 1
-            backoffDelay = max(backoffDelay, retryAfter)
+            registerBackoff(for: url.host, delay: retryAfter)
+            print(
+              "[DEBUG] MetadataService: HTTP \(httpResponse.statusCode), retrying in \(String(format: "%.2f", retryAfter))s (\(attempt)/\(retries))"
+            )
+            backoffDelay = min(max(backoffDelay * 2, retryAfter), 30)
+            if attempt >= retries { retryableFailureVersion &+= 1 }
             continue
           } else {
             print(
@@ -93,9 +97,15 @@ final class MetadataService {
           }
         }
         return data
+      } catch is CancellationError {
+        return nil
       } catch {
+        guard !Task.isCancelled else { return nil }
         print("[DEBUG] MetadataService: Network error: \(error.localizedDescription)")
         attempt += 1
+        registerBackoff(for: url.host, delay: backoffDelay)
+        backoffDelay = min(backoffDelay * 2, 30)
+        if attempt >= retries { retryableFailureVersion &+= 1 }
       }
     }
     return nil
@@ -141,8 +151,6 @@ final class MetadataService {
 
     // 2. Fallback to MusicBrainz (Secondary)
     print("[DEBUG] MetadataService.fetchMetadata: Apple Music failed, falling back to MusicBrainz")
-    await respectRateLimit()
-
     // Search for recording on MusicBrainz
     print("[DEBUG] MetadataService.fetchMetadata: Searching MusicBrainz for recording")
     guard let searchMatch = await searchRecording(song: song) else {
@@ -212,7 +220,6 @@ final class MetadataService {
   /// Lightweight genre lookup (MusicBrainz recording tags) for backfill and partial updates.
   func fetchGenreTags(for song: LibrarySong) async -> String? {
     let lookup = SongLookup(song)
-    await respectRateLimit()
     guard let recording = await searchRecording(song: lookup) else { return nil }
     guard let details = await fetchRecordingDetails(mbid: recording.id) else { return nil }
     return extractGenreLabel(genres: details.genres, tags: details.tags)
@@ -271,8 +278,6 @@ final class MetadataService {
   /// Fetches metadata for an album
   func fetchMetadata(for album: Album) async -> FetchedMetadata? {
     let album = AlbumLookup(name: album.name, artist: album.artist)
-    await respectRateLimit()
-
     // Apple Music covers albums MusicBrainz misses, so ask it regardless of
     // whether a release match turns up — bailing early used to mean no artwork
     // at all for anything MusicBrainz didn't know.
@@ -322,8 +327,6 @@ final class MetadataService {
   /// Fetches metadata for an artist
   func fetchMetadata(for artist: Artist) async -> ArtistMetadata? {
     let artistName = artist.name
-    await respectRateLimit()
-
     let artistInfo = await searchArtist(name: artistName)
     let theAudioDBInfo = await searchTheAudioDBArtist(name: artistName)
     // Apple Music has artist photos for far more artists than TheAudioDB, so
@@ -401,27 +404,67 @@ final class MetadataService {
 
   // MARK: - Private Methods
 
-  @MainActor
-  private func respectRateLimit() async {
+  private func respectMusicBrainzRateLimit() async {
     let now = Date()
     var waitTime: TimeInterval = 0
 
-    if let lastTime = lastRequestTime {
+    if let lastTime = lastMusicBrainzRequestTime {
       let timeSinceLastRequest = now.timeIntervalSince(lastTime)
-      if timeSinceLastRequest < minimumRequestInterval {
-        waitTime = minimumRequestInterval - timeSinceLastRequest
+      if timeSinceLastRequest < minimumMusicBrainzRequestInterval {
+        waitTime = minimumMusicBrainzRequestInterval - timeSinceLastRequest
       }
     }
 
     if waitTime > 0 {
-      lastRequestTime = now.addingTimeInterval(waitTime)
+      lastMusicBrainzRequestTime = now.addingTimeInterval(waitTime)
     } else {
-      lastRequestTime = now
+      lastMusicBrainzRequestTime = now
     }
 
     if waitTime > 0 {
-      try? await Task.sleep(nanoseconds: UInt64(waitTime * 1_000_000_000))
+      try? await Task.sleep(for: .seconds(waitTime))
     }
+  }
+
+  private func waitForHostBackoff(_ host: String?) async {
+    guard let host, let deadline = hostBackoffUntil[host] else { return }
+    let delay = deadline.timeIntervalSinceNow
+    guard delay > 0 else {
+      hostBackoffUntil[host] = nil
+      return
+    }
+    try? await Task.sleep(for: .seconds(delay))
+    if hostBackoffUntil[host] == deadline { hostBackoffUntil[host] = nil }
+  }
+
+  private func registerBackoff(for host: String?, delay: TimeInterval) {
+    guard let host else { return }
+    let deadline = Date().addingTimeInterval(max(0.25, delay))
+    if let existing = hostBackoffUntil[host], existing > deadline { return }
+    hostBackoffUntil[host] = deadline
+  }
+
+  private func retryDelay(from value: String?) -> TimeInterval? {
+    guard let value else { return nil }
+    if let seconds = TimeInterval(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
+      return max(0.25, seconds)
+    }
+
+    // Retry-After may be either delta-seconds or an HTTP date.
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    for format in [
+      "EEE',' dd MMM yyyy HH':'mm':'ss z",
+      "EEEE',' dd-MMM-yy HH':'mm':'ss z",
+      "EEE MMM d HH':'mm':'ss yyyy",
+    ] {
+      formatter.dateFormat = format
+      if let date = formatter.date(from: value) {
+        return max(0.25, date.timeIntervalSinceNow)
+      }
+    }
+    return nil
   }
 
   // MARK: - MusicBrainz Search
@@ -784,6 +827,7 @@ final class MetadataService {
       (song.artistConfidence < 0.8 || song.artist == "Unknown Artist" || song.artist.isEmpty)
     {
       song.artist = artist
+      song.artists = ArtistParser.parseArtists(from: artist)
       song.artistConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: artist)
       song.metadataSourceArtist = metadata.source.rawValue
       needsSave = true

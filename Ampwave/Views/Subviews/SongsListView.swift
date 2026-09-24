@@ -48,6 +48,8 @@ struct SongsListView: View {
   @Environment(\.modelContext) private var modelContext
   @Environment(ThemeManager.self) private var themeManager
   @Query private var settings: [AppSettings]
+  @AppStorage(LibraryArtworkShape.storageKey) private var artworkShapeRaw =
+    LibraryArtworkShape.roundedRectangle.rawValue
   /// Cached sort result, kept on the same actor as its SwiftData models.
   @State private var sortedSongs: [LibrarySong] = []
 
@@ -55,6 +57,9 @@ struct SongsListView: View {
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
   private var historyTracker: ListeningHistoryTracker { ListeningHistoryTracker.shared }
+  private var artworkShape: LibraryArtworkShape {
+    LibraryArtworkShape(rawValue: artworkShapeRaw) ?? .roundedRectangle
+  }
 
   private var appSettings: AppSettings {
     settings.first ?? AppSettings.getOrCreate(in: modelContext)
@@ -117,7 +122,8 @@ struct SongsListView: View {
   }
 
   private func songRow(_ song: LibrarySong) -> some View {
-    SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
+    SongRow(song: song, isCurrent: playback.currentItem?.id == song.id,
+            artworkShape: artworkShape)
       .contentShape(Rectangle())
       .onTapGesture {
         playback.playQueue(

@@ -50,7 +50,7 @@ enum LibraryMaintenanceService {
     for song in songs {
       if let artist = edit.artist, !artist.isEmpty {
         song.artist = artist
-        song.artists = [artist]
+        song.artists = ArtistParser.parseArtists(from: artist)
         markEdited("artist", on: song)
       }
       if let albumArtist = edit.albumArtist, !albumArtist.isEmpty {

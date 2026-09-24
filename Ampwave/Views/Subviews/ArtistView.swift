@@ -14,10 +14,80 @@ internal import SwiftUI
   import AppKit
 #endif
 
+/// The configurable content sections on artist pages. The order is stored in
+/// UserDefaults so it applies to every artist and does not require a data-model
+/// migration.
+enum ArtistDetailSection: String, CaseIterable, Identifiable {
+  case about
+  case albums
+  case popular
+  case similarArtists
+  case allSongs
+
+  static let orderKey = "com.ampwave.artistDetail.sectionOrder.v1"
+
+  static let defaultOrder: [ArtistDetailSection] = [
+    .about,
+    .albums,
+    .popular,
+    .similarArtists,
+    .allSongs,
+  ]
+
+  static var defaultOrderRaw: String {
+    encode(defaultOrder)
+  }
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .about: return "About"
+    case .albums: return "Albums"
+    case .popular: return "Popular"
+    case .similarArtists: return "Similar Artists"
+    case .allSongs: return "All Songs"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .about: return "person.text.rectangle"
+    case .albums: return "square.stack"
+    case .popular: return "chart.bar.fill"
+    case .similarArtists: return "person.2"
+    case .allSongs: return "music.note.list"
+    }
+  }
+
+  static func decode(_ raw: String) -> [ArtistDetailSection] {
+    let saved = raw.split(separator: ",").compactMap {
+      ArtistDetailSection(rawValue: String($0))
+    }
+    var result: [ArtistDetailSection] = []
+
+    // Repair malformed or older saved layouts and append any sections added
+    // by future versions without disturbing the user's existing order.
+    for section in saved + defaultOrder where !result.contains(section) {
+      result.append(section)
+    }
+    return result
+  }
+
+  static func encode(_ sections: [ArtistDetailSection]) -> String {
+    sections.map(\.rawValue).joined(separator: ",")
+  }
+}
+
 struct ArtistView: View {
   let artist: Artist
   @Environment(ThemeManager.self) private var themeManager
   @State private var viewModel: ArtistDetailViewModel
+  @State private var showingSectionOrderEditor = false
+  @AppStorage(ArtistDetailSection.orderKey) private var sectionOrderRaw =
+    ArtistDetailSection.defaultOrderRaw
+  @AppStorage(LibraryArtworkShape.storageKey) private var artworkShapeRaw =
+    LibraryArtworkShape.roundedRectangle.rawValue
 
   init(artist: Artist) {
     self.artist = artist
@@ -27,6 +97,9 @@ struct ArtistView: View {
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
   private var library: SongLibrary { SongLibrary.shared }
+  private var artworkShape: LibraryArtworkShape {
+    LibraryArtworkShape(rawValue: artworkShapeRaw) ?? .roundedRectangle
+  }
 
   var body: some View {
     ScrollView {
@@ -49,6 +122,9 @@ struct ArtistView: View {
     .toolbar {
       toolbarContent
     }
+    .sheet(isPresented: $showingSectionOrderEditor) {
+      ArtistSectionOrderEditor(sections: sectionOrderBinding)
+    }
     .task {
       await viewModel.loadData()
     }
@@ -68,41 +144,61 @@ struct ArtistView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
 
-      if hasArtistInfo {
-        ArtistInfoSection(artist: artist)
-      } else {
-        noInfoView
+      ForEach(ArtistDetailSection.decode(sectionOrderRaw)) { section in
+        artistSection(section)
       }
-
-      if !viewModel.topSongs.isEmpty {
-        SectionHeader(title: "Popular")
-        topSongsList
-      }
-
-      if !viewModel.albums.isEmpty {
-        SectionHeader(title: "Albums")
-        albumsGrid
-      }
-
-      if !viewModel.relatedArtists.isEmpty {
-        SectionHeader(title: "Similar Artists")
-        relatedArtistsGrid
-      }
-
-      if viewModel.songs.count > viewModel.topSongs.count {
-        SectionHeader(title: "All Songs")
-        allSongsList
-      }
-
     }
     // The tab accessory supplies its own scroll inset, including its current
     // expanded/collapsed height. Only add ordinary spacing after the content.
     .padding(.bottom, 24)
   }
 
+  private var sectionOrderBinding: Binding<[ArtistDetailSection]> {
+    Binding(
+      get: { ArtistDetailSection.decode(sectionOrderRaw) },
+      set: { sectionOrderRaw = ArtistDetailSection.encode($0) }
+    )
+  }
+
+  @ViewBuilder
+  private func artistSection(_ section: ArtistDetailSection) -> some View {
+    switch section {
+    case .about:
+      if hasArtistInfo {
+        ArtistInfoSection(artist: artist)
+      } else {
+        noInfoView
+      }
+    case .albums:
+      if !viewModel.albums.isEmpty {
+        SectionHeader(title: section.title)
+        albumsGrid
+      }
+    case .popular:
+      if !viewModel.topSongs.isEmpty {
+        SectionHeader(title: section.title)
+        topSongsList
+      }
+    case .similarArtists:
+      if !viewModel.relatedArtists.isEmpty {
+        SectionHeader(title: section.title)
+        relatedArtistsGrid
+      }
+    case .allSongs:
+      if viewModel.songs.count > viewModel.topSongs.count {
+        SectionHeader(title: section.title)
+        allSongsList
+      }
+    }
+  }
+
   private var artistHeader: some View {
     VStack(spacing: 16) {
-      ArtistImageView(artworkPath: artist.artworkPath, size: 180)
+      ArtistImageView(
+        artworkPath: artist.artworkPath,
+        size: 180,
+        shape: artworkShape
+      )
         .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
         .padding(.top, 60)
 
@@ -213,7 +309,8 @@ struct ArtistView: View {
         NumberedSongRow(
           number: index + 1,
           song: song,
-          isCurrent: playback.currentItem?.id == song.id
+          isCurrent: playback.currentItem?.id == song.id,
+          artworkShape: artworkShape
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -240,7 +337,7 @@ struct ArtistView: View {
         ForEach(viewModel.albums) { album in
           // AlbumCard already wraps a NavigationLink; adding artworkSize + frame
           // prevents the card from collapsing or expanding to fill the scroll width.
-          AlbumCard(album: album, artworkSize: 160)
+          AlbumCard(album: album, artworkSize: 160, artworkShape: artworkShape)
             .frame(width: 160)
         }
       }
@@ -254,7 +351,11 @@ struct ArtistView: View {
         ForEach(viewModel.relatedArtists) { relatedArtist in
           NavigationLink(destination: ArtistView(artist: relatedArtist)) {
             VStack(spacing: 10) {
-              ArtistImageView(artworkPath: relatedArtist.artworkPath, size: 120)
+              ArtistImageView(
+                artworkPath: relatedArtist.artworkPath,
+                size: 120,
+                shape: artworkShape
+              )
 
               Text(relatedArtist.name)
                 .font(.system(size: 14, weight: .medium))
@@ -277,7 +378,8 @@ struct ArtistView: View {
       ForEach(viewModel.songs) { song in
         SongRow(
           song: song,
-          isCurrent: playback.currentItem?.id == song.id
+          isCurrent: playback.currentItem?.id == song.id,
+          artworkShape: artworkShape
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -294,6 +396,14 @@ struct ArtistView: View {
   private var toolbarContent: some ToolbarContent {
     ToolbarItem(placement: .primaryAction) {
       Menu {
+        Button {
+          showingSectionOrderEditor = true
+        } label: {
+          Label("Edit Section Order", systemImage: "arrow.up.arrow.down")
+        }
+
+        Divider()
+
         Button {
           Task { await viewModel.refreshMetadata() }
         } label: {
@@ -345,6 +455,48 @@ struct ArtistView: View {
     }
     .padding(.vertical, 20)
     .frame(maxWidth: .infinity)
+  }
+}
+
+private struct ArtistSectionOrderEditor: View {
+  @Environment(\.dismiss) private var dismiss
+  @Environment(ThemeManager.self) private var themeManager
+  @Binding var sections: [ArtistDetailSection]
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Section {
+          ForEach(sections) { section in
+            Label(section.title, systemImage: section.systemImage)
+          }
+          .onMove { source, destination in
+            sections.move(fromOffsets: source, toOffset: destination)
+          }
+        } footer: {
+          Text("Drag sections into the order you want. This layout applies to every artist.")
+        }
+
+        Section {
+          Button("Restore Default Order") {
+            sections = ArtistDetailSection.defaultOrder
+          }
+        }
+      }
+      .scrollContentBackground(.hidden)
+      .background(themeManager.backgroundColor)
+      .navigationTitle("Artist Sections")
+      #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        .environment(\.editMode, .constant(.active))
+      #endif
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { dismiss() }
+        }
+      }
+    }
+    .presentationDetents([.medium, .large])
   }
 }
 
@@ -442,7 +594,8 @@ class ArtistDetailViewModel {
     // Get all albums by this artist
     let normalizedArtistName = artist.name.lowercased()
     albums = library.albums.filter {
-      ($0.artist ?? "").lowercased() == normalizedArtistName
+      ArtistParser.parseArtists(from: $0.artist ?? "")
+        .contains { $0.lowercased() == normalizedArtistName }
     }.sorted {
       ($0.year ?? 0) > ($1.year ?? 0)
     }

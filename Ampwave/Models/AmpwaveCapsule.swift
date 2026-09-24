@@ -48,7 +48,10 @@ final class AmpwaveCapsule: Identifiable, Hashable {
 
   @MainActor
   func resolvedSongs(in library: SongLibrary) -> [LibrarySong] {
-    let songsByID = Dictionary(uniqueKeysWithValues: library.songs.map { ($0.id, $0) })
+    let songsByID = Dictionary(
+      library.songs.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
     return songIDs.compactMap { songsByID[$0] }
   }
 

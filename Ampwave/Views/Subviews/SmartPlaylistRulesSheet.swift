@@ -235,7 +235,7 @@ struct SmartRulesEditor: View {
       connector: .or,
       field: field,
       operation: field.defaultOperation,
-      value: field == .liked ? "true" : ""
+      value: field.valueKind == .boolean ? "true" : ""
     )
 
     // Insert after the last rule of the same field, or append
@@ -344,6 +344,16 @@ private struct RuleRowView: View {
       )) {
         Text("Loved").tag(true)
         Text("Not loved").tag(false)
+      }
+      .pickerStyle(.segmented)
+
+    case .multichannelAudio:
+      Picker("Audio Channels", selection: Binding(
+        get: { (rule.value as NSString).boolValue },
+        set: { rule.value = $0 ? "true" : "false" }
+      )) {
+        Text("Multichannel").tag(true)
+        Text("Mono/Stereo").tag(false)
       }
       .pickerStyle(.segmented)
 

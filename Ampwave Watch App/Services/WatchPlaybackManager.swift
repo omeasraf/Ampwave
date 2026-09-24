@@ -27,8 +27,12 @@ final class WatchPlaybackManager: NSObject {
     super.init()
   }
 
-  func play(_ song: LibrarySong) {
+  @discardableResult
+  func play(_ song: LibrarySong) -> Bool {
+    guard WCSession.default.activationState == .activated,
+      WCSession.default.isReachable else { return false }
     sendRemoteCommand("play_song", params: ["songId": song.id.uuidString])
+    return true
   }
 
   func togglePlayback() {

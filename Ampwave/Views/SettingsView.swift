@@ -91,6 +91,7 @@ struct SettingsView: View {
   @State private var backupExportURL: URL?
   @State private var showingBulkTagEditor = false
   @State private var showingOnboarding = false
+  @AppStorage("com.ampwave.spatialAudioMode") private var spatialAudioModeRaw = "multichannel"
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -139,6 +140,7 @@ struct SettingsView: View {
         ) {
           settingsPage("Import") {
             importSection.listRowBackground(themeManager.cardBackgroundColor)
+            remoteLibrariesSection.listRowBackground(themeManager.cardBackgroundColor)
           }
         }
 
@@ -148,6 +150,7 @@ struct SettingsView: View {
         ) {
           settingsPage("Playback") {
             playbackSettingsSection.listRowBackground(themeManager.cardBackgroundColor)
+            spatialAudioSettingsSection.listRowBackground(themeManager.cardBackgroundColor)
           }
         }
 
@@ -167,15 +170,9 @@ struct SettingsView: View {
         ) {
           settingsPage("Appearance") {
             themingSection.listRowBackground(themeManager.cardBackgroundColor)
+            layoutNavigationSection.listRowBackground(themeManager.cardBackgroundColor)
             layoutSection.listRowBackground(themeManager.cardBackgroundColor)
           }
-        }
-
-        settingsCategoryLink(
-          title: "Home",
-          systemImage: "house"
-        ) {
-          HomeCustomizationView()
         }
 
       }
@@ -196,9 +193,6 @@ struct SettingsView: View {
           systemImage: "link"
         ) {
           settingsPage("Connections") {
-            #if os(iOS)
-              appleWatchSection.listRowBackground(themeManager.cardBackgroundColor)
-            #endif
             scrobblingSection.listRowBackground(themeManager.cardBackgroundColor)
             webDAVSection.listRowBackground(themeManager.cardBackgroundColor)
           }
@@ -392,8 +386,27 @@ struct SettingsView: View {
     }
   }
 
+  private var layoutNavigationSection: some View {
+    Section {
+      NavigationLink {
+        LibraryLayoutSettingsView()
+      } label: {
+        Label("Library Layout", systemImage: "rectangle.3.group")
+      }
+
+      NavigationLink {
+        HomeCustomizationView()
+      } label: {
+        Label("Home Layout", systemImage: "house")
+      }
+    } header: {
+      Text("Layouts")
+    }
+  }
+
   private var layoutSection: some View {
     Section {
+
       if let preferences = userPreferences {
         Toggle(
           "Full Artwork Background",
@@ -461,7 +474,7 @@ struct SettingsView: View {
       }
 
     } header: {
-      Text("Layout")
+      Text("Player & Surfaces")
     }
   }
 
@@ -593,20 +606,6 @@ struct SettingsView: View {
     }
   }
 
-  private var appleWatchSection: some View {
-    Section {
-      NavigationLink {
-        WatchSyncSettingsView()
-      } label: {
-        Label("Apple Watch Sync", systemImage: "applewatch")
-      }
-    } header: {
-      Text("Apple Watch")
-    } footer: {
-      Text("Manage songs and playlists synced to your Apple Watch.")
-    }
-  }
-
   private var playbackSettingsSection: some View {
     Section {
       if let preferences = userPreferences {
@@ -678,6 +677,33 @@ struct SettingsView: View {
       Text(
         "Playback stays intentionally simple here: focus is on gapless listening, volume consistency, and reliable queue behavior."
       )
+    }
+  }
+
+  private var spatialAudioSettingsSection: some View {
+    Section {
+      Picker(
+        "Spatial Audio",
+        selection: Binding(
+          get: { SpatialAudioMode(rawValue: spatialAudioModeRaw) ?? .multichannel },
+          set: { mode in
+            spatialAudioModeRaw = mode.rawValue
+            PlaybackController.shared.refreshSpatialAudioSettings()
+          }
+        )
+      ) {
+        ForEach(SpatialAudioMode.allCases) { mode in
+          Text(mode.title).tag(mode)
+        }
+      }
+
+      Text((SpatialAudioMode(rawValue: spatialAudioModeRaw) ?? .multichannel).explanation)
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+    } header: {
+      Text("Surround & Spatial Audio")
+    } footer: {
+      Text("Ampwave plays supported multichannel files and streams through the current output. Spatial playback and head tracking depend on your device and Control Center settings. EQ and VocalSlider are bypassed for surround tracks to keep playback reliable. Apple Music's subscription-only Atmos tracks are not part of your Ampwave library.")
     }
   }
 
@@ -835,7 +861,14 @@ struct SettingsView: View {
             "Auto-fetch Metadata",
             isOn: Binding(
               get: { preferences.autoFetchMetadata },
-              set: { preferences.autoFetchMetadata = $0 }
+              set: { enabled in
+                preferences.autoFetchMetadata = enabled
+                try? modelContext.save()
+                if enabled {
+                  BackgroundWorkCoordinator.scheduleMetadataRefresh()
+                  Task { await library.resumeIncompleteMetadataFetches() }
+                }
+              }
             )
           )
           Text("Tags embedded in your audio files are always imported. This setting controls online metadata and artwork enrichment.")
@@ -973,6 +1006,29 @@ struct SettingsView: View {
       Text(
         "Connect to a WebDAV server, browse remote folders, and securely download music into your Ampwave library."
       )
+    }
+  }
+
+  private var remoteLibrariesSection: some View {
+    Section {
+      NavigationLink {
+        RemoteLibrariesSettingsView()
+      } label: {
+        HStack {
+          Label("Jellyfin & Plex", systemImage: "server.rack")
+          Spacer()
+          Text(
+            RemoteLibraryService.shared.sources.isEmpty
+              ? "Not Configured" : "\(RemoteLibraryService.shared.sources.count) Connected"
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+      }
+    } header: {
+      Text("Media Servers")
+    } footer: {
+      Text("Sync remote catalogs, stream while connected, and keep selected music offline.")
     }
   }
 
@@ -1331,7 +1387,7 @@ struct SettingsView: View {
 
         let supportedExtensions: Set<String> = [
           "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "aiff",
-          "wma", "alac", "m4b",
+          "wma", "alac", "m4b", "ac3", "eac3", "caf",
         ]
         var matches: [URL] = []
         while let fileURL = enumerator.nextObject() as? URL {
@@ -2025,6 +2081,165 @@ struct ThemeSelectorView: View {
     }
     .buttonStyle(.plain)
     .animation(.spring(duration: 0.2), value: isSelected)
+  }
+}
+
+private struct LibraryLayoutSettingsView: View {
+  @Environment(ThemeManager.self) private var themeManager
+  @AppStorage(LibraryCollectionLayout.storageKey) private var collectionLayoutRaw =
+    LibraryCollectionLayout.grid.rawValue
+  @AppStorage(LibraryArtworkShape.storageKey) private var artworkShapeRaw =
+    LibraryArtworkShape.roundedRectangle.rawValue
+  @AppStorage(LibraryView.LibraryTab.orderKey) private var tabOrderRaw =
+    LibraryView.LibraryTab.defaultOrderRaw
+  @AppStorage(LibraryView.LibraryTab.hiddenKey) private var hiddenTabsRaw = ""
+
+  private var tabOrder: [LibraryView.LibraryTab] {
+    LibraryView.LibraryTab.decodeOrder(tabOrderRaw)
+  }
+
+  private var hiddenTabs: Set<LibraryView.LibraryTab> {
+    LibraryView.LibraryTab.decodeHidden(hiddenTabsRaw)
+  }
+
+  private var visibleCount: Int {
+    tabOrder.filter { !hiddenTabs.contains($0) }.count
+  }
+
+  var body: some View {
+    List {
+      Section {
+        VStack(alignment: .leading, spacing: 10) {
+          Text("Library View")
+            .font(.subheadline.weight(.semibold))
+          HStack(spacing: 12) {
+            ForEach(LibraryCollectionLayout.allCases) { layout in
+              choiceButton(
+                title: layout.title,
+                systemImage: layout.systemImage,
+                isSelected: collectionLayoutRaw == layout.rawValue
+              ) { collectionLayoutRaw = layout.rawValue }
+            }
+          }
+        }
+
+        VStack(alignment: .leading, spacing: 10) {
+          Text("Library Artwork")
+            .font(.subheadline.weight(.semibold))
+          HStack(spacing: 12) {
+            ForEach(LibraryArtworkShape.allCases) { shape in
+              choiceButton(
+                title: shape.title,
+                systemImage: shape.systemImage,
+                isSelected: artworkShapeRaw == shape.rawValue,
+                artworkShape: shape
+              ) { artworkShapeRaw = shape.rawValue }
+            }
+          }
+        }
+      } header: {
+        Text("Appearance")
+      } footer: {
+        Text("Grid or list applies to Albums, Artists, and Genres. Artwork shape applies throughout Library and on album and artist pages.")
+      }
+
+      Section {
+        ForEach(tabOrder) { tab in
+          HStack(spacing: 12) {
+            Label(tab.rawValue, systemImage: tab.icon)
+            Spacer()
+            Toggle("Show \(tab.rawValue)", isOn: visibilityBinding(for: tab))
+              .labelsHidden()
+              .disabled(!hiddenTabs.contains(tab) && visibleCount <= 1)
+          }
+        }
+        .onMove(perform: moveTabs)
+      } header: {
+        Text("Library Tabs")
+      } footer: {
+        Text("Drag to reorder the tabs shown at the top of Library. At least one tab must remain visible.")
+      }
+
+      Section {
+        Button("Restore Defaults") {
+          tabOrderRaw = LibraryView.LibraryTab.defaultOrderRaw
+          hiddenTabsRaw = ""
+          collectionLayoutRaw = LibraryCollectionLayout.grid.rawValue
+          artworkShapeRaw = LibraryArtworkShape.roundedRectangle.rawValue
+        }
+      }
+    }
+    .scrollContentBackground(.hidden)
+    .background(themeManager.backgroundColor)
+    .tint(themeManager.accentColor)
+    .navigationTitle("Library Layout")
+    #if os(iOS)
+      .navigationBarTitleDisplayMode(.inline)
+      .environment(\.editMode, .constant(.active))
+    #endif
+  }
+
+  private func choiceButton(
+    title: String,
+    systemImage: String,
+    isSelected: Bool,
+    artworkShape: LibraryArtworkShape? = nil,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      VStack(spacing: 7) {
+        Group {
+          if let artworkShape {
+            if artworkShape == .circle {
+              Circle().strokeBorder(lineWidth: 2)
+            } else {
+              RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(lineWidth: 2)
+            }
+          } else {
+            Image(systemName: systemImage)
+              .font(.system(size: 23, weight: .medium))
+          }
+        }
+        .frame(width: 28, height: 28)
+        Text(title)
+          .font(.subheadline.weight(.medium))
+      }
+      .frame(maxWidth: .infinity)
+      .padding(.vertical, 12)
+      .foregroundStyle(isSelected ? themeManager.accentColor : Color.primary)
+      .background(
+        isSelected ? themeManager.accentColor.opacity(0.12) : themeManager.cardBackgroundColor,
+        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+      )
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(isSelected ? themeManager.accentColor : .clear, lineWidth: 1.5)
+      }
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(isSelected ? .isSelected : [])
+  }
+
+  private func visibilityBinding(for tab: LibraryView.LibraryTab) -> Binding<Bool> {
+    Binding(
+      get: { !hiddenTabs.contains(tab) },
+      set: { shouldShow in
+        var hidden = hiddenTabs
+        if shouldShow {
+          hidden.remove(tab)
+        } else if visibleCount > 1 {
+          hidden.insert(tab)
+        }
+        hiddenTabsRaw = LibraryView.LibraryTab.encodeHidden(hidden)
+      }
+    )
+  }
+
+  private func moveTabs(from source: IndexSet, to destination: Int) {
+    var reordered = tabOrder
+    reordered.move(fromOffsets: source, toOffset: destination)
+    tabOrderRaw = LibraryView.LibraryTab.encode(reordered)
   }
 }
 

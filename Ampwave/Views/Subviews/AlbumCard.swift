@@ -18,6 +18,7 @@ struct AlbumCard: View {
   /// the grid so the GeometryReader reads a stable size; defaults to 160 for
   /// horizontal scroll contexts where no width is proposed.
   var artworkSize: CGFloat = 160
+  var artworkShape: LibraryArtworkShape = .roundedRectangle
   /// Full-bleed mode: no corner radius, no outer padding (used by large Library grid).
   var isFullBleed: Bool = false
 
@@ -60,7 +61,9 @@ struct AlbumCard: View {
         size: artworkSize,
         // Clamped: a pure percentage radius balloons past the app's 16–20 pt
         // corner language once a cell fills the screen width.
-        cornerRadius: isFullBleed ? 0 : min(20, max(8, artworkSize * 0.08))
+        cornerRadius: artworkShape == .circle
+          ? artworkSize / 2
+          : (isFullBleed ? 0 : min(20, max(8, artworkSize * 0.08)))
       )
       .accessibilityHidden(true)
 
@@ -96,5 +99,48 @@ struct AlbumCard: View {
       return "\(album.name), album by \(artist)"
     }
     return album.name
+  }
+}
+
+struct AlbumListRow: View {
+  let album: Album
+  var artworkShape: LibraryArtworkShape = .roundedRectangle
+
+  @State private var isEditingShown = false
+
+  var body: some View {
+    NavigationLink(destination: AlbumView(album: album)) {
+      HStack(spacing: 14) {
+        AlbumArtworkView(
+          artworkPath: album.artworkPath,
+          size: 64,
+          cornerRadius: artworkShape == .circle ? 32 : 10
+        )
+        VStack(alignment: .leading, spacing: 4) {
+          Text(album.name)
+            .font(.system(size: 17, weight: .semibold, design: .rounded))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+          Text(album.artist ?? "Unknown Artist")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 8)
+        Image(systemName: "chevron.right")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(.tertiary)
+      }
+      .contentShape(Rectangle())
+      .padding(.vertical, 9)
+    }
+    .buttonStyle(.plain)
+    .albumContextMenu(album: album) { isEditingShown = true }
+    .sheet(isPresented: $isEditingShown) {
+      AlbumEditSheet(album: album, isPresented: $isEditingShown)
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(album.artist.map { "\(album.name), album by \($0)" } ?? album.name)
+    .accessibilityHint("Opens album")
   }
 }

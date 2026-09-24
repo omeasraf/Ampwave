@@ -279,7 +279,7 @@ final class RecommendationEngine {
     if library.songs.isEmpty { await library.loadSongs() }
 
     let stats = statisticsBySongID()
-    let eligible = library.songs.filter {
+    let eligible = SongLibrary.deduplicatedSongsByID(library.songs).filter {
       $0.id != seed.id && stats[$0.id]?.isDisliked != true
     }
     guard !eligible.isEmpty else { return [] }
@@ -315,10 +315,16 @@ final class RecommendationEngine {
       candidates: candidates.map(snapshot),
       limit: limit
     )
-    let songsByID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
+    let songsByID = Dictionary(
+      eligible.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
 
-    var result = rankedIDs.compactMap { songsByID[$0] }
-    var includedIDs = Set(result.map(\.id))
+    var includedIDs = Set<UUID>()
+    var result = rankedIDs.compactMap { id -> LibrarySong? in
+      guard includedIDs.insert(id).inserted else { return nil }
+      return songsByID[id]
+    }
 
     // A corrupt/unsupported file should never leave the action doing nothing.
     // The normal private radio matcher is the graceful fallback.
@@ -346,7 +352,7 @@ final class RecommendationEngine {
     guard !playlistSongs.isEmpty else { return [] }
     let playlistIDs = Set(playlistSongs.map(\.id))
     let stats = statisticsBySongID()
-    let eligible = library.songs.filter {
+    let eligible = SongLibrary.deduplicatedSongsByID(library.songs).filter {
       !playlistIDs.contains($0.id) && stats[$0.id]?.isDisliked != true
     }
     guard !eligible.isEmpty else { return [] }
@@ -370,9 +376,15 @@ final class RecommendationEngine {
       candidates: candidates.map { service.snapshot(for: $0, library: library) },
       limit: limit
     )
-    let songsByID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
-    var result = rankedIDs.compactMap { songsByID[$0] }
-    var includedIDs = Set(result.map(\.id))
+    let songsByID = Dictionary(
+      eligible.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
+    var includedIDs = Set<UUID>()
+    var result = rankedIDs.compactMap { id -> LibrarySong? in
+      guard includedIDs.insert(id).inserted else { return nil }
+      return songsByID[id]
+    }
 
     if result.count < limit {
       for fallback in findSimilarSongs(
@@ -472,7 +484,8 @@ final class RecommendationEngine {
 
     var scoredSongs: [(song: LibrarySong, score: Double, reason: RecommendationReason)] = []
 
-    for song in library.songs where !excludeIds.contains(song.id) {
+    for song in SongLibrary.deduplicatedSongsByID(library.songs)
+    where !excludeIds.contains(song.id) {
       // A track the user explicitly disliked has no business turning up in a
       // queue they didn't hand-pick.
       if stats[song.id]?.isDisliked == true { continue }
@@ -817,7 +830,7 @@ final class RecommendationEngine {
     guard let modelContext else { return [:] }
     let descriptor = FetchDescriptor<SongPlayStatistics>()
     let stats = (try? modelContext.fetch(descriptor)) ?? []
-    return Dictionary(uniqueKeysWithValues: stats.map { ($0.songId, $0) })
+    return Dictionary(stats.map { ($0.songId, $0) }, uniquingKeysWith: { first, _ in first })
   }
 
   private func extractGenres(from songs: [LibrarySong]) -> Set<String> {

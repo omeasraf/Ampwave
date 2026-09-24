@@ -113,6 +113,8 @@ final class VocalIsolator {
         targetVocalLevelPtr.pointee < 0.999 || eqEnabledPtr.pointee
     }
 
+    var isEQEnabled: Bool { eqEnabledPtr.pointee }
+
     func setEQEnabled(_ enabled: Bool) {
         eqEnabledPtr.pointee = enabled
     }
@@ -153,11 +155,12 @@ final class VocalIsolator {
         let bandFreqs: [Float]
         let bandQ: Float
 
-        // Per-channel biquad states: [band][0=L, 1=R]
+        // The processing tap only handles stereo: [band][0=L, 1=R].
         var eqState: [[BiquadState]]
         var eqCoeffs: [BiquadCoeffs]
         var lastGains: [Float]
         var sampleRate: Float = 44100.0
+        var processesFloatPCM = false
 
         // Bass-protection split (mid channel only, ahead of vocal removal)
         let bassProtectFreq: Float
@@ -255,6 +258,21 @@ final class VocalIsolator {
             for i in 0..<eqCoeffs.count {
                 left  = eqState[i][0].process(left,  eqCoeffs[i])
                 right = eqState[i][1].process(right, eqCoeffs[i])
+            }
+        }
+
+        func prepareEQ(sampleRate: Float) {
+            self.sampleRate = sampleRate
+            eqState = Array(
+                repeating: Array(repeating: BiquadState(), count: 2),
+                count: bandFreqs.count
+            )
+            for i in bandFreqs.indices {
+                lastGains[i] = eqGains[i]
+                eqCoeffs[i] = .peaking(
+                    freq: bandFreqs[i], gainDB: lastGains[i], Q: bandQ,
+                    sampleRate: sampleRate
+                )
             }
         }
 
@@ -968,17 +986,16 @@ final class VocalIsolator {
                 let storage = Unmanaged<TapStorage>
                     .fromOpaque(MTAudioProcessingTapGetStorage(tap))
                     .takeUnretainedValue()
-                storage.sampleRate = Float(processingFormat.pointee.mSampleRate)
-                // Pre-compute coefficients at actual sample rate
-                for i in 0..<storage.bandFreqs.count {
-                    storage.lastGains[i] = storage.eqGains[i]
-                    storage.eqCoeffs[i] = .peaking(
-                        freq: storage.bandFreqs[i],
-                        gainDB: storage.lastGains[i],
-                        Q: storage.bandQ,
-                        sampleRate: storage.sampleRate
-                    )
+                let format = processingFormat.pointee
+                storage.processesFloatPCM = format.mFormatID == kAudioFormatLinearPCM
+                    && format.mFormatFlags & kAudioFormatFlagIsFloat != 0
+                    && format.mBitsPerChannel == 32
+                if !storage.processesFloatPCM {
+                    print("[DEBUG] VocalIsolator: unsupported tap PCM format \(format.mFormatID)/\(format.mBitsPerChannel) bits; passing audio through")
                 }
+                storage.prepareEQ(
+                    sampleRate: Float(format.mSampleRate)
+                )
                 storage.bassCoeffs = .lowpass(
                     freq: storage.bassProtectFreq,
                     Q: storage.bassProtectQ,
@@ -1028,6 +1045,12 @@ final class VocalIsolator {
                     numberFramesOut
                 )
                 guard status == noErr else { return }
+                let decodedFrames = Int(numberFramesOut.pointee)
+                guard decodedFrames > 0 else { return }
+                // A tap can negotiate integer PCM. Reinterpreting those bytes
+                // as Float32 corrupts audio, so leave unsupported layouts
+                // untouched until a matching conversion path is available.
+                guard storage.processesFloatPCM else { return }
 
                 if flags & kMTAudioProcessingTapFlag_StartOfStream != 0 {
                     storage.resetFilterState()
@@ -1038,7 +1061,7 @@ final class VocalIsolator {
                 let bufferStart = sourceSeconds.isFinite && sourceSeconds >= 0
                     ? sourceSeconds : fallbackSeconds
                 let bufferMiddle = bufferStart
-                    + Double(numberFrames) / Double(max(storage.sampleRate, 1)) / 2
+                    + Double(decodedFrames) / Double(max(storage.sampleRate, 1)) / 2
                 let target = storage.adaptiveVocalLevel(
                     userLevel: storage.targetLevel.pointee,
                     at: bufferMiddle
@@ -1054,6 +1077,10 @@ final class VocalIsolator {
                 let buffers = UnsafeMutableAudioBufferListPointer(bufferListInOut)
                 let ramp: Float = 0.015
 
+                var totalChannels = 0
+                for buffer in buffers { totalChannels += Int(buffer.mNumberChannels) }
+                guard totalChannels == 2 else { return }
+
                 func vocalCurve(_ v: Float) -> Float {
                     pow(sin(min(max(v, 0), 1) * .pi * 0.5), 1.35)
                 }
@@ -1063,7 +1090,7 @@ final class VocalIsolator {
                     let ch = Int(buffers[0].mNumberChannels)
                     guard ch == 2 else { return }
 
-                    for i in 0..<Int(numberFrames) {
+                    for i in 0..<decodedFrames {
                         var L = data[i * 2]
                         var R = data[i * 2 + 1]
 
@@ -1118,7 +1145,7 @@ final class VocalIsolator {
                         let rData = buffers[1].mData?.assumingMemoryBound(to: Float.self)
                     else { return }
 
-                    for i in 0..<Int(numberFrames) {
+                    for i in 0..<decodedFrames {
                         var L = lData[i]
                         var R = rData[i]
 
@@ -1169,7 +1196,7 @@ final class VocalIsolator {
                 }
 
                 storage.currentLevel.pointee = current
-                storage.frameCounter += Int64(numberFrames)
+                storage.frameCounter += Int64(decodedFrames)
             }
         )
 

@@ -18,6 +18,7 @@ enum RuleField: String, Codable, CaseIterable {
   case rating = "rating"
   case duration = "duration"
   case liked = "liked"
+  case multichannelAudio = "multichannelAudio"
 }
 
 extension RuleField {
@@ -37,7 +38,7 @@ extension RuleField {
     case .year, .playCount, .skipCount, .rating: return .number
     case .duration: return .duration
     case .lastPlayed, .dateAdded: return .days
-    case .liked: return .boolean
+    case .liked, .multichannelAudio: return .boolean
     }
   }
 
@@ -55,6 +56,7 @@ extension RuleField {
     case .rating:     return "Rating"
     case .duration:   return "Duration"
     case .liked:      return "Loved"
+    case .multichannelAudio: return "Multichannel Audio"
     }
   }
 

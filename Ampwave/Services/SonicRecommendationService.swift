@@ -98,7 +98,8 @@ final class SonicRecommendationService {
     DiagnosticLog.shared.log(
       "sonic",
       "Music Understanding frameworkCompiled=\(MusicUnderstandingAnalyzer.isFrameworkCompiled) "
-        + "runtimeAvailable=\(MusicUnderstandingAnalyzer.isAvailable)"
+        + "automaticAvailable=\(MusicUnderstandingAnalyzer.isAvailable) "
+        + "userInitiatedAvailable=\(MusicUnderstandingAnalyzer.isUserInitiatedAvailable)"
     )
   }
 
@@ -120,6 +121,7 @@ final class SonicRecommendationService {
   }
 
   func enqueueAnalysis(for song: LibrarySong, library: SongLibrary) {
+    guard !song.isRemote || song.remoteIsDownloaded else { return }
     let hash = song.fileHash.isEmpty ? "\(song.id)-\(song.size)" : song.fileHash
     guard !analysisIsComplete(hash: hash) else { return }
     enqueueAnalysis(snapshot(for: song, library: library))
@@ -131,6 +133,7 @@ final class SonicRecommendationService {
   /// Moves the active song to the front of the LIFO worker so playback does
   /// not wait for an entire existing library backfill to finish first.
   func prioritizeAnalysis(for song: LibrarySong) {
+    guard !song.isRemote || song.remoteIsDownloaded else { return }
     let hash = song.fileHash.isEmpty ? "\(song.id)-\(song.size)" : song.fileHash
     guard !analysisIsComplete(hash: hash) else { return }
     let track = snapshot(for: song)
@@ -143,6 +146,28 @@ final class SonicRecommendationService {
     }
     DiagnosticLog.shared.log("sonic", "Prioritized current song file=\(track.url.lastPathComponent)")
     startWorkerIfNeeded()
+  }
+
+  /// Runs rich instrument analysis only after an explicit user action has
+  /// secured a continued-processing task with background GPU permission.
+  func analyzeUserInitiated(_ song: LibrarySong) async -> Bool {
+    guard MusicUnderstandingAnalyzer.isUserInitiatedAvailable,
+      !song.isRemote || song.remoteIsDownloaded
+    else { return false }
+
+    let track = snapshot(for: song)
+    if fetchRecord(hash: track.fileHash)?.instrumentActivityData != nil { return true }
+
+    let taskStarted = await BackgroundWorkCoordinator.performUserInitiated(
+      title: "Analyze music",
+      subtitle: song.title,
+      totalUnitCount: 1,
+      requiresGPU: MusicUnderstandingAnalyzer.requiresProtectedGPU
+    ) { progress in
+      _ = await self.analyzeAndCacheIfNeeded(track, requestMusicUnderstanding: true)
+      progress.update(completed: 1, subtitle: "Finished \(song.title)")
+    }
+    return taskStarted && fetchRecord(hash: track.fileHash)?.instrumentActivityData != nil
   }
 
   /// Backfills existing libraries after upgrading from a build without sonic
@@ -162,6 +187,7 @@ final class SonicRecommendationService {
     }
     var musicUnderstandingBackfillCount = 0
     for song in songs {
+      guard !song.isRemote || song.remoteIsDownloaded else { continue }
       let hash = song.fileHash.isEmpty ? "\(song.id)-\(song.size)" : song.fileHash
       let needsBaseAnalysis = !index.base.contains(hash)
       let needsMusicUnderstanding = MusicUnderstandingAnalyzer.isAvailable
@@ -210,6 +236,10 @@ final class SonicRecommendationService {
 
   func applicationDidBecomeActive() {
     isAnalysisSuspended = false
+    DiagnosticLog.shared.log(
+      "sonic",
+      "Scene active userInitiatedMusicUnderstanding=\(MusicUnderstandingAnalyzer.isUserInitiatedAvailable)"
+    )
     startWorkerIfNeeded()
   }
 
@@ -311,7 +341,10 @@ final class SonicRecommendationService {
     return await analyzeAndCacheIfNeeded(track)
   }
 
-  private func analyzeAndCacheIfNeeded(_ track: SonicTrackSnapshot) async -> SonicProfile? {
+  private func analyzeAndCacheIfNeeded(
+    _ track: SonicTrackSnapshot,
+    requestMusicUnderstanding: Bool = false
+  ) async -> SonicProfile? {
     let existing = fetchRecord(hash: track.fileHash)
     let analyzed: SonicProfile?
     if let existing {
@@ -321,13 +354,15 @@ final class SonicRecommendationService {
     }
     guard let analyzed else { return nil }
 
-    let needsMusicUnderstanding = MusicUnderstandingAnalyzer.isAvailable
+    let needsMusicUnderstanding = (requestMusicUnderstanding || MusicUnderstandingAnalyzer.isAvailable)
       && (
         existing?.musicUnderstandingVersion != MusicUnderstandingAnalyzer.analysisVersion
           || existing?.instrumentActivityData == nil
       )
     let instrumentActivity = needsMusicUnderstanding
-      ? await MusicUnderstandingAnalyzer.analyze(track)
+      ? await MusicUnderstandingAnalyzer.analyze(
+        track, protectedByBackgroundGPUTask: requestMusicUnderstanding
+      )
       : nil
     let encodedActivity = instrumentActivity.flatMap(Self.encodeInstrumentActivity)
 

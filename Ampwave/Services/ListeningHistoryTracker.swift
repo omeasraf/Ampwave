@@ -72,6 +72,11 @@ final class ListeningHistoryTracker {
         song: previousSong, duration: totalDuration, source: usedSource,
         playlistId: currentPlaylistId ?? playlistId)
       scrobblePlay(previousSong, playedDuration: totalDuration)
+      RemoteLibraryService.shared.playbackStopped(
+        previousSong,
+        position: totalDuration,
+        completed: false
+      )
     }
 
     currentSong = song
@@ -83,6 +88,7 @@ final class ListeningHistoryTracker {
     beginHistory(for: song, source: source, playlistId: playlistId)
 
     LastFMScrobbler.shared.nowPlaying(song)
+    RemoteLibraryService.shared.playbackStarted(song)
   }
 
   /// Called when a song is paused
@@ -101,7 +107,7 @@ final class ListeningHistoryTracker {
   }
 
   /// Called when a song ends or is skipped
-  func songEnded(skipped: Bool = false) {
+  func songEnded(skipped: Bool = false, completed: Bool = false) {
     guard let song = currentSong else { return }
 
     if let startTime = currentPlayStartTime {
@@ -123,6 +129,11 @@ final class ListeningHistoryTracker {
     // *current* pass, while the user may still have heard enough of the track
     // overall. The scrobbler applies Last.fm's own threshold.
     scrobblePlay(song, playedDuration: currentPlayDuration)
+    RemoteLibraryService.shared.playbackStopped(
+      song,
+      position: currentPlayDuration,
+      completed: completed
+    )
 
     currentSong = nil
     currentPlayStartTime = nil
@@ -139,13 +150,14 @@ final class ListeningHistoryTracker {
   /// the newly-started song instead.
   func songFinished(_ song: LibrarySong) {
     guard currentSong?.id == song.id else { return }
-    songEnded(skipped: false)
+    songEnded(skipped: false, completed: true)
   }
 
   /// Drops model references without writing a play. Used before the entire
   /// library is deleted, when retaining the current song would leave a
   /// detached SwiftData model in this long-lived singleton.
   func discardCurrentSong() {
+    RemoteLibraryService.shared.discardCurrentPlayback(position: currentPlayDuration)
     currentSong = nil
     currentPlayStartTime = nil
     currentTrackStartedAt = nil

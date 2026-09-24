@@ -20,6 +20,7 @@ struct ExpandedLyricsView: View {
   @State private var isVisible = false
   @State private var scrollTimeout: Timer?
   @State private var showTimingAdjustment = false
+  @State private var showSurroundVocalExplanation = false
   @Environment(ThemeManager.self) private var themeManager
   @Environment(\.scenePhase) private var scenePhase
 
@@ -210,8 +211,12 @@ struct ExpandedLyricsView: View {
             }
 
             Button {
-              withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-                playback.toggleVocalSlider()
+              if (playback.currentItem?.channels ?? 2) > 2 {
+                showSurroundVocalExplanation = true
+              } else {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                  playback.toggleVocalSlider()
+                }
               }
             } label: {
                 Image(systemName: "waveform.path")
@@ -222,6 +227,11 @@ struct ExpandedLyricsView: View {
                         : .white.opacity(0.6)
                     )
             }
+            .accessibilityHint(
+              (playback.currentItem?.channels ?? 2) > 2
+                ? "Explains why vocal control is unavailable for surround recordings"
+                : "Adjust vocals for this recording"
+            )
           }
         }
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
@@ -238,6 +248,8 @@ struct ExpandedLyricsView: View {
       }
       .onDisappear {
         isVisible = false
+        scrollTimeout?.invalidate()
+        scrollTimeout = nil
         playback.endVocalSliderSession()
         #if os(iOS)
           UIApplication.shared.isIdleTimerDisabled = false
@@ -275,6 +287,11 @@ struct ExpandedLyricsView: View {
           .padding(.bottom, 8)
           .transition(.move(edge: .bottom).combined(with: .opacity))
       }
+    }
+    .alert("Vocal control needs stereo audio", isPresented: $showSurroundVocalExplanation) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text("This recording has separate surround channels. Ampwave's vocal control processes stereo mixes, so it can't safely isolate vocals here. EQ is also bypassed for surround playback to prevent audio dropouts.")
     }
   }
 
@@ -792,7 +809,8 @@ struct LyricLineView: View {
     .fixedSize(horizontal: false, vertical: true)
     .lineSpacing(4)
     // Inactive lines recede rather than shrink — matching Apple Music, where
-    // the sung line is simply the one in focus.
+    // the sung line is simply the one in focus. Avoid per-row blur here: every
+    // visible blur creates an offscreen render pass while lyrics are scrolling.
     //
     // Modifier order below is load-bearing, not stylistic. Tap-to-seek broke
     // when `.animation(_:value:)` sat at the very end of the chain, wrapping
@@ -801,7 +819,6 @@ struct LyricLineView: View {
     // outermost thing on the row. (Verified by testing: `.blur` and the
     // position of `.id` were both ruled out as causes.)
     .opacity(isCurrent ? 1.0 : 0.34)
-    .blur(radius: isCurrent ? 0 : 1.1)
     .scaleEffect(isCurrent ? 1.0 : 0.965, anchor: .center)
     .animation(.spring(response: 0.45, dampingFraction: 0.78), value: isCurrent)
     // Padding first, then the flexible frame: the other way round the frame
@@ -820,8 +837,8 @@ struct LyricLineView: View {
 
 /// The active word-synced line.
 ///
-/// Drawn from a display-linked timeline rather than the player's 30 Hz sampling
-/// so the highlight sweeps continuously instead of stepping word to word.
+/// Drawn from a capped timeline and interpolated between player samples, so the
+/// highlight stays smooth without refreshing at the display's full 60/120 Hz.
 private struct KaraokeLineView: View {
   @Bindable private var playback = PlaybackController.shared
   let words: [KaraokeWord]
@@ -830,7 +847,10 @@ private struct KaraokeLineView: View {
 
   var body: some View {
     TimelineView(
-      .animation(paused: !playback.isPlaying || playback.isScrubbing || playback.isSeeking)
+      .animation(
+        minimumInterval: 1.0 / 30.0,
+        paused: !playback.isPlaying || playback.isScrubbing || playback.isSeeking
+      )
     ) { _ in
       let now = playback.adjustedLyricsTime(
         for: playback.lyricsClock.interpolatedTime(
@@ -950,47 +970,42 @@ private struct CompactLyricLineView: View {
 
 // MARK: - Ambient background orbs
 
-/// Slow-moving colour blobs that sit between the blurred artwork and the
-/// lyrics text, mimicking the ambient gradient in Apple Music's full-screen
-/// lyrics. They breathe at different rates so the result never looks
-/// mechanical.
+/// Static radial washes between the artwork and lyrics. The previous version
+/// continuously moved and scaled three huge blurred circles; that forced
+/// expensive full-screen GPU compositing for the entire time lyrics were open.
 private struct LyricsAmbientOrbs: View {
   let color: Color
-  @State private var phase = false
 
   var body: some View {
-    // Sized off the container rather than fixed points, so the orbs can never
-    // be wider than the screen they sit on.
     GeometryReader { proxy in
       let unit = min(proxy.size.width, proxy.size.height)
 
       ZStack {
-        orb(diameter: unit * 0.9, opacity: 0.5, blur: 100)
-          .offset(x: phase ? -60 : -100, y: phase ? -200 : -260)
-          .scaleEffect(phase ? 1.2 : 0.8)
-          .animation(.easeInOut(duration: 8).repeatForever(autoreverses: true), value: phase)
+        orb(diameter: unit * 1.15, opacity: 0.42)
+          .offset(x: -unit * 0.28, y: -unit * 0.5)
 
-        orb(diameter: unit * 0.7, opacity: 0.35, blur: 85)
-          .offset(x: phase ? 110 : 70, y: phase ? -140 : -190)
-          .scaleEffect(phase ? 0.85 : 1.15)
-          .animation(.easeInOut(duration: 6.5).repeatForever(autoreverses: true), value: phase)
+        orb(diameter: unit * 0.9, opacity: 0.28)
+          .offset(x: unit * 0.38, y: -unit * 0.18)
 
-        orb(diameter: unit * 0.5, opacity: 0.25, blur: 70)
-          .offset(x: phase ? 20 : -30, y: phase ? 60 : 20)
-          .scaleEffect(phase ? 1.1 : 0.88)
-          .animation(.easeInOut(duration: 9).repeatForever(autoreverses: true), value: phase)
+        orb(diameter: unit * 0.7, opacity: 0.18)
+          .offset(x: -unit * 0.04, y: unit * 0.48)
       }
       .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
     }
     .allowsHitTesting(false)
-    .onAppear { phase = true }
   }
 
-  private func orb(diameter: CGFloat, opacity: Double, blur: CGFloat) -> some View {
+  private func orb(diameter: CGFloat, opacity: Double) -> some View {
     Circle()
-      .fill(color.opacity(opacity))
+      .fill(
+        RadialGradient(
+          colors: [color.opacity(opacity), color.opacity(0)],
+          center: .center,
+          startRadius: 0,
+          endRadius: diameter * 0.5
+        )
+      )
       .frame(width: diameter, height: diameter)
-      .blur(radius: blur)
   }
 }
 

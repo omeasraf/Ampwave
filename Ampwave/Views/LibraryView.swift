@@ -203,6 +203,31 @@ enum LibraryGridSize: String, CaseIterable {
   }
 }
 
+enum LibraryCollectionLayout: String, CaseIterable, Identifiable {
+  case grid
+  case list
+
+  // Retain the old key so an existing artist list preference becomes the
+  // shared Library preference without discarding the user's selection.
+  static let storageKey = "com.ampwave.artistLibraryLayout.v1"
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .grid: return "Grid"
+    case .list: return "List"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .grid: return "square.grid.2x2"
+    case .list: return "list.bullet"
+    }
+  }
+}
+
 // MARK: - LibrarySortMenu
 
 struct LibrarySortMenu: View {
@@ -275,10 +300,13 @@ struct LibrarySortMenu: View {
 /// spacing, which can push the density buttons outside their visible border.
 private struct LibraryToolbarControls: View {
   let selectedTab: LibraryView.LibraryTab
+  let collectionLayout: LibraryCollectionLayout
   @Binding var gridSelection: String
   @Bindable var appSettings: AppSettings
 
-  private var showsGridPicker: Bool { selectedTab != .songs }
+  private var showsGridPicker: Bool {
+    selectedTab != .songs && collectionLayout == .grid
+  }
   private var showsSortMenu: Bool { selectedTab != .genres }
 
   var body: some View {
@@ -310,11 +338,23 @@ private struct LibraryToolbarControls: View {
 struct GenresGridView: View {
   @Environment(ThemeManager.self) private var themeManager
   @AppStorage("com.ampwave.genreGridSize.v1") private var genreGridSizeRaw: String = "medium"
+  @AppStorage(LibraryArtworkShape.storageKey) private var artworkShapeRaw =
+    LibraryArtworkShape.roundedRectangle.rawValue
+  @AppStorage(LibraryCollectionLayout.storageKey) private var collectionLayoutRaw =
+    LibraryCollectionLayout.grid.rawValue
   @State private var gridWidth: CGFloat = 400
   private var library: SongLibrary { SongLibrary.shared }
 
   private var gridSize: LibraryGridSize {
     LibraryGridSize(rawValue: genreGridSizeRaw) ?? .medium
+  }
+
+  private var artworkShape: LibraryArtworkShape {
+    LibraryArtworkShape(rawValue: artworkShapeRaw) ?? .roundedRectangle
+  }
+
+  private var collectionLayout: LibraryCollectionLayout {
+    LibraryCollectionLayout(rawValue: collectionLayoutRaw) ?? .grid
   }
 
   private var entries: [(name: String, count: Int)] {
@@ -336,23 +376,42 @@ struct GenresGridView: View {
         .padding(.top, 48)
       } else {
         ScrollView {
-          LazyVGrid(columns: gridSize.gridColumns, spacing: gridSize.rowSpacing) {
-            ForEach(entries, id: \.name) { entry in
-              NavigationLink {
-                GenreSongsView(genre: entry.name)
-              } label: {
-                genreCell(
-                  name: entry.name,
-                  count: entry.count,
-                  width: gridSize.cellWidth(in: gridWidth)
-                )
+          if collectionLayout == .grid {
+            LazyVGrid(columns: gridSize.gridColumns, spacing: gridSize.rowSpacing) {
+              ForEach(entries, id: \.name) { entry in
+                NavigationLink {
+                  GenreSongsView(genre: entry.name)
+                } label: {
+                  genreCell(
+                    name: entry.name,
+                    count: entry.count,
+                    width: gridSize.cellWidth(in: gridWidth)
+                  )
+                }
+                .buttonStyle(.plain)
               }
-              .buttonStyle(.plain)
             }
+            .padding(.horizontal, gridSize.horizontalPadding)
+            .padding(.top, 16)
+            .padding(.bottom, 24)
+          } else {
+            LazyVStack(spacing: 0) {
+              ForEach(Array(entries.enumerated()), id: \.element.name) { index, entry in
+                NavigationLink {
+                  GenreSongsView(genre: entry.name)
+                } label: {
+                  genreListRow(name: entry.name, count: entry.count)
+                }
+                .buttonStyle(.plain)
+                if index < entries.count - 1 {
+                  Divider().padding(.leading, 78)
+                }
+              }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
           }
-          .padding(.horizontal, gridSize.horizontalPadding)
-          .padding(.top, 16)
-          .padding(.bottom, 24)
         }
       }
     }
@@ -371,7 +430,7 @@ struct GenresGridView: View {
     let artworkPath = representativeArtworkPath(for: name)
     let compact = width < 120
     return GeometryReader { proxy in
-      ZStack(alignment: .bottomLeading) {
+      ZStack(alignment: artworkShape == .circle ? .center : .bottomLeading) {
         if let artworkPath {
           ArtworkImage(
             artworkPath: artworkPath,
@@ -407,7 +466,7 @@ struct GenresGridView: View {
           endPoint: .bottom
         )
 
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: artworkShape == .circle ? .center : .leading, spacing: 3) {
           Text(name)
             .font(.system(size: compact ? 15 : 19, weight: .bold, design: .rounded))
             .foregroundStyle(.white)
@@ -417,15 +476,47 @@ struct GenresGridView: View {
             .font(.system(size: compact ? 10 : 12, weight: .semibold))
             .foregroundStyle(.white.opacity(0.88))
         }
+        .multilineTextAlignment(artworkShape == .circle ? .center : .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity,
+               alignment: artworkShape == .circle ? .center : .bottomLeading)
         .padding(compact ? 10 : 14)
       }
     }
-    .frame(width: width, height: width / 1.52)
-    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    .frame(width: width, height: artworkShape == .circle ? width : width / 1.52)
+    .clipShape(RoundedRectangle(
+      cornerRadius: artworkShape == .circle ? width / 2 : 20,
+      style: .continuous
+    ))
     .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("\(name), \(count) songs")
     .accessibilityHint("View songs in this genre")
+  }
+
+  private func genreListRow(name: String, count: Int) -> some View {
+    HStack(spacing: 14) {
+      ArtworkImage(
+        artworkPath: representativeArtworkPath(for: name),
+        size: 64,
+        cornerRadius: artworkShape == .circle ? 32 : 10
+      )
+      VStack(alignment: .leading, spacing: 4) {
+        Text(name)
+          .font(.system(size: 17, weight: .semibold, design: .rounded))
+          .foregroundStyle(.primary)
+          .lineLimit(1)
+        Text("\(count) songs")
+          .font(.system(size: 14, weight: .medium))
+          .foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 8)
+      Image(systemName: "chevron.right")
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.tertiary)
+    }
+    .contentShape(Rectangle())
+    .padding(.vertical, 9)
+    .accessibilityElement(children: .combine)
   }
 
   private func representativeArtworkPath(for genre: String) -> String? {
@@ -466,6 +557,10 @@ struct LibraryView: View {
   @AppStorage("com.ampwave.albumGridSize.v2") private var albumGridSizeRaw = "medium"
   @AppStorage("com.ampwave.artistGridSize.v2") private var artistGridSizeRaw = "medium"
   @AppStorage("com.ampwave.genreGridSize.v1") private var genreGridSizeRaw = "medium"
+  @AppStorage(LibraryCollectionLayout.storageKey) private var collectionLayoutRaw =
+    LibraryCollectionLayout.grid.rawValue
+  @AppStorage(LibraryTab.orderKey) private var tabOrderRaw = LibraryTab.defaultOrderRaw
+  @AppStorage(LibraryTab.hiddenKey) private var hiddenTabsRaw = ""
 
   private var library: SongLibrary { SongLibrary.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
@@ -478,11 +573,18 @@ struct LibraryView: View {
     _selectedTab = State(initialValue: initialTab)
   }
 
-  enum LibraryTab: String, CaseIterable {
+  enum LibraryTab: String, CaseIterable, Identifiable {
     case songs = "Songs"
     case albums = "Albums"
     case artists = "Artists"
     case genres = "Genres"
+
+    static let orderKey = "com.ampwave.libraryTabs.order.v1"
+    static let hiddenKey = "com.ampwave.libraryTabs.hidden.v1"
+    static let defaultOrder = LibraryTab.allCases
+    static var defaultOrderRaw: String { encode(defaultOrder) }
+
+    var id: String { rawValue }
 
     var icon: String {
       switch self {
@@ -492,6 +594,43 @@ struct LibraryView: View {
       case .genres: return "tag.fill"
       }
     }
+
+    static func decodeOrder(_ raw: String) -> [LibraryTab] {
+      let saved = raw.split(separator: ",").compactMap { LibraryTab(rawValue: String($0)) }
+      var result: [LibraryTab] = []
+      for tab in saved + defaultOrder where !result.contains(tab) {
+        result.append(tab)
+      }
+      return result
+    }
+
+    static func encode(_ tabs: [LibraryTab]) -> String {
+      tabs.map(\.rawValue).joined(separator: ",")
+    }
+
+    static func decodeHidden(_ raw: String) -> Set<LibraryTab> {
+      Set(raw.split(separator: ",").compactMap { LibraryTab(rawValue: String($0)) })
+    }
+
+    static func encodeHidden(_ tabs: Set<LibraryTab>) -> String {
+      defaultOrder.filter(tabs.contains).map(\.rawValue).joined(separator: ",")
+    }
+
+    static func visibleTabs(orderRaw: String, hiddenRaw: String) -> [LibraryTab] {
+      let order = decodeOrder(orderRaw)
+      let visible = order.filter { !decodeHidden(hiddenRaw).contains($0) }
+      // Saved settings may have been edited externally or written by an older
+      // build. Keep the Library usable even if every tab was marked hidden.
+      return visible.isEmpty ? Array(order.prefix(1)) : visible
+    }
+  }
+
+  private var collectionLayout: LibraryCollectionLayout {
+    LibraryCollectionLayout(rawValue: collectionLayoutRaw) ?? .grid
+  }
+
+  private var visibleTabs: [LibraryTab] {
+    LibraryTab.visibleTabs(orderRaw: tabOrderRaw, hiddenRaw: hiddenTabsRaw)
   }
 
   var body: some View {
@@ -500,26 +639,42 @@ struct LibraryView: View {
     // and prevents content from scrolling underneath the system bars.
     libraryContent
     .safeAreaBar(edge: .top, spacing: 0) {
+#if os(iOS)
+      VStack(spacing: 0) {
+        libraryHeader
+        libraryTabStrip
+      }
+#else
       libraryTabStrip
+#endif
     }
     .background(themeManager.backgroundColor)
     .tint(themeManager.accentColor)
-    .navigationTitle("Library")
 #if os(iOS)
-    .navigationBarTitleDisplayMode(.large)
-#endif
+    // The system bar compresses a large leading toolbar item to an ellipsis
+    // beside the grid controls. Keep this screen's header at a fixed size.
+    .toolbar(.hidden, for: .navigationBar)
+#else
+    .navigationTitle("Library")
     .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        LibraryToolbarControls(
-          selectedTab: selectedTab,
-          gridSelection: gridSizeBinding,
-          appSettings: appSettings
-        )
+      if selectedTab != .genres || collectionLayout == .grid {
+        ToolbarItem(placement: .primaryAction) {
+          LibraryToolbarControls(
+            selectedTab: selectedTab,
+            collectionLayout: collectionLayout,
+            gridSelection: gridSizeBinding,
+            appSettings: appSettings
+          )
+        }
       }
     }
+#endif
     .onAppear {
       playlistManager.setModelContext(modelContext)
+      selectFirstVisibleTabIfNeeded()
     }
+    .onChange(of: tabOrderRaw) { _, _ in selectFirstVisibleTabIfNeeded() }
+    .onChange(of: hiddenTabsRaw) { _, _ in selectFirstVisibleTabIfNeeded() }
   }
 
   @ViewBuilder
@@ -545,11 +700,39 @@ struct LibraryView: View {
     }
   }
 
+#if os(iOS)
+  private var libraryHeader: some View {
+    HStack(spacing: 12) {
+      Text("Library")
+        .font(.system(size: 30, weight: .bold))
+        .lineLimit(1)
+        .accessibilityAddTraits(.isHeader)
+
+      Spacer(minLength: 8)
+
+      if selectedTab != .genres || collectionLayout == .grid {
+        LibraryToolbarControls(
+          selectedTab: selectedTab,
+          collectionLayout: collectionLayout,
+          gridSelection: gridSizeBinding,
+          appSettings: appSettings
+        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .glassEffect(.regular, in: Capsule())
+      }
+    }
+    .padding(.horizontal, 20)
+    .padding(.top, 12)
+    .padding(.bottom, 10)
+  }
+#endif
+
   private var libraryTabStrip: some View {
     ScrollViewReader { proxy in
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 12) {
-          ForEach(LibraryTab.allCases, id: \.self) { tab in
+          ForEach(visibleTabs) { tab in
             Button {
               withAnimation(.snappy(duration: 0.25)) {
                 selectedTab = tab
@@ -589,6 +772,11 @@ struct LibraryView: View {
       }
     }
   }
+
+  private func selectFirstVisibleTabIfNeeded() {
+    guard !visibleTabs.contains(selectedTab), let first = visibleTabs.first else { return }
+    selectedTab = first
+  }
 }
 
 // MARK: - Albums Grid View
@@ -600,12 +788,24 @@ struct AlbumsGridView: View {
   // Key is versioned: the stored values now mean different column counts than the
   // pre-shared-layout build, so old selections shouldn't carry over.
   @AppStorage("com.ampwave.albumGridSize.v2") private var albumGridSizeRaw: String = "medium"
+  @AppStorage(LibraryArtworkShape.storageKey) private var artworkShapeRaw =
+    LibraryArtworkShape.roundedRectangle.rawValue
+  @AppStorage(LibraryCollectionLayout.storageKey) private var collectionLayoutRaw =
+    LibraryCollectionLayout.grid.rawValue
   /// Tracks the ScrollView's available width so exact column widths can be handed to
   /// AlbumCard (a GeometryReader inside LazyVGrid causes layout issues).
   @State private var gridWidth: CGFloat = 400
 
   private var gridSize: LibraryGridSize {
     LibraryGridSize(rawValue: albumGridSizeRaw) ?? .medium
+  }
+
+  private var artworkShape: LibraryArtworkShape {
+    LibraryArtworkShape(rawValue: artworkShapeRaw) ?? .roundedRectangle
+  }
+
+  private var collectionLayout: LibraryCollectionLayout {
+    LibraryCollectionLayout(rawValue: collectionLayoutRaw) ?? .grid
   }
 
   private var library: SongLibrary { SongLibrary.shared }
@@ -671,14 +871,32 @@ struct AlbumsGridView: View {
         )
         .padding(.top, 100)
       } else {
-        LazyVGrid(columns: gridSize.gridColumns, spacing: gridSize.rowSpacing) {
-          ForEach(filteredAlbums) { album in
-            AlbumCard(album: album, artworkSize: gridSize.cellWidth(in: gridWidth))
+        if collectionLayout == .grid {
+          LazyVGrid(columns: gridSize.gridColumns, spacing: gridSize.rowSpacing) {
+            ForEach(filteredAlbums) { album in
+              AlbumCard(
+                album: album,
+                artworkSize: gridSize.cellWidth(in: gridWidth),
+                artworkShape: artworkShape
+              )
+            }
           }
+          .padding(.horizontal, gridSize.horizontalPadding)
+          .padding(.top, 16)
+          .padding(.bottom, 24)
+        } else {
+          LazyVStack(spacing: 0) {
+            ForEach(Array(filteredAlbums.enumerated()), id: \.element.id) { index, album in
+              AlbumListRow(album: album, artworkShape: artworkShape)
+              if index < filteredAlbums.count - 1 {
+                Divider().padding(.leading, 78)
+              }
+            }
+          }
+          .padding(.horizontal, 20)
+          .padding(.top, 8)
+          .padding(.bottom, 24)
         }
-        .padding(.horizontal, gridSize.horizontalPadding)
-        .padding(.top, 16)
-        .padding(.bottom, 24)
       }
     }
     // Capture available width for the large full-bleed column calculation
@@ -700,6 +918,10 @@ struct ArtistsGridView: View {
   @Query private var settings: [AppSettings]
   @State private var artists: [Artist] = []
   @AppStorage("com.ampwave.artistGridSize.v2") private var artistGridSizeRaw: String = "medium"
+  @AppStorage(LibraryCollectionLayout.storageKey) private var collectionLayoutRaw =
+    LibraryCollectionLayout.grid.rawValue
+  @AppStorage(LibraryArtworkShape.storageKey) private var artworkShapeRaw =
+    LibraryArtworkShape.roundedRectangle.rawValue
   /// Same measurement trick as AlbumsGridView — cards take a fixed width, so the
   /// container width has to be measured outside the grid.
   @State private var gridWidth: CGFloat = 400
@@ -712,6 +934,14 @@ struct ArtistsGridView: View {
 
   private var gridSize: LibraryGridSize {
     LibraryGridSize(rawValue: artistGridSizeRaw) ?? .medium
+  }
+
+  private var collectionLayout: LibraryCollectionLayout {
+    LibraryCollectionLayout(rawValue: collectionLayoutRaw) ?? .grid
+  }
+
+  private var artworkShape: LibraryArtworkShape {
+    LibraryArtworkShape(rawValue: artworkShapeRaw) ?? .roundedRectangle
   }
 
   var filteredArtists: [Artist] {
@@ -756,14 +986,34 @@ struct ArtistsGridView: View {
         )
         .padding(.top, 100)
       } else {
-        LazyVGrid(columns: gridSize.gridColumns, spacing: gridSize.rowSpacing) {
-          ForEach(filteredArtists) { artist in
-            ArtistCard(artist: artist, artworkSize: gridSize.cellWidth(in: gridWidth))
+        if collectionLayout == .grid {
+          LazyVGrid(columns: gridSize.gridColumns, spacing: gridSize.rowSpacing) {
+            ForEach(filteredArtists) { artist in
+              ArtistCard(
+                artist: artist,
+                artworkSize: gridSize.cellWidth(in: gridWidth),
+                artworkShape: artworkShape
+              )
+            }
           }
+          .padding(.horizontal, gridSize.horizontalPadding)
+          .padding(.top, 16)
+          .padding(.bottom, 24)
+        } else {
+          LazyVStack(spacing: 0) {
+            ForEach(Array(filteredArtists.enumerated()), id: \.element.id) { index, artist in
+              ArtistListRow(artist: artist, artworkShape: artworkShape)
+
+              if index < filteredArtists.count - 1 {
+                Divider()
+                  .padding(.leading, 78)
+              }
+            }
+          }
+          .padding(.horizontal, 20)
+          .padding(.top, 8)
+          .padding(.bottom, 24)
         }
-        .padding(.horizontal, gridSize.horizontalPadding)
-        .padding(.top, 16)
-        .padding(.bottom, 24)
       }
     }
     .background {

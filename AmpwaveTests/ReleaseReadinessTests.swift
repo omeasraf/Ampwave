@@ -2,6 +2,251 @@ import XCTest
 import SwiftData
 @testable import Ampwave
 
+final class SpatialAudioModeTests: XCTestCase {
+  func testSpatializationEligibilityMatchesSelectedMode() {
+    XCTAssertEqual(SpatialAudioMode.off.allowedFormats, [])
+    XCTAssertEqual(SpatialAudioMode.multichannel.allowedFormats, .multichannel)
+    XCTAssertEqual(
+      SpatialAudioMode.allSupported.allowedFormats,
+      .monoStereoAndMultichannel
+    )
+  }
+
+  func testSavedModeValuesRemainStable() {
+    for mode in SpatialAudioMode.allCases {
+      XCTAssertEqual(SpatialAudioMode(rawValue: mode.rawValue), mode)
+    }
+  }
+}
+
+final class StereoEQTests: XCTestCase {
+  func testSurroundSongsBypassTheStereoAudioTap() {
+    XCTAssertTrue(PlaybackController.canUseStereoAudioTap(reportedChannels: 2))
+    XCTAssertTrue(PlaybackController.canUseStereoAudioTap(reportedChannels: nil))
+    XCTAssertFalse(PlaybackController.canUseStereoAudioTap(reportedChannels: 4))
+    XCTAssertFalse(PlaybackController.canUseStereoAudioTap(reportedChannels: 6))
+  }
+
+  func testEQBoostsStereoAudio() {
+    let target = UnsafeMutablePointer<Float>.allocate(capacity: 1)
+    let current = UnsafeMutablePointer<Float>.allocate(capacity: 1)
+    let enabled = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
+    let gains = UnsafeMutablePointer<Float>.allocate(capacity: 1)
+    target.initialize(to: 1)
+    current.initialize(to: 1)
+    enabled.initialize(to: true)
+    gains.initialize(to: 12)
+    defer {
+      target.deinitialize(count: 1); target.deallocate()
+      current.deinitialize(count: 1); current.deallocate()
+      enabled.deinitialize(count: 1); enabled.deallocate()
+      gains.deinitialize(count: 1); gains.deallocate()
+    }
+
+    let storage = VocalIsolator.TapStorage(
+      targetLevel: target,
+      currentLevel: current,
+      eqEnabled: enabled,
+      eqGains: gains,
+      bandFreqs: [1_000],
+      bandQ: 1.41,
+      bassProtectFreq: 90,
+      bassProtectQ: 0.707,
+      bassProtectAmount: 0.6,
+      instrumentActivity: nil
+    )
+    storage.prepareEQ(sampleRate: 48_000)
+
+    let frames = 4_800
+    let source = (0..<frames).map { index in
+      sin(Float(index) * 2 * .pi * 1_000 / 48_000) * 0.1
+    }
+    var left = source
+    var right = source
+    for frame in 0..<frames {
+      storage.applyEQ(left: &left[frame], right: &right[frame])
+    }
+
+    for channel in [left, right] {
+      let inputRMS = sqrt(
+        source.dropFirst(frames / 2).reduce(Float(0)) { $0 + $1 * $1 }
+          / Float(frames / 2)
+      )
+      let outputRMS = sqrt(
+        (frames / 2..<frames).reduce(Float(0)) { total, frame in
+          let sample = channel[frame]
+          return total + sample * sample
+        } / Float(frames / 2)
+      )
+      XCTAssertGreaterThan(outputRMS / inputRMS, 2.5)
+      XCTAssertLessThan(outputRMS / inputRMS, 5.0)
+    }
+  }
+}
+
+@MainActor
+final class SmartPlaylistMultichannelTests: XCTestCase {
+  private func song(_ title: String, channels: Int?) -> LibrarySong {
+    LibrarySong(
+      title: title,
+      artist: "Test Artist",
+      fileName: "\(title).m4a",
+      fileHash: UUID().uuidString,
+      size: 1,
+      channels: channels
+    )
+  }
+
+  private func rules(multichannel: Bool) -> SmartPlaylistRules {
+    SmartPlaylistRules(
+      rules: [SmartRule(
+        connector: .and,
+        field: .multichannelAudio,
+        operation: .is_,
+        value: multichannel ? "true" : "false"
+      )],
+      limitEnabled: false,
+      limitCount: 25,
+      limitBy: .random
+    )
+  }
+
+  func testMultichannelRuleMatchesOnlyKnownLayoutsAboveStereo() {
+    let songs = [
+      song("Surround", channels: 6),
+      song("Quad", channels: 4),
+      song("Stereo", channels: 2),
+      song("Mono", channels: 1),
+      song("Unknown", channels: nil),
+      song("Invalid", channels: 0),
+    ]
+
+    XCTAssertEqual(
+      SmartPlaylistEvaluator.evaluate(songs: songs, rules: rules(multichannel: true), stats: [:])
+        .map(\.title),
+      ["Surround", "Quad"]
+    )
+    XCTAssertEqual(
+      SmartPlaylistEvaluator.evaluate(songs: songs, rules: rules(multichannel: false), stats: [:])
+        .map(\.title),
+      ["Stereo", "Mono"]
+    )
+  }
+
+  func testMultichannelRuleSurvivesPlaylistSerialization() throws {
+    let original = rules(multichannel: true)
+    let decoded = try JSONDecoder().decode(
+      SmartPlaylistRules.self, from: JSONEncoder().encode(original)
+    )
+    XCTAssertEqual(decoded, original)
+    XCTAssertEqual(RuleField.multichannelAudio.validOperations, [.is_])
+  }
+}
+
+final class ArtistCreditTests: XCTestCase {
+  func testCombinedCreditResolvesToIndividualArtists() {
+    XCTAssertEqual(
+      ArtistParser.normalizedArtists(
+        ["benny blanco; Gracie Abrams"], fallback: "benny blanco; Gracie Abrams"
+      ),
+      ["benny blanco", "Gracie Abrams"]
+    )
+  }
+
+  func testMultipleSeparatorsAndDuplicateCredits() {
+    XCTAssertEqual(
+      ArtistParser.normalizedArtists(
+        ["A; B feat. C", "b"], fallback: "A; B feat. C"
+      ),
+      ["A", "B", "C"]
+    )
+  }
+
+  func testAndWithinBandNameIsNotSplit() {
+    XCTAssertEqual(
+      ArtistParser.parseArtists(from: "Florence and the Machine"),
+      ["Florence and the Machine"]
+    )
+  }
+
+  func testCommaWithinArtistNameIsNotSplit() {
+    XCTAssertEqual(
+      ArtistParser.normalizedArtists(["Tyler, The Creator"], fallback: "Unknown Artist"),
+      ["Tyler, The Creator"]
+    )
+  }
+}
+
+final class WatchCatalogSnapshotTests: XCTestCase {
+  func testMetadataOnlyCatalogRoundTripsWithPlaylistOrder() throws {
+    let first = UUID()
+    let second = UUID()
+    let snapshot = WatchCatalogSnapshot(
+      revision: 42,
+      songs: [
+        .init(id: first, title: "One", artist: "A", album: "Album", duration: 123),
+        .init(id: second, title: "Two", artist: "B", album: "Album", duration: 234),
+      ],
+      playlists: [.init(id: UUID(), name: "Mix", songIDs: [second, first])]
+    )
+    XCTAssertEqual(try JSONDecoder().decode(
+      WatchCatalogSnapshot.self, from: JSONEncoder().encode(snapshot)
+    ), snapshot)
+  }
+}
+
+final class ArtistDetailSectionTests: XCTestCase {
+  func testDefaultOrderPlacesAlbumsImmediatelyAfterAbout() {
+    XCTAssertEqual(
+      ArtistDetailSection.defaultOrder,
+      [.about, .albums, .popular, .similarArtists, .allSongs]
+    )
+  }
+
+  func testDecodePreservesSavedOrderAndRepairsInvalidValues() {
+    XCTAssertEqual(
+      ArtistDetailSection.decode("allSongs,albums,albums,unknown"),
+      [.allSongs, .albums, .about, .popular, .similarArtists]
+    )
+  }
+
+  func testOrderRoundTripsThroughPersistedRepresentation() {
+    let order: [ArtistDetailSection] = [
+      .albums, .about, .allSongs, .popular, .similarArtists,
+    ]
+    XCTAssertEqual(ArtistDetailSection.decode(ArtistDetailSection.encode(order)), order)
+  }
+}
+
+final class LibraryTabLayoutTests: XCTestCase {
+  func testSavedOrderIsRepairedWithoutLosingUserOrder() {
+    XCTAssertEqual(
+      LibraryView.LibraryTab.decodeOrder("Artists,Songs,Artists,Unknown"),
+      [.artists, .songs, .albums, .genres]
+    )
+  }
+
+  func testHiddenTabsRespectSavedOrder() {
+    XCTAssertEqual(
+      LibraryView.LibraryTab.visibleTabs(
+        orderRaw: "Genres,Artists,Songs,Albums",
+        hiddenRaw: "Artists,Albums"
+      ),
+      [.genres, .songs]
+    )
+  }
+
+  func testMalformedAllHiddenLayoutStillShowsOneTab() {
+    XCTAssertEqual(
+      LibraryView.LibraryTab.visibleTabs(
+        orderRaw: "Artists,Songs,Albums,Genres",
+        hiddenRaw: "Songs,Albums,Artists,Genres"
+      ),
+      [.artists]
+    )
+  }
+}
+
 private actor ControlledAudioActivation {
   var attempts = 0
   private var pending: [CheckedContinuation<Void, Error>] = []
@@ -129,6 +374,34 @@ final class ReleaseReadinessTests: XCTestCase {
     return payload
   }
 
+  private func cborText(_ value: String) -> Data {
+    let bytes = Data(value.utf8)
+    var encoded = Data()
+    if bytes.count <= 23 {
+      encoded.append(UInt8(0x60 + bytes.count))
+    } else {
+      encoded.append(0x78)
+      encoded.append(UInt8(bytes.count))
+    }
+    encoded.append(bytes)
+    return encoded
+  }
+
+  private func c2paGEOB(fields: [(String, String)]) -> Data {
+    var payload = Data([3])
+    payload.append(contentsOf: "application/c2pa".utf8)
+    payload.append(0)
+    payload.append(contentsOf: "c2pa".utf8)
+    payload.append(0)
+    payload.append(contentsOf: "c2pa manifest store".utf8)
+    payload.append(0)
+    for (key, value) in fields {
+      payload.append(cborText(key))
+      payload.append(cborText(value))
+    }
+    return payload
+  }
+
   func testReadsTimestampedUTF8USLTFromID3v24() throws {
     let expected = "[00:12.50] First example line\n[00:16.20] Second example line"
     var payload = Data([3])
@@ -222,6 +495,33 @@ final class ReleaseReadinessTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: url) }
 
     XCTAssertFalse(AudioMetadataExtractor.readID3AIGeneratedFlag(from: url))
+  }
+
+  func testRecognizesStandardC2PATrainedAlgorithmicMedia() throws {
+    let url = try id3File(
+      version: 4,
+      frameID: "GEOB",
+      payload: c2paGEOB(fields: [
+        (
+          "digitalSourceType",
+          "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
+        )
+      ])
+    )
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    XCTAssertTrue(AudioMetadataExtractor.readID3AIGeneratedFlag(from: url))
+  }
+
+  func testRecognizesKnownAIProviderFromStructuredID3Field() throws {
+    var payload = Data([3])
+    payload.append(contentsOf: "AI_PROVIDER".utf8)
+    payload.append(0)
+    payload.append(contentsOf: "Uncharted Labs, Inc.".utf8)
+    let url = try id3File(version: 4, frameID: "TXXX", payload: payload)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    XCTAssertTrue(AudioMetadataExtractor.readID3AIGeneratedFlag(from: url))
   }
 
   func testFilenameParserRemovesTrackNumberAndExtractsArtist() {
@@ -795,6 +1095,213 @@ final class ImportStorageTests: XCTestCase {
     XCTAssertEqual(fixture.library.songs.count, 1)
     XCTAssertEqual(fixture.library.songs.first?.storageMode, .copied)
     XCTAssertEqual(fixture.managedFiles().count, 1)
+  }
+
+  func testRemoteCatalogHidesStreamOnlySongsButKeepsDownloadsOffline() async throws {
+    let fixture = try Fixture()
+    defer { fixture.cleanUp() }
+    let previousAvailability = SongLibrary.remoteSourceIsAvailable
+    let previousResolver = SongLibrary.remoteStreamURLResolver
+    defer {
+      SongLibrary.remoteSourceIsAvailable = previousAvailability
+      SongLibrary.remoteStreamURLResolver = previousResolver
+    }
+
+    var isAvailable = true
+    SongLibrary.remoteSourceIsAvailable = { $0 == "server-1" && isAvailable }
+    SongLibrary.remoteStreamURLResolver = { song in
+      guard song.remoteSourceID == "server-1" else { return nil }
+      return URL(string: "https://example.invalid/Audio/\(song.remoteItemID ?? "missing")")
+    }
+    let track = RemoteTrackDescriptor(
+      itemID: "track-1",
+      title: "Remote Song",
+      artist: "Remote Artist",
+      artists: ["Remote Artist"],
+      album: "Remote Album",
+      albumArtist: "Remote Artist",
+      genre: "Electronic",
+      description: nil,
+      duration: 180,
+      trackNumber: 1,
+      discNumber: 1,
+      year: 2026,
+      size: 1_024,
+      container: "flac",
+      bitRate: 900,
+      sampleRate: 48_000,
+      bitDepth: 24,
+      channels: 2,
+      streamPath: "/Audio/track-1/stream?static=true",
+      downloadPath: "/Items/track-1/Download",
+      artworkPath: nil,
+      fileName: "Remote Song.flac"
+    )
+
+    try await fixture.library.replaceRemoteCatalog(
+      sourceID: "server-1", provider: .jellyfin, tracks: [track]
+    )
+    XCTAssertEqual(fixture.library.songs.count, 1)
+    XCTAssertEqual(try fixture.context.fetchCount(FetchDescriptor<LibrarySong>()), 1)
+
+    isAvailable = false
+    await fixture.library.refreshRemoteVisibility()
+    XCTAssertTrue(fixture.library.songs.isEmpty)
+    XCTAssertEqual(
+      try fixture.context.fetchCount(FetchDescriptor<LibrarySong>()), 1,
+      "Going offline hides the catalog row without deleting it"
+    )
+
+    let persisted = try XCTUnwrap(
+      fixture.context.fetch(FetchDescriptor<LibrarySong>()).first
+    )
+    let localURL = fixture.library.songsDirectory
+      .appendingPathComponent("Remote Artist/Remote Album/01 - Remote Song.flac")
+    try FileManager.default.createDirectory(
+      at: localURL.deletingLastPathComponent(), withIntermediateDirectories: true
+    )
+    try Data([0, 1, 2, 3]).write(to: localURL)
+    fixture.library.markRemoteSongDownloaded(persisted, at: localURL, size: 4)
+    await fixture.library.refreshRemoteVisibility()
+    XCTAssertEqual(fixture.library.songs.map(\.id), [persisted.id])
+
+    try await fixture.library.replaceRemoteCatalog(
+      sourceID: "server-1", provider: .jellyfin, tracks: []
+    )
+    XCTAssertFalse(persisted.isRemote)
+    XCTAssertEqual(fixture.library.songs.map(\.id), [persisted.id])
+  }
+
+  func testRemoteCombinedArtistCreditsIndexIndividualArtistsOnly() async throws {
+    let fixture = try Fixture()
+    defer { fixture.cleanUp() }
+    let previousAvailability = SongLibrary.remoteSourceIsAvailable
+    defer { SongLibrary.remoteSourceIsAvailable = previousAvailability }
+    SongLibrary.remoteSourceIsAvailable = { _ in true }
+
+    // A record from an older import should not reappear as a visible artist.
+    fixture.context.insert(Artist(name: "benny blanco; Gracie Abrams"))
+    try fixture.context.save()
+    let track = RemoteTrackDescriptor(
+      itemID: "collaboration-1",
+      title: "Unlearn",
+      artist: "benny blanco; Gracie Abrams",
+      artists: ["benny blanco; Gracie Abrams"],
+      album: "Friends Keep Secrets 2",
+      albumArtist: "benny blanco; Gracie Abrams",
+      genre: "Pop",
+      description: nil,
+      duration: 160,
+      trackNumber: 1,
+      discNumber: 1,
+      year: 2021,
+      size: 1_024,
+      container: "flac",
+      bitRate: 900,
+      sampleRate: 48_000,
+      bitDepth: 24,
+      channels: 2,
+      streamPath: "/stream/collaboration-1",
+      downloadPath: "/download/collaboration-1",
+      artworkPath: nil,
+      fileName: "Unlearn.flac"
+    )
+
+    try await fixture.library.replaceRemoteCatalog(
+      sourceID: "jellyfin-server", provider: .jellyfin, tracks: [track]
+    )
+
+    XCTAssertEqual(fixture.library.songs.first?.artist, "benny blanco; Gracie Abrams")
+    XCTAssertEqual(fixture.library.songs.first?.artists, ["benny blanco", "Gracie Abrams"])
+    let indexedArtists = await fixture.library.allArtists()
+    XCTAssertEqual(Set(indexedArtists.map(\.name)), Set(["benny blanco", "Gracie Abrams"]))
+    XCTAssertEqual(fixture.library.getSongs(byArtist: "benny blanco").count, 1)
+    XCTAssertEqual(fixture.library.getSongs(byArtist: "Gracie Abrams").count, 1)
+  }
+
+  func testLocalAndCrossServerCopiesPublishAsOnePreferredSong() async throws {
+    let fixture = try Fixture()
+    defer { fixture.cleanUp() }
+    let previousAvailability = SongLibrary.remoteSourceIsAvailable
+    defer { SongLibrary.remoteSourceIsAvailable = previousAvailability }
+    SongLibrary.remoteSourceIsAvailable = { _ in true }
+
+    func descriptor(itemID: String) -> RemoteTrackDescriptor {
+      RemoteTrackDescriptor(
+        itemID: itemID,
+        title: "Best",
+        artist: "Gracie Abrams",
+        artists: ["Gracie Abrams"],
+        album: "The Secret of Us",
+        albumArtist: "Gracie Abrams",
+        genre: "Pop",
+        description: nil,
+        duration: 173,
+        trackNumber: 8,
+        discNumber: 1,
+        year: 2024,
+        size: 4_000,
+        container: "flac",
+        bitRate: 900,
+        sampleRate: 48_000,
+        bitDepth: 24,
+        channels: 2,
+        streamPath: "/stream/\(itemID)",
+        downloadPath: "/download/\(itemID)",
+        artworkPath: nil,
+        fileName: "Best.flac"
+      )
+    }
+
+    try await fixture.library.replaceRemoteCatalog(
+      sourceID: "jellyfin-server",
+      provider: .jellyfin,
+      tracks: [descriptor(itemID: "jellyfin-best")]
+    )
+    try await fixture.library.replaceRemoteCatalog(
+      sourceID: "plex-server",
+      provider: .plex,
+      tracks: [descriptor(itemID: "plex-best")]
+    )
+
+    XCTAssertEqual(fixture.library.songs.count, 1)
+    let remoteCopies = try fixture.context.fetch(FetchDescriptor<LibrarySong>())
+    XCTAssertEqual(remoteCopies.count, 2, "Alternates remain persisted for source failover")
+
+    let local = LibrarySong(
+      title: "Best",
+      artist: "Gracie Abrams",
+      fileName: "Best.flac",
+      fileHash: "local-best",
+      size: 4_000,
+      duration: 173,
+      album: "The Secret of Us",
+      albumArtist: "Gracie Abrams",
+      trackNumber: 8,
+      discNumber: 1,
+      year: 2024,
+      format: "flac"
+    )
+    fixture.context.insert(local)
+    try fixture.context.save()
+    await fixture.library.loadSongs(force: true, performMaintenance: false)
+
+    XCTAssertEqual(fixture.library.songs.map(\.id), [local.id])
+    XCTAssertEqual(
+      fixture.library.visibleSongs(from: remoteCopies).map(\.id),
+      [local.id],
+      "Relationships to a hidden server copy resolve to the preferred local song"
+    )
+    XCTAssertEqual(try fixture.context.fetchCount(FetchDescriptor<LibrarySong>()), 3)
+  }
+
+  func testDocumentsSongPathsRoundTripWithoutPersistingContainerUUID() {
+    let url = PathManager.documentsDirectory
+      .appendingPathComponent("Songs/Artist/Album/Track.flac")
+    let stored = PathManager.relativePath(from: url.path)
+
+    XCTAssertTrue(stored.hasPrefix("documents://"))
+    XCTAssertEqual(PathManager.absoluteURL(for: stored)?.standardizedFileURL, url.standardizedFileURL)
   }
 
   func testResetDrainsAnImportAndRejectsNewWorkUntilFinished() async throws {

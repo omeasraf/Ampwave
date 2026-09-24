@@ -86,6 +86,14 @@ enum LibraryBackupService {
       if let id3v2Tags = backupSong.id3v2Tags {
         match.id3v2Tags = id3v2Tags
       }
+      match.remoteProviderRaw = backupSong.remoteProviderRaw
+      match.remoteSourceID = backupSong.remoteSourceID
+      match.remoteItemID = backupSong.remoteItemID
+      match.remoteStreamPath = backupSong.remoteStreamPath
+      match.remoteDownloadPath = backupSong.remoteDownloadPath
+      match.remoteContainer = backupSong.remoteContainer
+      match.remoteIsDownloaded = backupSong.remoteIsDownloaded ?? false
+      match.remoteDownloadRequested = backupSong.remoteDownloadRequested ?? false
       if let lyrics = backupSong.lyrics {
         LyricsService.shared.saveLyrics(for: match, content: lyrics)
       }
@@ -330,6 +338,14 @@ private struct BackupSong: Codable {
   let metadataSourceAlbum: String?
   let isAIGenerated: Bool?
   let id3v2Tags: [ID3v2Tag]?
+  let remoteProviderRaw: String?
+  let remoteSourceID: String?
+  let remoteItemID: String?
+  let remoteStreamPath: String?
+  let remoteDownloadPath: String?
+  let remoteContainer: String?
+  let remoteIsDownloaded: Bool?
+  let remoteDownloadRequested: Bool?
 
   init(_ song: LibrarySong) {
     id = song.id
@@ -367,6 +383,14 @@ private struct BackupSong: Codable {
     metadataSourceAlbum = song.metadataSourceAlbum
     isAIGenerated = song.isAIGenerated
     id3v2Tags = song.id3v2Tags
+    remoteProviderRaw = song.remoteProviderRaw
+    remoteSourceID = song.remoteSourceID
+    remoteItemID = song.remoteItemID
+    remoteStreamPath = song.remoteStreamPath
+    remoteDownloadPath = song.remoteDownloadPath
+    remoteContainer = song.remoteContainer
+    remoteIsDownloaded = song.remoteIsDownloaded
+    remoteDownloadRequested = song.remoteDownloadRequested
   }
 }
 

@@ -172,7 +172,7 @@ enum WebDAVSettingsStore {
 final class WebDAVClient {
   static let supportedAudioExtensions: Set<String> = [
     "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "aiff",
-    "aif", "wma", "alac", "m4b",
+    "aif", "wma", "alac", "m4b", "ac3", "eac3", "caf",
   ]
 
   private let configuration: WebDAVConfiguration

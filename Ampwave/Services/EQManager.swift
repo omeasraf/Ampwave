@@ -63,6 +63,9 @@ final class EQManager {
         didSet {
             VocalIsolator.shared.setEQEnabled(isEnabled)
             persist()
+            if !isLoading && isEnabled != oldValue {
+                PlaybackController.shared.refreshAudioEnhancementsFromSettings()
+            }
         }
     }
 
@@ -89,9 +92,7 @@ final class EQManager {
     func applyPreset(_ preset: EQPreset) {
         currentPresetName = preset.name
         bands = preset.gains
-        for (i, gain) in preset.gains.enumerated() {
-            VocalIsolator.shared.setEQGain(gain, atBand: i)
-        }
+        isEnabled = true
         persist()
     }
 

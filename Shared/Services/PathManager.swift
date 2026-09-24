@@ -8,9 +8,16 @@
 import Foundation
 
 public enum PathManager {
+  nonisolated private static let documentsPathPrefix = "documents://"
+
   /// Audio references must not use the legacy artwork/managed-file repair
   /// heuristics in `resolve`. An absent external path stays external.
   nonisolated static func referencedURL(for path: String) -> URL {
+    if path.hasPrefix(documentsPathPrefix) {
+      return documentsDirectory.appendingPathComponent(
+        String(path.dropFirst(documentsPathPrefix.count))
+      ).standardizedFileURL
+    }
     if path.hasPrefix("/") {
       return URL(fileURLWithPath: path).standardizedFileURL
     }
@@ -64,9 +71,13 @@ public enum PathManager {
   /// Converts an absolute path to a relative path starting from the base directory.
   nonisolated static func relativePath(from absolutePath: String) -> String {
     let basePath = baseDirectory.path
+    let documentsPath = documentsDirectory.path
 
     if absolutePath.hasPrefix(basePath + "/") {
       return String(absolutePath.dropFirst(basePath.count + 1))
+    }
+    if absolutePath.hasPrefix(documentsPath + "/") {
+      return documentsPathPrefix + String(absolutePath.dropFirst(documentsPath.count + 1))
     }
     return absolutePath
   }
@@ -74,6 +85,12 @@ public enum PathManager {
   /// Converts a relative path back to an absolute URL in the current base directory.
   nonisolated static func absoluteURL(for relativePath: String?) -> URL? {
     guard let relativePath = relativePath, !relativePath.isEmpty else { return nil }
+
+    if relativePath.hasPrefix(documentsPathPrefix) {
+      return documentsDirectory.appendingPathComponent(
+        String(relativePath.dropFirst(documentsPathPrefix.count))
+      ).standardizedFileURL
+    }
 
     // If it's already an absolute path that exists, return it (for transition)
     if relativePath.hasPrefix("/") && FileManager.default.fileExists(atPath: relativePath) {
@@ -86,6 +103,12 @@ public enum PathManager {
   /// Resolves a path that might be absolute (stale) or relative to the current environment.
   nonisolated static func resolve(_ path: String?) -> URL? {
     guard let path = path, !path.isEmpty else { return nil }
+
+    if path.hasPrefix(documentsPathPrefix) {
+      return documentsDirectory.appendingPathComponent(
+        String(path.dropFirst(documentsPathPrefix.count))
+      ).standardizedFileURL
+    }
 
     // 1. Try as relative path against baseDirectory
     let relativeURL = baseDirectory.appendingPathComponent(path)

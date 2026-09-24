@@ -9,6 +9,45 @@ import CryptoKit
 import Foundation
 import SwiftData
 
+enum RemoteMusicProvider: String, Codable, CaseIterable, Sendable {
+  case jellyfin
+  case plex
+
+  var displayName: String {
+    switch self {
+    case .jellyfin: return "Jellyfin"
+    case .plex: return "Plex"
+    }
+  }
+}
+
+/// Provider-neutral catalog entry used to merge a remote music server into
+/// the local SwiftData library without making shared code depend on either API.
+struct RemoteTrackDescriptor: Sendable {
+  let itemID: String
+  let title: String
+  let artist: String
+  let artists: [String]
+  let album: String?
+  let albumArtist: String?
+  let genre: String?
+  let description: String?
+  let duration: TimeInterval
+  let trackNumber: Int?
+  let discNumber: Int?
+  let year: Int?
+  let size: Int
+  let container: String?
+  let bitRate: Int?
+  let sampleRate: Double?
+  let bitDepth: Int?
+  let channels: Int?
+  let streamPath: String
+  let downloadPath: String
+  let artworkPath: String?
+  let fileName: String
+}
+
 @Model
 final class LibrarySong: Identifiable, Hashable {
   enum StorageMode: String, Codable {
@@ -33,6 +72,30 @@ final class LibrarySong: Identifiable, Hashable {
   var size: Int
   var storageModeRaw: String = "copied"
   var bookmarkData: Data?
+
+  // MARK: - Remote library provenance
+  /// Provider-backed songs keep their catalog row in SwiftData but do not
+  /// store credentials or a complete authenticated URL here.
+  var remoteProviderRaw: String?
+  var remoteSourceID: String?
+  var remoteItemID: String?
+  var remoteStreamPath: String?
+  var remoteDownloadPath: String?
+  var remoteContainer: String?
+  /// True once Ampwave has a managed local copy under Songs/Artist/Album.
+  var remoteIsDownloaded: Bool = false
+  /// Persistent download intent. Playlist additions set this even while the
+  /// source is offline so the download can resume after reconnection.
+  var remoteDownloadRequested: Bool = false
+
+  var remoteProvider: RemoteMusicProvider? {
+    get { remoteProviderRaw.flatMap(RemoteMusicProvider.init(rawValue:)) }
+    set { remoteProviderRaw = newValue?.rawValue }
+  }
+
+  var isRemote: Bool {
+    remoteProvider != nil && remoteSourceID != nil && remoteItemID != nil
+  }
 
   var storageMode: StorageMode {
     get { StorageMode(rawValue: storageModeRaw) ?? .copied }
@@ -85,7 +148,7 @@ final class LibrarySong: Identifiable, Hashable {
   var isLive: Bool = false
   var isMedley: Bool = false
   var isExplicit: Bool = false
-  /// True only when embedded provenance identifies the provider as Suno, Inc.
+  /// True when structured metadata identifies AI-generated or AI-assisted media.
   var isAIGenerated: Bool = false
   /// Compact JSON snapshot of all ID3v2.4 frames. Binary frame payloads are
   /// summarized rather than duplicated here.
@@ -199,7 +262,15 @@ final class LibrarySong: Identifiable, Hashable {
     isExplicit: Bool = false,
     isAIGenerated: Bool = false,
     id3v2Tags: [ID3v2Tag] = [],
-    replayGainDB: Double? = nil
+    replayGainDB: Double? = nil,
+    remoteProvider: RemoteMusicProvider? = nil,
+    remoteSourceID: String? = nil,
+    remoteItemID: String? = nil,
+    remoteStreamPath: String? = nil,
+    remoteDownloadPath: String? = nil,
+    remoteContainer: String? = nil,
+    remoteIsDownloaded: Bool = false,
+    remoteDownloadRequested: Bool = false
   ) {
     self.id = UUID()
     self.title = title
@@ -256,6 +327,14 @@ final class LibrarySong: Identifiable, Hashable {
     self.isAIGenerated = isAIGenerated
     self.id3v2TagsData = id3v2Tags.isEmpty ? nil : try? JSONEncoder().encode(id3v2Tags)
     self.replayGainDB = replayGainDB
+    self.remoteProviderRaw = remoteProvider?.rawValue
+    self.remoteSourceID = remoteSourceID
+    self.remoteItemID = remoteItemID
+    self.remoteStreamPath = remoteStreamPath
+    self.remoteDownloadPath = remoteDownloadPath
+    self.remoteContainer = remoteContainer
+    self.remoteIsDownloaded = remoteIsDownloaded
+    self.remoteDownloadRequested = remoteDownloadRequested
   }
 
   static func == (lhs: LibrarySong, rhs: LibrarySong) -> Bool {

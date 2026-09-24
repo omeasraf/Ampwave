@@ -38,7 +38,10 @@ final class Playlist: Identifiable, Hashable {
   var songOrder: [UUID] = []
 
   var orderedSongs: [LibrarySong] {
-    let songMap = Dictionary(uniqueKeysWithValues: songs.map { ($0.id, $0) })
+    let songMap = Dictionary(
+      songs.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
 
     // First, get songs in the saved order
     var ordered = songOrder.compactMap { songMap[$0] }
@@ -265,7 +268,10 @@ final class RadioStation: Identifiable, Hashable {
   }
 
   var orderedSongs: [LibrarySong] {
-    let songMap = Dictionary(uniqueKeysWithValues: songs.map { ($0.id, $0) })
+    let songMap = Dictionary(
+      songs.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
     return songOrder.compactMap { songMap[$0] }
   }
 

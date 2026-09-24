@@ -8,6 +8,7 @@ internal import SwiftUI
 struct WatchPlaylistView: View {
   let playlist: Playlist
   @State private var showPlayer = false
+  @State private var showPhoneUnavailable = false
 
   var body: some View {
     List {
@@ -33,8 +34,11 @@ struct WatchPlaylistView: View {
       Section {
         ForEach(playlist.orderedSongs) { song in
           Button(action: {
-            WatchPlaybackManager.shared.play(song)
-            showPlayer = true
+            if WatchPlaybackManager.shared.play(song) {
+              showPlayer = true
+            } else {
+              showPhoneUnavailable = true
+            }
           }) {
             VStack(alignment: .leading) {
               Text(song.title)
@@ -60,6 +64,11 @@ struct WatchPlaylistView: View {
     }
     .navigationDestination(isPresented: $showPlayer) {
       WatchNowPlayingView()
+    }
+    .alert("iPhone Unavailable", isPresented: $showPhoneUnavailable) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text("You can browse this playlist here, but playing a song requires your paired iPhone to be reachable.")
     }
   }
 }

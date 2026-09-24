@@ -8,54 +8,44 @@
 import Foundation
 
 enum ArtistParser {
-  /// Common delimiters for separating multiple artists
-  private static let delimiters = [
-    ", ",  // Common comma separator
-    "; ",  // Semicolon separator
-    " & ",  // Ampersand with spaces
-    "&",  // Ampersand without spaces
-    " feat. ",  // Featuring
-    " Feat. ",
-    " ft. ",  // Ft.
-    " Ft. ",
-    " featuring ",  // Full word
-    " Featuring ",
-  ]
+  // Semicolons are the most reliable separator used by tag editors. Treat
+  // spaced ampersands and feature markers as separators too, but do not
+  // split on commas or "and": both occur inside real artist names.
+  nonisolated private static let separator = try! NSRegularExpression(
+    pattern: #"\s*;\s*|\s+&\s+|\s+(?:feat\.?|ft\.?|featuring)\s+"#,
+    options: [.caseInsensitive]
+  )
 
   /// Parse artist string and split into individual artists
   /// - Parameter artistString: The raw artist string (e.g., "Gracie Abrams; Taylor Swift")
   /// - Returns: Array of trimmed artist names
-  static func parseArtists(from artistString: String) -> [String] {
-    guard !artistString.isEmpty else { return [] }
+  nonisolated static func parseArtists(from artistString: String) -> [String] {
+    let range = NSRange(artistString.startIndex..<artistString.endIndex, in: artistString)
+    let separated = separator.stringByReplacingMatches(
+      in: artistString, range: range, withTemplate: "\u{001F}"
+    )
+    return separated.split(separator: "\u{001F}")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+  }
 
-    let remaining = artistString
-    var artists: [String] = []
-
-    // Try to split by each delimiter in order of preference
-    for delimiter in delimiters {
-      if remaining.contains(delimiter) {
-        artists =
-          remaining
-          .split(separator: delimiter, omittingEmptySubsequences: true)
-          .map { $0.trimmingCharacters(in: .whitespaces) }
-          .filter { !$0.isEmpty }
-
-        // If we found a split, stop here
-        if artists.count > 1 {
-          return artists
-        }
-      }
+  /// Some older imports stored a combined credit as a *single item* in the
+  /// artists array. Flatten and deduplicate it without changing the displayed
+  /// credit string on the song.
+  nonisolated static func normalizedArtists(_ credited: [String], fallback: String) -> [String] {
+    let raw = credited.isEmpty ? [fallback] : credited
+    var seen = Set<String>()
+    let result = raw.flatMap(parseArtists).filter {
+      seen.insert($0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current))
+        .inserted
     }
-
-    // No delimiter found, return single artist
-    let trimmed = artistString.trimmingCharacters(in: .whitespaces)
-    return trimmed.isEmpty ? [] : [trimmed]
+    return result.isEmpty ? parseArtists(from: fallback) : result
   }
 
   /// Join multiple artists into a display string
   /// - Parameter artists: Array of artist names
   /// - Returns: Formatted string for display
-  static func formatArtists(_ artists: [String]) -> String {
+  nonisolated static func formatArtists(_ artists: [String]) -> String {
     guard !artists.isEmpty else { return "Unknown Artist" }
 
     switch artists.count {

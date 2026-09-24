@@ -113,6 +113,9 @@ enum SmartPlaylistEvaluator {
     case .lastPlayed: return matchDate(stats?.lastPlayedAt,   op: rule.operation, value: rule.value)
     case .dateAdded:  return matchDate(song.importedDate,     op: rule.operation, value: rule.value)
     case .liked:      return matchBool(stats?.isLiked ?? false, op: rule.operation, value: rule.value)
+    case .multichannelAudio:
+      guard let channels = song.channels, channels > 0 else { return false }
+      return matchBool(channels > 2, op: rule.operation, value: rule.value)
     }
   }
 

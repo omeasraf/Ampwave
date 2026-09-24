@@ -1,66 +1,15 @@
-//
-//  WatchSyncService.swift
-//  Ampwave
-//
-//  Service for managing sync status between iOS app and Apple Watch.
-//
+// Keeps a metadata-only copy of the visible iPhone library on Apple Watch.
+// Playback remains on the iPhone; audio files are never transferred.
 
 import Foundation
 import SwiftData
 
 #if os(iOS)
-  import WatchConnectivity
   import OSLog
+  import WatchConnectivity
 #endif
 
-/// Navigation renders these values without observing or faulting SwiftData
-/// models. A fresh context stays entirely on the concurrent executor.
-nonisolated struct WatchSyncSettingsSnapshot: Sendable {
-  struct SongRow: Identifiable, Sendable {
-    let id: UUID
-    let title: String
-    let artist: String
-  }
-
-  struct PlaylistRow: Identifiable, Sendable {
-    let id: UUID
-    let name: String
-    let songCount: Int
-  }
-
-  let songs: [SongRow]
-  let playlists: [PlaylistRow]
-
-  // Required with MainActor defaults and NonisolatedNonsendingByDefault:
-  // a plain async method can inherit the UI actor.
-  @concurrent
-  static func load(in container: ModelContainer) async throws -> Self {
-    try Task.checkCancellation()
-    let context = ModelContext(container)
-    context.autosaveEnabled = false
-    let songDescriptor = FetchDescriptor<LibrarySong>(
-      predicate: #Predicate { $0.shouldSyncToWatch == true },
-      sortBy: [SortDescriptor(\LibrarySong.title)]
-    )
-    let playlistDescriptor = FetchDescriptor<Playlist>(
-      predicate: #Predicate { $0.shouldSyncToWatch == true },
-      sortBy: [SortDescriptor(\Playlist.name)]
-    )
-    let songs = try context.fetch(songDescriptor).map { song in
-      try Task.checkCancellation()
-      return SongRow(id: song.id, title: song.title, artist: song.artist)
-    }
-    let playlists = try context.fetch(playlistDescriptor).map { playlist in
-      try Task.checkCancellation()
-      // Counting membership needs no sorting, UUID map, or per-song getters.
-      return PlaylistRow(id: playlist.id, name: playlist.name, songCount: playlist.songs.count)
-    }
-    return Self(songs: songs, playlists: playlists)
-  }
-}
-
-/// Invalidate pending queue work immediately, even if WatchConnectivity is
-/// blocked. A token from before a reset must stay invalid after the reset ends.
+/// A reset invalidates queued work before it can reach WatchConnectivity.
 nonisolated final class WatchSyncResetGate: @unchecked Sendable {
   private let lock = NSLock()
   private var generation: UInt64 = 0
@@ -82,24 +31,24 @@ nonisolated final class WatchSyncResetGate: @unchecked Sendable {
   }
 }
 
-/// Service for managing sync status of songs and playlists to Apple Watch
 @MainActor
 final class WatchSyncService: NSObject {
-  // MARK: - Singleton
-
   static let shared = WatchSyncService()
 
-  // MARK: - Properties
-
-  private var modelContext: ModelContext?
   private var isLibraryResetting = false
+  private var songsReady = false
+  private var playlistsReady = false
+  private var pendingForce = true
+  private var catalogTask: Task<Void, Never>?
+  private var lastSentCatalog: WatchCatalogSnapshot?
+  private var saveObserver: NSObjectProtocol?
+  private var libraryObserver: NSObjectProtocol?
+
   #if os(iOS)
     private lazy var transport = WatchSyncTransport { [weak self] in
-      self?.syncEverything()
+      self?.scheduleCatalogRefresh(force: true)
     }
   #endif
-
-  // MARK: - Initialization
 
   private override init() {
     super.init()
@@ -108,15 +57,38 @@ final class WatchSyncService: NSObject {
     #endif
   }
 
-  // MARK: - Setup
-
-  /// Sets the model context for database operations
   func setModelContext(_ context: ModelContext) {
-    self.modelContext = context
+    guard saveObserver == nil else { return }
+    // Metadata updates and playlist edits can be saved by several contexts.
+    // Debounce before reading the published, deduplicated library.
+    saveObserver = NotificationCenter.default.addObserver(
+      forName: ModelContext.didSave, object: nil, queue: nil
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in self?.scheduleCatalogRefresh() }
+    }
+    libraryObserver = NotificationCenter.default.addObserver(
+      forName: .songLibraryDidChange, object: SongLibrary.shared, queue: nil
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in self?.scheduleCatalogRefresh() }
+    }
+  }
+
+  func songLibraryDidLoad() {
+    songsReady = true
+    scheduleCatalogRefresh()
+  }
+
+  func playlistLibraryDidLoad() {
+    playlistsReady = true
+    scheduleCatalogRefresh()
   }
 
   func prepareForLibraryReset() {
     isLibraryResetting = true
+    songsReady = false
+    playlistsReady = false
+    catalogTask?.cancel()
+    catalogTask = nil
     #if os(iOS)
       transport.setLibraryResetting(true)
     #endif
@@ -124,233 +96,98 @@ final class WatchSyncService: NSObject {
 
   func libraryResetDidFinish() {
     isLibraryResetting = false
+    songsReady = true
+    playlistsReady = true
+    lastSentCatalog = nil
     #if os(iOS)
       transport.setLibraryResetting(false)
     #endif
+    scheduleCatalogRefresh(force: true)
   }
-
-  // MARK: - Update Sync Status
-
-  /// Resolve the current model only when the user acts, so a displayed row can
-  /// safely outlive deletion/reset. Save in the caller's context before sending
-  /// the removal, and let the UI display save errors.
-  func removeSongFromSync(id: UUID, in context: ModelContext) throws {
-    guard !isLibraryResetting else { return }
-    var descriptor = FetchDescriptor<LibrarySong>(predicate: #Predicate { $0.id == id })
-    descriptor.fetchLimit = 1
-    guard let song = try context.fetch(descriptor).first else { return }
-    song.shouldSyncToWatch = false
-    try context.save()
-    #if os(iOS)
-      removeSongFromWatch(song)
-    #endif
-  }
-
-  func removePlaylistFromSync(id: UUID, in context: ModelContext) throws {
-    guard !isLibraryResetting else { return }
-    var descriptor = FetchDescriptor<Playlist>(predicate: #Predicate { $0.id == id })
-    descriptor.fetchLimit = 1
-    guard let playlist = try context.fetch(descriptor).first else { return }
-    playlist.shouldSyncToWatch = false
-    try context.save()
-    #if os(iOS)
-      removePlaylistFromWatch(playlist)
-    #endif
-  }
-
-  /// Updates the sync status for a song
-  func updateSyncStatus(for song: LibrarySong, shouldSync: Bool) {
-    guard !isLibraryResetting else { return }
-    song.shouldSyncToWatch = shouldSync
-    saveChanges()
-
-    #if os(iOS)
-      if shouldSync {
-        sendSongToWatch(song)
-      } else {
-        removeSongFromWatch(song)
-      }
-    #endif
-  }
-
-  /// Updates the sync status for a playlist
-  func updateSyncStatus(for playlist: Playlist, shouldSync: Bool) {
-    guard !isLibraryResetting else { return }
-    playlist.shouldSyncToWatch = shouldSync
-    saveChanges()
-
-    #if os(iOS)
-      if shouldSync {
-        sendPlaylistToWatch(playlist)
-        // Also sync all songs in the playlist
-        for song in playlist.orderedSongs {
-          if !song.shouldSyncToWatch {
-            updateSyncStatus(for: song, shouldSync: true)
-          }
-        }
-      } else {
-        removePlaylistFromWatch(playlist)
-      }
-    #endif
-  }
-
-  /// Toggles the sync status for a song
-  func toggleSyncStatus(for song: LibrarySong) {
-    updateSyncStatus(for: song, shouldSync: !song.shouldSyncToWatch)
-  }
-
-  /// Toggles the sync status for a playlist
-  func toggleSyncStatus(for playlist: Playlist) {
-    updateSyncStatus(for: playlist, shouldSync: !playlist.shouldSyncToWatch)
-  }
-
-  // MARK: - Playback Sync
 
   func updatePlaybackStatus(
     song: LibrarySong?, isPlaying: Bool, currentTime: TimeInterval, duration: TimeInterval
   ) {
     #if os(iOS)
       guard !isLibraryResetting else { return }
-      // Only copy model values here. Even WCSession's state getters can wait
-      // for its daemon, so all session access belongs to the transport queue.
-      transport.send(
-        .playback(
-          songID: song?.id.uuidString, title: song?.title, artist: song?.artist,
-          isPlaying: isPlaying, currentTime: currentTime, duration: duration
-        ))
+      transport.sendPlayback(
+        songID: song?.id.uuidString, title: song?.title, artist: song?.artist,
+        isPlaying: isPlaying, currentTime: currentTime, duration: duration
+      )
     #endif
   }
 
-  // MARK: - Private Helpers
-
-  private func saveChanges() {
-    guard let context = modelContext else { return }
-
-    do {
-      try context.save()
-    } catch {
-      print("Failed to save sync status: \(error)")
+  private func scheduleCatalogRefresh(force: Bool = false) {
+    if force { pendingForce = true }
+    guard songsReady, playlistsReady, !isLibraryResetting else { return }
+    // A fixed coalescing window avoids starving the Watch while a large
+    // metadata import keeps saving every few seconds.
+    guard catalogTask == nil else { return }
+    catalogTask = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(force ? 1 : 3))
+      guard !Task.isCancelled else { return }
+      self?.sendCatalogIfNeeded()
+      self?.catalogTask = nil
     }
   }
 
-  #if os(iOS)
-    private func sendSongToWatch(_ song: LibrarySong) {
-      // Materialize every SwiftData value before handing the payload to
-      // WatchConnectivity. Optional.none is not a property-list value and was
-      // previously passed as Any for lyrics/album, which can terminate the app.
-      let songID = song.id.uuidString
-      let artworkPath = song.effectiveArtworkPath
-
-      transport.send(
-        .song(
-          id: songID, title: song.title, artist: song.artist, album: song.album ?? "",
-          duration: song.duration, lyrics: song.lyrics ?? "",
-          fileExtension: URL(fileURLWithPath: song.fileName).pathExtension
-        ), artworkPath: artworkPath)
-    }
-
-    private func removeSongFromWatch(_ song: LibrarySong) {
-      transport.send(.removeSong(id: song.id.uuidString))
-    }
-
-    private func sendPlaylistToWatch(_ playlist: Playlist) {
-      transport.send(
-        .playlist(
-          id: playlist.id.uuidString, name: playlist.name,
-          songIDs: playlist.orderedSongs.map { $0.id.uuidString }
-        ))
-    }
-
-    private func removePlaylistFromWatch(_ playlist: Playlist) {
-      transport.send(.removePlaylist(id: playlist.id.uuidString))
-    }
-
-    private func syncEverything() {
-      guard !isLibraryResetting else { return }
-      guard let songs = getSongsToSync(), let playlists = getPlaylistsToSync() else { return }
-
-      for playlist in playlists {
-        sendPlaylistToWatch(playlist)
+  private func sendCatalogIfNeeded() {
+    #if os(iOS)
+      guard !isLibraryResetting, songsReady, playlistsReady else { return }
+      let library = SongLibrary.shared
+      let songs = library.songs.filter { library.isVisibleInLibrary($0) }.sorted {
+        let order = $0.title.localizedCaseInsensitiveCompare($1.title)
+        return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
       }
-
-      for song in songs {
-        sendSongToWatch(song)
+      let visibleIDs = Set(songs.map(\.id))
+      let rows = songs.map {
+        WatchCatalogSnapshot.Song(
+          id: $0.id, title: $0.title, artist: $0.artist,
+          album: $0.album ?? "", duration: $0.duration
+        )
       }
-    }
-
-    private func getSongsToSync() -> [LibrarySong]? {
-      guard let context = modelContext else { return nil }
-      let descriptor = FetchDescriptor<LibrarySong>(
-        predicate: #Predicate { $0.shouldSyncToWatch == true })
-      return try? context.fetch(descriptor)
-    }
-
-    private func getPlaylistsToSync() -> [Playlist]? {
-      guard let context = modelContext else { return nil }
-      let descriptor = FetchDescriptor<Playlist>(
-        predicate: #Predicate { $0.shouldSyncToWatch == true })
-      return try? context.fetch(descriptor)
-    }
-
-  #endif
+      let playlists = PlaylistManager.shared.playlists.sorted {
+        let order = $0.name.localizedCaseInsensitiveCompare($1.name)
+        return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
+      }.map { playlist in
+        WatchCatalogSnapshot.Playlist(
+          id: playlist.id,
+          name: playlist.name,
+          songIDs: library.visibleSongs(from: playlist.orderedSongs).map(\.id)
+            .filter { visibleIDs.contains($0) }
+        )
+      }
+      let comparison = WatchCatalogSnapshot(revision: 0, songs: rows, playlists: playlists)
+      guard pendingForce || comparison != lastSentCatalog else { return }
+      let snapshot = WatchCatalogSnapshot(
+        revision: Date().timeIntervalSince1970, songs: rows, playlists: playlists
+      )
+      do {
+        let data = try JSONEncoder().encode(snapshot)
+        transport.sendCatalog(data, revision: snapshot.revision)
+        lastSentCatalog = comparison
+        pendingForce = false
+      } catch {
+        pendingForce = true
+      }
+    #endif
+  }
 }
 
 #if os(iOS)
-  /// Value-only messages keep SwiftData models and non-Sendable dictionaries
-  /// from crossing executors. Dictionaries are built on the transport queue.
-  nonisolated private enum WatchSyncMessage: Sendable {
-    case song(
-      id: String, title: String, artist: String, album: String,
-      duration: Double, lyrics: String, fileExtension: String)
-    case playlist(id: String, name: String, songIDs: [String])
-    case removeSong(id: String)
-    case removePlaylist(id: String)
-    case playback(
-      songID: String?, title: String?, artist: String?,
-      isPlaying: Bool, currentTime: Double, duration: Double)
-
-    var userInfo: [String: Any] {
-      switch self {
-      case .song(
-        let id, let title, let artist, let album, let duration, let lyrics, let fileExtension):
-        return [
-          "type": "song_metadata", "id": id, "title": title, "artist": artist,
-          "album": album, "duration": duration, "lyrics": lyrics, "extension": fileExtension,
-        ]
-      case .playlist(let id, let name, let songIDs):
-        return ["type": "playlist_metadata", "id": id, "name": name, "songIds": songIDs]
-      case .removeSong(let id):
-        return ["type": "remove_song", "id": id]
-      case .removePlaylist(let id):
-        return ["type": "remove_playlist", "id": id]
-      case .playback(
-        let songID, let title, let artist, let isPlaying, let currentTime, let duration):
-        var info: [String: Any] = [
-          "type": "playback_status", "isPlaying": isPlaying,
-          "currentTime": currentTime, "duration": duration,
-        ]
-        if let songID { info["songId"] = songID }
-        if let title { info["title"] = title }
-        if let artist { info["artist"] = artist }
-        return info
-      }
-    }
-  }
-
-  /// WCSession is confined to `queue`; the reset gate has its own short lock.
-  /// Delegates arrive on WCSession's queue and must enqueue work, never wait
-  /// synchronously for either this queue or the main actor.
+  /// WCSession belongs to one utility queue so its potentially blocking state
+  /// getters never interrupt scrolling or the initial launch animation.
   nonisolated private final class WatchSyncTransport: NSObject, WCSessionDelegate,
     @unchecked Sendable
   {
     private let queue = DispatchQueue(label: "com.ampwave.watch-sync", qos: .utility)
-    private let didActivate: @MainActor @Sendable () -> Void
+    private let didNeedCatalog: @MainActor @Sendable () -> Void
     private let logger = Logger(subsystem: "com.ome.Ampwave", category: "watch-sync")
-    private var session: WCSession?
     private let resetGate = WatchSyncResetGate()
+    private var session: WCSession?
 
-    init(didActivate: @escaping @MainActor @Sendable () -> Void) {
-      self.didActivate = didActivate
+    init(didNeedCatalog: @escaping @MainActor @Sendable () -> Void) {
+      self.didNeedCatalog = didNeedCatalog
       super.init()
     }
 
@@ -368,47 +205,51 @@ final class WatchSyncService: NSObject {
       resetGate.setResetting(resetting)
     }
 
-    func send(_ message: WatchSyncMessage, artworkPath: String? = nil) {
+    func sendCatalog(_ data: Data, revision: TimeInterval) {
       guard let token = resetGate.token else { return }
       queue.async { [self] in
-        guard resetGate.isCurrent(token), let session = availableSession,
-          resetGate.isCurrent(token)
-        else { return }
-        let payload = message.userInfo
-        if case .playback = message {
-          // Position is replaceable state, not a growing queue of events.
-          do {
-            try session.updateApplicationContext(payload)
-          } catch {
-            logger.error("Playback context update failed: \(error.localizedDescription)")
+        guard resetGate.isCurrent(token), let session = availableSession else { return }
+        let url = FileManager.default.temporaryDirectory
+          .appendingPathComponent("watch-catalog-\(UUID().uuidString).json")
+        do {
+          try data.write(to: url, options: .atomic)
+          guard resetGate.isCurrent(token) else {
+            try? FileManager.default.removeItem(at: url)
+            return
           }
-          if session.isReachable, resetGate.isCurrent(token) {
-            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
-          }
-          return
-        }
-
-        let type = payload["type"] as? String
-        let id = payload["id"] as? String
-        for transfer in session.outstandingUserInfoTransfers {
-          let queued = transfer.userInfo
-          if queued["type"] as? String == type, queued["id"] as? String == id {
+          for transfer in session.outstandingFileTransfers
+          where transfer.file.metadata?["type"] as? String == "catalog" {
             transfer.cancel()
           }
+          session.transferFile(url, metadata: ["type": "catalog", "revision": revision])
+        } catch {
+          logger.error("Watch catalog transfer failed: \(error.localizedDescription)")
+          try? FileManager.default.removeItem(at: url)
         }
-        guard resetGate.isCurrent(token) else { return }
-        session.transferUserInfo(payload)
+      }
+    }
 
-        if let artworkPath, let id, let artworkURL = PathManager.resolve(artworkPath) {
-          let alreadyQueued = session.outstandingFileTransfers.contains {
-            ($0.file.metadata?["type"] as? String) == "artwork"
-              && ($0.file.metadata?["id"] as? String) == id
-          }
-          if !alreadyQueued, FileManager.default.fileExists(atPath: artworkURL.path),
-            resetGate.isCurrent(token)
-          {
-            session.transferFile(artworkURL, metadata: ["type": "artwork", "id": id])
-          }
+    func sendPlayback(
+      songID: String?, title: String?, artist: String?, isPlaying: Bool,
+      currentTime: Double, duration: Double
+    ) {
+      guard let token = resetGate.token else { return }
+      queue.async { [self] in
+        guard resetGate.isCurrent(token), let session = availableSession else { return }
+        var payload: [String: Any] = [
+          "type": "playback_status", "isPlaying": isPlaying,
+          "currentTime": currentTime, "duration": duration,
+        ]
+        if let songID { payload["songId"] = songID }
+        if let title { payload["title"] = title }
+        if let artist { payload["artist"] = artist }
+        do {
+          try session.updateApplicationContext(payload)
+        } catch {
+          logger.error("Watch playback context failed: \(error.localizedDescription)")
+        }
+        if session.isReachable, resetGate.isCurrent(token) {
+          session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
         }
       }
     }
@@ -425,49 +266,52 @@ final class WatchSyncService: NSObject {
       _ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState,
       error: Error?
     ) {
-      if activationState == .activated {
-        queue.async { [self] in
-          guard availableSession != nil else { return }
-          Task { @MainActor in didActivate() }
-        }
-      }
+      if activationState == .activated { Task { @MainActor in didNeedCatalog() } }
+    }
+
+    func sessionWatchStateDidChange(_ session: WCSession) {
+      Task { @MainActor in didNeedCatalog() }
     }
 
     func sessionDidBecomeInactive(_ session: WCSession) {}
+
     func sessionDidDeactivate(_ session: WCSession) {
       queue.async { self.session?.activate() }
     }
 
+    func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer,
+                 error: Error?) {
+      guard fileTransfer.file.metadata?["type"] as? String == "catalog" else { return }
+      try? FileManager.default.removeItem(at: fileTransfer.file.fileURL)
+      if let error {
+        logger.error("Watch catalog delivery failed: \(error.localizedDescription)")
+        Task { @MainActor in didNeedCatalog() }
+      }
+    }
+
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
       guard let command = message["command"] as? String else { return }
+      if command == "request_catalog" {
+        Task { @MainActor in didNeedCatalog() }
+        return
+      }
       let songID = (message["songId"] as? String).flatMap(UUID.init(uuidString:))
       let seekTime = message["time"] as? Double
-
       Task { @MainActor in
         let playback = PlaybackController.shared
         switch command {
-        case "play":
-          playback.play()
-        case "pause":
-          playback.pause()
-        case "toggle":
-          playback.playPause()
-        case "next":
-          playback.playNext()
-        case "previous":
-          playback.playPrevious()
+        case "play": playback.play()
+        case "pause": playback.pause()
+        case "toggle": playback.playPause()
+        case "next": playback.playNext()
+        case "previous": playback.playPrevious()
         case "play_song":
-          if let songID {
-            if let song = SongLibrary.shared.songs.first(where: { $0.id == songID }) {
-              playback.play(song)
-            }
+          if let songID, let song = SongLibrary.shared.song(id: songID) {
+            playback.play(song)
           }
         case "seek":
-          if let seekTime {
-            playback.seek(to: seekTime)
-          }
-        default:
-          break
+          if let seekTime { playback.seek(to: seekTime) }
+        default: break
         }
       }
     }

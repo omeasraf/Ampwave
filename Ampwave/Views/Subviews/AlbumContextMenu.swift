@@ -63,6 +63,14 @@ struct AlbumContextMenuModifier: ViewModifier {
           Label("Add to Playlist", systemImage: "text.badge.plus")
         }
 
+        if album.songs.contains(where: { $0.isRemote && !$0.remoteIsDownloaded }) {
+          Button {
+            RemoteLibraryService.shared.requestDownload(for: album.songs)
+          } label: {
+            Label("Download Album", systemImage: "arrow.down.circle")
+          }
+        }
+
         if let onEdit {
           Button {
             onEdit()
@@ -70,16 +78,6 @@ struct AlbumContextMenuModifier: ViewModifier {
             Label("Edit", systemImage: "pencil")
           }
         }
-
-        #if os(iOS)
-          Button {
-            for song in album.songs {
-              WatchSyncService.shared.updateSyncStatus(for: song, shouldSync: true)
-            }
-          } label: {
-            Label("Sync Album to Watch", systemImage: "applewatch")
-          }
-        #endif
 
         Button(role: .destructive) {
           deletesReferencedOriginals = UserPreferences.getOrCreate(in: modelContext)
@@ -113,7 +111,9 @@ struct AlbumContextMenuModifier: ViewModifier {
         Button("Cancel", role: .cancel) {}
       } message: {
         let count = album.songs.count
-        let copiedCount = album.songs.count { $0.storageMode == .copied }
+        let copiedCount = album.songs.count {
+          $0.storageMode == .copied && (!$0.isRemote || $0.remoteIsDownloaded)
+        }
         let referencedCount = count - copiedCount
         if deletesReferencedOriginals && referencedCount > 0 {
           Text(
@@ -134,7 +134,9 @@ struct AlbumContextMenuModifier: ViewModifier {
   /// True when any track in the album was copied into the app's storage, and
   /// so has a file that deletion will actually remove.
   private var albumHasCopiedFiles: Bool {
-    album.songs.contains { $0.storageMode == .copied }
+    album.songs.contains {
+      $0.storageMode == .copied && (!$0.isRemote || $0.remoteIsDownloaded)
+    }
   }
 
   private var albumDeletesAudioFiles: Bool {
@@ -270,16 +272,32 @@ struct SongContextMenuModifier: ViewModifier {
           Label("Add to Playlist", systemImage: "text.badge.plus")
         }
 
-        #if os(iOS)
-          Button {
-            WatchSyncService.shared.updateSyncStatus(for: song, shouldSync: !song.shouldSyncToWatch)
-          } label: {
-            Label(
-              song.shouldSyncToWatch ? "Remove from Watch" : "Sync to Watch",
-              systemImage: song.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
-            )
+        if song.isRemote {
+          if song.remoteIsDownloaded {
+            if song.playlists?.isEmpty ?? true {
+              Button {
+                try? RemoteLibraryService.shared.removeDownload(for: song)
+              } label: {
+                Label("Remove Download", systemImage: "icloud.slash")
+              }
+            } else {
+              Button {} label: {
+                Label("Kept Offline for Playlist", systemImage: "checkmark.circle.fill")
+              }
+              .disabled(true)
+            }
+          } else {
+            Button {
+              RemoteLibraryService.shared.requestDownload(for: song)
+            } label: {
+              Label(
+                song.remoteDownloadRequested ? "Download Pending" : "Download",
+                systemImage: song.remoteDownloadRequested
+                  ? "clock.arrow.circlepath" : "arrow.down.circle"
+              )
+            }
           }
-        #endif
+        }
 
         Button {
           if let onDelete {
@@ -325,7 +343,11 @@ struct SongContextMenuModifier: ViewModifier {
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        if song.storageMode == .copied {
+        if song.isRemote && !song.remoteIsDownloaded {
+          Text(
+            "This removes the streamed song from Ampwave. No audio file is stored on this device."
+          )
+        } else if song.storageMode == .copied {
           Text(
             "The audio file will be deleted from your device, along with this song's play history and lyrics."
           )
@@ -342,7 +364,8 @@ struct SongContextMenuModifier: ViewModifier {
   }
 
   private var songDeletesAudioFile: Bool {
-    song.storageMode == .copied || deletesReferencedOriginals
+    (song.storageMode == .copied && (!song.isRemote || song.remoteIsDownloaded))
+      || deletesReferencedOriginals
   }
 }
 

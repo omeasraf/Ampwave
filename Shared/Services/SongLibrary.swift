@@ -15,6 +15,9 @@ extension Notification.Name {
   /// also builds into the watch app and Lyrics extension, so it can't call
   /// them directly.
   static let songsWereDeleted = Notification.Name("com.ampwave.songsWereDeleted")
+  /// Published library contents can change without a SwiftData save, such as
+  /// when a remote source goes offline or comes back.
+  static let songLibraryDidChange = Notification.Name("com.ampwave.songLibraryDidChange")
 }
 
 @Observable
@@ -31,6 +34,10 @@ extension Notification.Name {
     /// unavailable; it stays nil there and the work simply isn't extended.
     @ObservationIgnored
     static var beginBackgroundAssertion: ((String) -> (() -> Void))?
+    /// App-target hook used by shared metadata code to request another iOS
+    /// background window after a retryable provider failure.
+    @ObservationIgnored
+    static var metadataWorkNeedsScheduling: (() -> Void)?
 
     /// App-target hooks for persistent sonic analysis. Kept injectable because
     /// this shared service also compiles into extensions and the watch target.
@@ -38,6 +45,14 @@ extension Notification.Name {
     static var songWasImported: ((LibrarySong) -> Void)?
     @ObservationIgnored
     static var libraryDidLoad: (([LibrarySong]) -> Void)?
+
+    /// App-target bridge for provider-backed songs. The shared library also
+    /// builds into the watch and lyrics extension, so remote networking stays
+    /// injectable rather than importing app-only services here.
+    @ObservationIgnored
+    static var remoteStreamURLResolver: ((LibrarySong) -> URL?)?
+    @ObservationIgnored
+    static var remoteSourceIsAvailable: ((String) -> Bool)?
   
     private let fileManager = FileManager.default
     private(set) var songs: [LibrarySong] = [] {
@@ -50,6 +65,10 @@ extension Notification.Name {
     /// id → song, so callers resolving many ids (history, most played, playlist
     /// song order) don't linear-scan `songs` once per id.
   private var songIndex: [UUID: LibrarySong] = [:]
+  /// Alternate local/Plex/Jellyfin rows for the same recording stay in
+  /// SwiftData so every source can sync independently. Only the preferred row
+  /// is published, and relationship-backed views resolve through this map.
+  private var duplicateDisplayReplacementIDs: [UUID: UUID] = [:]
   /// Prevents overlapping folder scans, document-picker imports, and live
   /// monitoring events from inserting the same file while metadata extraction
   /// is suspended.
@@ -85,8 +104,122 @@ extension Notification.Name {
 
     func song(id: UUID) -> LibrarySong? { songIndex[id] }
 
+    private func isAvailableForLibrary(_ song: LibrarySong) -> Bool {
+      guard song.isRemote else { return true }
+      if song.remoteIsDownloaded, localDownloadedFileExists(for: song) { return true }
+      guard let sourceID = song.remoteSourceID else { return false }
+      return Self.remoteSourceIsAvailable?(sourceID) == true
+    }
+
+    func isVisibleInLibrary(_ song: LibrarySong) -> Bool {
+      isAvailableForLibrary(song) && duplicateDisplayReplacementIDs[song.id] == nil
+    }
+
+    /// Resolves album/playlist relationships through the preferred source so
+    /// an older relationship to a hidden server copy still displays and plays.
+    func visibleSongs(from values: [LibrarySong]) -> [LibrarySong] {
+      var seen = Set<UUID>()
+      return values.compactMap { song in
+        let preferred: LibrarySong
+        if let replacementID = duplicateDisplayReplacementIDs[song.id] {
+          guard let replacement = songIndex[replacementID] else { return nil }
+          preferred = replacement
+        } else {
+          preferred = song
+        }
+        guard isAvailableForLibrary(preferred), seen.insert(preferred.id).inserted else {
+          return nil
+        }
+        return preferred
+      }
+    }
+
     /// Resolves ids to songs in the order given, skipping any that are gone.
   func songs(ids: [UUID]) -> [LibrarySong] { ids.compactMap { songIndex[$0] } }
+
+  /// Keeps the first live model for each stable song identity while preserving
+  /// display order. Offset-based SwiftData loading can briefly see the same row
+  /// twice if another task inserts ahead of the current page between yields.
+  static func deduplicatedSongsByID(_ values: [LibrarySong]) -> [LibrarySong] {
+    var seen = Set<UUID>()
+    return values.filter { seen.insert($0.id).inserted }
+  }
+
+  /// Publishes one row for copies of the same recording found locally and/or
+  /// on different servers. Multiple items from one source remain distinct,
+  /// since those can be intentional editions in that library.
+  private func publishPreferredSourceCopies(from candidates: [LibrarySong]) {
+    var groups: [String: [LibrarySong]] = [:]
+    for song in candidates {
+      let key = [song.title, song.artist, song.album ?? ""]
+        .map(Self.normalizedDisplayIdentityComponent)
+        .joined(separator: "|")
+      groups[key, default: []].append(song)
+    }
+
+    var replacementIDs: [UUID: UUID] = [:]
+    var selectedIDs = Set<UUID>()
+
+    for group in groups.values {
+      var selected: [LibrarySong] = []
+      for candidate in group.sorted(by: sourceCopyPreference) {
+        if let preferred = selected.first(where: {
+          shouldFoldSourceCopy(candidate, into: $0)
+        }) {
+          replacementIDs[candidate.id] = preferred.id
+        } else {
+          selected.append(candidate)
+          selectedIDs.insert(candidate.id)
+        }
+      }
+    }
+
+    duplicateDisplayReplacementIDs = replacementIDs
+    songs = candidates.filter { selectedIDs.contains($0.id) }
+  }
+
+  nonisolated private static func normalizedDisplayIdentityComponent(_ value: String) -> String {
+    value
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .lowercased()
+      .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+  }
+
+  private func sourceCopyPreference(_ lhs: LibrarySong, _ rhs: LibrarySong) -> Bool {
+    let lhsTier = lhs.isRemote ? (lhs.remoteIsDownloaded ? 2 : 1) : 3
+    let rhsTier = rhs.isRemote ? (rhs.remoteIsDownloaded ? 2 : 1) : 3
+    if lhsTier != rhsTier { return lhsTier > rhsTier }
+
+    let lhsQuality = calculateQualityScore(for: lhs)
+    let rhsQuality = calculateQualityScore(for: rhs)
+    if lhsQuality != rhsQuality { return lhsQuality > rhsQuality }
+    if lhs.importedDate != rhs.importedDate { return lhs.importedDate < rhs.importedDate }
+    return lhs.id.uuidString < rhs.id.uuidString
+  }
+
+  private func shouldFoldSourceCopy(_ candidate: LibrarySong, into preferred: LibrarySong) -> Bool {
+    if !candidate.isRemote && !preferred.isRemote { return false }
+    if candidate.isRemote && preferred.isRemote,
+      candidate.remoteSourceID == preferred.remoteSourceID
+    {
+      return false
+    }
+
+    if let candidateISRC = candidate.isrc?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !candidateISRC.isEmpty,
+      let preferredISRC = preferred.isrc?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !preferredISRC.isEmpty,
+      candidateISRC.caseInsensitiveCompare(preferredISRC) != .orderedSame
+    {
+      return false
+    }
+
+    guard candidate.duration > 0, preferred.duration > 0 else {
+      return candidate.trackNumber == preferred.trackNumber
+        && candidate.discNumber == preferred.discNumber
+    }
+    return abs(candidate.duration - preferred.duration) <= 2
+  }
 
   /// Removes models from observable in-memory state before SwiftData deletes
   /// their backing rows. Views must never get a render pass with detached
@@ -110,6 +243,7 @@ extension Notification.Name {
     }
   }
   private var totalMetadataFetches: Int = 0
+  private var isSongMetadataFetchActive: Bool = false
   private var isGenreBackfillActive: Bool = false
   private var isArtistAlbumMetadataFetchActive: Bool = false
 
@@ -117,6 +251,7 @@ extension Notification.Name {
 
   nonisolated private static let audioExtensions: Set<String> = [
     "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "aiff", "wma", "alac", "m4b",
+    "ac3", "eac3", "caf",
   ]
   private static let liveMonitoringIgnoredHashesKey =
     "com.ampwave.liveLibraryMonitoringIgnoredHashes"
@@ -141,6 +276,7 @@ extension Notification.Name {
 
   func notifyLibraryChange() {
     libraryVersion += 1
+    NotificationCenter.default.post(name: .songLibraryDidChange, object: self)
   }
 
   // MARK: - Duplicate Detection
@@ -205,8 +341,9 @@ extension Notification.Name {
 
       for song in remainingSongs {
         let title = normalizeForMatching(song.title)
-        // Access artists.first safely on MainActor
-        let artist = normalizeForMatching(song.artists.first ?? song.artist)
+        let artist = normalizeForMatching(
+          ArtistParser.normalizedArtists(song.artists, fallback: song.artist).first ?? song.artist
+        )
         let album = normalizeForMatching(song.album ?? "")
 
         let key = "\(title)|\(artist)|\(album)"
@@ -228,7 +365,9 @@ extension Notification.Name {
 
       for song in looseRemaining {
         let title = normalizeForMatching(song.title)
-        let artist = normalizeForMatching(song.artists.first ?? song.artist)
+        let artist = normalizeForMatching(
+          ArtistParser.normalizedArtists(song.artists, fallback: song.artist).first ?? song.artist
+        )
         let key = "\(title)|\(artist)"
         looseGroups[key, default: []].append(song)
       }
@@ -399,7 +538,24 @@ extension Notification.Name {
         return await reindexArtists()
       }
 
-      return fetchedArtists
+      let visibleArtistNames = Set(
+        songs.flatMap { song in
+          ArtistParser.normalizedArtists(song.artists, fallback: song.artist)
+        }.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+      )
+      let indexedNames = Set(fetchedArtists.map {
+        $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      })
+      if allowReindex && !visibleArtistNames.isSubset(of: indexedNames) {
+        return await reindexArtists()
+      }
+      let visible = fetchedArtists.filter {
+        visibleArtistNames.contains(
+          $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        )
+      }
+      artists = visible
+      return visible
     } catch {
       print("[DEBUG] SongLibrary.allArtists: Error fetching artists: \(error)")
       return []
@@ -424,15 +580,28 @@ extension Notification.Name {
     }
 
     var artistMap: [String: Artist] = [:]
+    if let existingArtists = try? modelContext.fetch(FetchDescriptor<Artist>()) {
+      for artist in existingArtists {
+        artistMap[artist.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] = artist
+      }
+    }
 
     for song in songs {
-      let artistNames = song.artists.isEmpty ? [song.artist] : song.artists
+      let artistNames = ArtistParser.normalizedArtists(song.artists, fallback: song.artist)
+      if song.artists != artistNames { song.artists = artistNames }
 
       for artistName in artistNames {
-        let trimmedName = artistName.trimmingCharacters(in: .whitespaces)
+        let trimmedName = artistName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { continue }
-
-        let artist = getOrCreateArtist(named: trimmedName, in: modelContext)
+        let key = trimmedName.lowercased()
+        let artist: Artist
+        if let existing = artistMap[key] {
+          artist = existing
+        } else {
+          artist = Artist(name: trimmedName)
+          modelContext.insert(artist)
+          artistMap[key] = artist
+        }
 
         // Update statistics
         artist.songCount += 1
@@ -449,20 +618,21 @@ extension Notification.Name {
             artist.genres?.append(genre)
           }
         }
-        artistMap[trimmedName] = artist
       }
     }
 
     // Count albums per artist
     for album in albums {
-      let normalizedAlbumArtist = (album.artist ?? "").lowercased()
-      if let artistKey = artistMap.keys.first(where: { $0.lowercased() == normalizedAlbumArtist }) {
-        artistMap[artistKey]?.albumCount = (artistMap[artistKey]?.albumCount ?? 0) + 1
+      for name in ArtistParser.parseArtists(from: album.artist ?? "") {
+        artistMap[name.lowercased()]?.albumCount += 1
       }
     }
 
     saveContext()
-    return Array(artistMap.values).sorted { $0.name < $1.name }
+    let indexed = artistMap.values.filter { $0.songCount > 0 }
+      .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    artists = indexed
+    return indexed
   }
 
   /// Gets or creates an artist by name
@@ -540,8 +710,203 @@ extension Notification.Name {
   func getSongs(byArtist artistName: String) -> [LibrarySong] {
     let normalized = artistName.trimmingCharacters(in: .whitespaces).lowercased()
     return songs.filter { song in
-      let artistNames = song.artists.isEmpty ? [song.artist] : song.artists
+      let artistNames = ArtistParser.normalizedArtists(song.artists, fallback: song.artist)
       return artistNames.contains { $0.lowercased() == normalized }
+    }
+  }
+
+  // MARK: - Remote catalogs
+
+  /// Replaces one server's remote catalog while preserving local downloads.
+  /// Downloaded tracks that disappear from the server are converted into
+  /// ordinary local songs; stream-only rows are removed.
+  func replaceRemoteCatalog(
+    sourceID: String,
+    provider: RemoteMusicProvider,
+    tracks: [RemoteTrackDescriptor]
+  ) async throws {
+    guard let modelContext, !isResetting else { return }
+
+    let persistedSongs = try modelContext.fetch(FetchDescriptor<LibrarySong>())
+    let existing = persistedSongs.filter { $0.remoteSourceID == sourceID }
+    var existingByItemID = Dictionary(
+      existing.compactMap { song in song.remoteItemID.map { ($0, song) } },
+      uniquingKeysWith: { first, _ in first }
+    )
+    var seenItemIDs = Set<String>()
+
+    for track in tracks {
+      seenItemIDs.insert(track.itemID)
+      let song: LibrarySong
+      if let matched = existingByItemID.removeValue(forKey: track.itemID) {
+        song = matched
+        if !song.userEditedFields.contains("title") { song.title = track.title }
+        if !song.userEditedFields.contains("artist") {
+          song.artist = track.artist
+          song.artists = ArtistParser.normalizedArtists(track.artists, fallback: track.artist)
+        }
+        if !song.userEditedFields.contains("album") { song.album = track.album }
+        song.albumArtist = track.albumArtist
+        song.genre = track.genre
+        song.songDescription = track.description
+        song.duration = track.duration
+        song.trackNumber = track.trackNumber
+        song.discNumber = track.discNumber
+        song.year = track.year
+        song.size = track.size
+        song.bitRate = track.bitRate
+        song.sampleRate = track.sampleRate
+        song.bitDepth = track.bitDepth
+        song.channels = track.channels
+        song.format = track.container
+        if !song.remoteIsDownloaded { song.fileName = track.fileName }
+        if song.artworkPath == nil || song.artworkSource == .online {
+          song.artworkPath = track.artworkPath
+          song.isRemoteArtwork = track.artworkPath != nil
+          if track.artworkPath != nil { song.artworkSource = .online }
+        }
+      } else {
+        song = LibrarySong(
+          title: track.title,
+          artist: track.artist,
+          fileName: track.fileName,
+          fileHash: "remote:\(provider.rawValue):\(sourceID):\(track.itemID)",
+          size: track.size,
+          duration: track.duration,
+          album: track.album,
+          albumArtist: track.albumArtist,
+          genre: track.genre,
+          songDescription: track.description,
+          trackNumber: track.trackNumber,
+          discNumber: track.discNumber,
+          year: track.year,
+          artworkPath: track.artworkPath,
+          isRemoteArtwork: track.artworkPath != nil,
+          sampleRate: track.sampleRate,
+          bitDepth: track.bitDepth,
+          bitRate: track.bitRate,
+          channels: track.channels,
+          format: track.container,
+          storageMode: .copied,
+          titleConfidence: 1,
+          artistConfidence: 1,
+          albumConfidence: track.album == nil ? 0 : 1,
+          metadataSourceTitle: provider.displayName,
+          metadataSourceArtist: provider.displayName,
+          metadataSourceAlbum: provider.displayName,
+          remoteProvider: provider,
+          remoteSourceID: sourceID,
+          remoteItemID: track.itemID,
+          remoteStreamPath: track.streamPath,
+          remoteDownloadPath: track.downloadPath,
+          remoteContainer: track.container
+        )
+        song.artists = ArtistParser.normalizedArtists(track.artists, fallback: track.artist)
+        if track.artworkPath != nil { song.artworkSource = .online }
+        modelContext.insert(song)
+      }
+
+      song.remoteProvider = provider
+      song.remoteSourceID = sourceID
+      song.remoteItemID = track.itemID
+      song.remoteStreamPath = track.streamPath
+      song.remoteDownloadPath = track.downloadPath
+      song.remoteContainer = track.container
+      song.updateSearchIndex()
+
+      if let album = getOrCreateAlbum(
+        name: track.album,
+        albumArtist: track.albumArtist,
+        trackArtist: track.artist,
+        isCompilation: false,
+        year: track.year,
+        artworkPath: track.artworkPath,
+        embeddedArtworkPath: nil,
+        in: modelContext
+      ) {
+        if song.albumReference?.id != album.id {
+          song.albumReference?.songs.removeAll { $0.id == song.id }
+          song.albumReference = album
+        }
+        if !album.songs.contains(where: { $0.id == song.id }) { album.songs.append(song) }
+      }
+    }
+
+    let stale = existing.filter { song in
+      guard let itemID = song.remoteItemID else { return true }
+      return !seenItemIDs.contains(itemID)
+    }
+    let staleStreamOnly = stale.filter { !$0.remoteIsDownloaded }
+    let staleIDs = Set(staleStreamOnly.map(\.id))
+    for song in staleStreamOnly {
+      song.albumReference?.songs.removeAll { $0.id == song.id }
+    }
+    if !staleIDs.isEmpty { purgeSongReferences(ids: staleIDs) }
+    for song in staleStreamOnly { modelContext.delete(song) }
+
+    for song in stale where song.remoteIsDownloaded {
+      song.remoteProvider = nil
+      song.remoteSourceID = nil
+      song.remoteItemID = nil
+      song.remoteStreamPath = nil
+      song.remoteDownloadPath = nil
+      song.remoteContainer = nil
+      song.remoteIsDownloaded = false
+      song.remoteDownloadRequested = false
+      song.isRemoteArtwork = false
+    }
+
+    try modelContext.save()
+    await loadSongs(force: true, performMaintenance: false)
+    artists = await reindexArtists()
+    notifyLibraryChange()
+  }
+
+  /// Re-evaluates online-only visibility after provider reachability changes.
+  func refreshRemoteVisibility() async {
+    guard modelContext != nil, !isResetting else { return }
+    await loadSongs(force: true, performMaintenance: false)
+  }
+
+  func setRemoteDownloadRequested(_ requested: Bool, for song: LibrarySong) {
+    guard song.isRemote else { return }
+    song.remoteDownloadRequested = requested
+    saveContext()
+  }
+
+  func setRemoteDownloadRequested(_ requested: Bool, for songs: [LibrarySong]) {
+    let remoteSongs = songs.filter(\.isRemote)
+    guard !remoteSongs.isEmpty else { return }
+    for song in remoteSongs { song.remoteDownloadRequested = requested }
+    saveContext()
+  }
+
+  func markRemoteSongDownloaded(_ song: LibrarySong, at localURL: URL, size: Int) {
+    guard song.isRemote else { return }
+    song.filePath = PathManager.relativePath(from: localURL.standardizedFileURL.path)
+    song.fileName = localURL.lastPathComponent
+    song.size = size
+    song.format = localURL.pathExtension.lowercased()
+    song.remoteIsDownloaded = true
+    song.remoteDownloadRequested = false
+    song.storageMode = .copied
+    invalidateResolvedURLCache(for: song.id)
+    saveContext()
+  }
+
+  func removeRemoteDownload(for song: LibrarySong) throws {
+    guard song.isRemote, song.remoteIsDownloaded else { return }
+    guard song.playlists?.isEmpty ?? true else { return }
+    if let url = localDownloadedFileURL(for: song), fileManager.fileExists(atPath: url.path) {
+      try fileManager.removeItem(at: url)
+    }
+    song.filePath = nil
+    song.remoteIsDownloaded = false
+    song.remoteDownloadRequested = false
+    invalidateResolvedURLCache(for: song.id)
+    saveContext()
+    if !isVisibleInLibrary(song) {
+      removeSongsFromMemory(ids: Set([song.id]))
     }
   }
 
@@ -569,7 +934,9 @@ extension Notification.Name {
     invalidateResolvedURLCache()
 
     do {
-      songs = try await fetchSongsInResponsiveBatches(from: modelContext)
+      let initialCandidates = try await fetchSongsInResponsiveBatches(from: modelContext)
+        .filter(isAvailableForLibrary)
+      publishPreferredSourceCopies(from: initialCandidates)
       print("[DEBUG] SongLibrary.loadSongs: Fetched \(songs.count) songs")
       // Loading uses the main SwiftData context, but yielding between fetch
       // phases lets the launch equalizer commit animation frames.
@@ -583,7 +950,9 @@ extension Notification.Name {
         await mergeSongDuplicates(in: modelContext)
         guard generation == mutationGeneration, !isResetting else { return }
         // Refresh songs after merge
-        songs = try await fetchSongsInResponsiveBatches(from: modelContext)
+        let refreshedCandidates = try await fetchSongsInResponsiveBatches(from: modelContext)
+          .filter(isAvailableForLibrary)
+        publishPreferredSourceCopies(from: refreshedCandidates)
       }
       
       isLoaded = true
@@ -632,7 +1001,7 @@ extension Notification.Name {
       await Task.yield()
     }
 
-    return result
+    return Self.deduplicatedSongsByID(result)
   }
 
   /// Optional normalization/backfill runs after the tabs are visible, without
@@ -665,7 +1034,10 @@ extension Notification.Name {
       let descriptor = FetchDescriptor<Album>(
         sortBy: [SortDescriptor(\.name, order: .forward)]
       )
-      albums = try modelContext.fetch(descriptor)
+      let visibleSongIDs = Set(songs.map(\.id))
+      albums = try modelContext.fetch(descriptor).filter { album in
+        album.songs.contains { visibleSongIDs.contains($0.id) }
+      }
       print("[DEBUG] SongLibrary.loadAlbums: Fetched \(albums.count) albums")
 
       // Merges albums split by track-artist variations (e.g. "NF; mgk" vs
@@ -753,7 +1125,9 @@ extension Notification.Name {
 
     // Safety check: If we found no files on disk but have many in DB, 
     // it's likely a mount/permission issue or folder was moved. Don't mass delete.
-    if audioURLs.isEmpty && existingSongs.contains(where: { $0.storageMode == .copied }) {
+    if audioURLs.isEmpty && existingSongs.contains(where: {
+      $0.storageMode == .copied && (!$0.isRemote || $0.remoteIsDownloaded)
+    }) {
       print("[DEBUG] indexOnStartup: Safety triggered. Found 0 files on disk but \(existingSongs.count) in DB. Aborting sync to prevent accidental deletion.")
       indexingStatus = .complete
       isIndexing = false
@@ -778,6 +1152,10 @@ extension Notification.Name {
     var songsMissingFromExpectedPath: [LibrarySong] = []
 
     for song in existingSongs {
+      // Stream-only catalog rows deliberately have no managed file. Their
+      // lifecycle is reconciled by the remote provider, never the disk scan.
+      if song.isRemote && !song.remoteIsDownloaded { continue }
+
       // Referenced sources have a separate foreground reconciliation; an
       // unreadable provider is not proof of deletion.
       if song.storageMode == .referenced {
@@ -832,6 +1210,14 @@ extension Notification.Name {
         // We don't move it back here (to avoid disk churn), just store the actual path.
         updateStoredFilePath(for: song, to: movedURL)
         accountedForPaths.insert(movedURL.standardizedFileURL.path)
+      } else if song.isRemote && song.remoteIsDownloaded {
+        // The managed offline copy disappeared, but the provider catalog row
+        // is still valid. Fall back to streaming and re-request the download
+        // when a playlist still owns the song.
+        song.filePath = nil
+        song.remoteIsDownloaded = false
+        song.remoteDownloadRequested = !(song.playlists?.isEmpty ?? true)
+        invalidateResolvedURLCache(for: song.id)
       } else {
         // Only mark for deletion if we are reasonably sure it's gone from our managed folder
         print("[DEBUG] indexOnStartup: Marking copied song for deletion (not found on disk): \(song.title)")
@@ -1563,6 +1949,20 @@ extension Notification.Name {
     let generation = mutationGeneration
     let fileName = url.lastPathComponent
 
+    // A remote download is moved into Songs before its catalog row is updated.
+    // Live monitoring may observe that move immediately; path matching keeps
+    // the same managed file from being imported as a second local song.
+    let storedPath = PathManager.relativePath(from: url.standardizedFileURL.path)
+    do {
+      var pathDescriptor = FetchDescriptor<LibrarySong>(
+        predicate: #Predicate<LibrarySong> { $0.filePath == storedPath }
+      )
+      pathDescriptor.fetchLimit = 1
+      if try modelContext.fetchCount(pathDescriptor) > 0 { return nil }
+    } catch {
+      return nil
+    }
+
     guard let fileHash = await fileHash(at: url) else { return nil }
     guard !isResetting, generation == mutationGeneration, !Task.isCancelled else { return nil }
     guard importingFileHashes.insert(fileHash).inserted else { return nil }
@@ -1868,7 +2268,7 @@ extension Notification.Name {
 
     // 0. Genre tags when full metadata already ran but genre is still empty
     if preferences.autoFetchMetadata && !preferences.isOfflineMode && NetworkMonitor.shared.isOnline
-      && song.metadataCheckAttempted
+      && song.metadataCheckAttempted && song.metadataFetchSucceeded
       && (song.genre == nil || song.genre?.isEmpty == true)
     {
       let metadataService = MetadataService.shared
@@ -1888,16 +2288,7 @@ extension Notification.Name {
       print("[DEBUG] SongLibrary.fetchMetadataForSong: Song was replaced before metadata fetch")
       return
     }
-    let isGenericAlbum =
-      metadataSong.album == nil || metadataSong.album == "Unknown Album"
-      || metadataSong.album?.isEmpty == true
-    let isGenericArtist = metadataSong.artist == "Unknown Artist" || metadataSong.artist.isEmpty
-    let isMissingKeyInfo =
-      metadataSong.genre == nil || metadataSong.genre?.isEmpty == true
-      || metadataSong.year == nil || metadataSong.year == 0
-
-    let needsMetadata =
-      metadataSong.artworkPath == nil || isGenericAlbum || isGenericArtist || isMissingKeyInfo
+    let needsMetadata = hasMissingMetadata(metadataSong)
 
     if preferences.autoFetchMetadata && needsMetadata && NetworkMonitor.shared.isOnline && !preferences.isOfflineMode {
       // Only increment if not already part of a batch fetch
@@ -1916,6 +2307,7 @@ extension Notification.Name {
       }
 
       print("[DEBUG] SongLibrary.fetchMetadataForSong: Calling MetadataService.fetchMetadata")
+      let failureVersion = metadataService.retryableFailureVersion
       if let metadata = await metadataService.fetchMetadata(for: metadataSong) {
         // A force reload or duplicate merge can replace/detach the instance
         // while the network request is suspended. Always apply to the current
@@ -1928,6 +2320,14 @@ extension Notification.Name {
         print("[DEBUG] SongLibrary.fetchMetadataForSong: Metadata fetched, applying to song")
         await applyFetchedMetadata(metadata, to: liveSong, preferences: preferences)
         liveSong.metadataFetchSucceeded = true
+      } else if Task.isCancelled || metadataService.retryableFailureVersion != failureVersion {
+        // A timeout/throttle is not a genuine "no match". Put the song back in
+        // the queue so foreground or scheduled background work can retry it.
+        if let retrySong = self.song(id: songID) {
+          retrySong.metadataCheckAttempted = false
+          retrySong.metadataFetchSucceeded = false
+        }
+        print("[DEBUG] SongLibrary.fetchMetadataForSong: Transient failure, re-queued \(songTitle)")
       } else {
         // API returned nothing — mark succeeded so we don't retry on every launch
         // for songs that genuinely have no match in any source.
@@ -2007,6 +2407,9 @@ extension Notification.Name {
   /// enrichment pass. Both use MetadataService's shared API rate limiter.
   func fetchAutomaticMetadata() async {
     guard !isResetting else { return }
+    defer {
+      if !isResetting, hasPendingMetadataWork { Self.metadataWorkNeedsScheduling?() }
+    }
     await fetchMetadataForNewSongs()
     guard !isResetting else { return }
     await fetchArtistAlbumMetadataIfEnabled()
@@ -2116,11 +2519,18 @@ extension Notification.Name {
 
   func fetchMetadataForNewSongs() async {
     print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Starting batch fetch")
-    guard let modelContext = modelContext else { return }
+    guard !isSongMetadataFetchActive, let modelContext = modelContext else { return }
+    isSongMetadataFetchActive = true
 
     // Keeps the batch alive if the user leaves the app mid-fetch.
     let endAssertion = Self.beginBackgroundAssertion?("metadata-fetch")
-    defer { endAssertion?() }
+    defer {
+      endAssertion?()
+      pendingMetadataFetches = 0
+      totalMetadataFetches = 0
+      isSongMetadataFetchActive = false
+      saveContext()
+    }
 
     let preferences = UserPreferences.getOrCreate(in: modelContext)
     
@@ -2136,23 +2546,13 @@ extension Notification.Name {
     }
 
     // Simplify predicate to avoid compiler timeout.
-    let descriptor = FetchDescriptor<LibrarySong>(
-      predicate: #Predicate<LibrarySong> { song in
-        song.metadataCheckAttempted == false
-      }
-    )
+    let descriptor = FetchDescriptor<LibrarySong>()
 
     do {
       let uncheckedSongs = try modelContext.fetch(descriptor)
       let songsToFetch = uncheckedSongs.filter { song in
-        let isEssentialMissing = song.title.contains("Untitled") || song.artist == "Unknown Artist" || song.artist.isEmpty
-        let isSecondaryMissing = song.artworkPath == nil
-          || song.genre == nil || song.genre?.isEmpty == true
-          || song.year == nil
-          || song.composer == nil
-          || song.trackNumber == nil
-          || song.albumArtist == nil || song.albumArtist?.isEmpty == true
-        return isEssentialMissing || isSecondaryMissing
+        (!song.metadataCheckAttempted || !song.metadataFetchSucceeded)
+          && hasMissingMetadata(song)
       }
 
       if songsToFetch.isEmpty {
@@ -2171,44 +2571,36 @@ extension Notification.Name {
       totalMetadataFetches = songIDs.count
       pendingMetadataFetches = songIDs.count
 
-      for songID in songIDs {
-        // Double check if context is still valid
-        guard self.modelContext != nil, !isResetting else { break }
+      let maximumConcurrentSongs = 6
+      var completed = 0
+      for batchStart in stride(from: 0, to: songIDs.count, by: maximumConcurrentSongs) {
+        guard !Task.isCancelled, !isResetting else { break }
+        let batchEnd = min(batchStart + maximumConcurrentSongs, songIDs.count)
+        let batch = Array(songIDs[batchStart..<batchEnd])
 
-        // The OS cancels us when a background window expires; stop cleanly so
-        // the remaining songs keep their unattempted flag for the next pass.
-        if Task.isCancelled {
-          print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Cancelled, stopping batch")
-          break
+        await withTaskGroup(of: Void.self) { group in
+          for songID in batch {
+            group.addTask { @MainActor [weak self] in
+              guard let self, !Task.isCancelled, !self.isResetting,
+                let song = self.song(id: songID), song.modelContext != nil
+              else { return }
+
+              song.metadataCheckAttempted = true
+              await self.fetchMetadataForSong(song, isPartOfBatch: true)
+            }
+          }
+
+          for await _ in group {
+            completed += 1
+            pendingMetadataFetches = max(0, songIDs.count - completed)
+            if completed.isMultiple(of: 10) { saveContext() }
+          }
         }
-
-        guard let song = self.song(id: songID), song.modelContext != nil else {
-          pendingMetadataFetches -= 1
-          continue
-        }
-
-        // Mark as attempted BEFORE the call to prevent infinite loops if it crashes or fails
-        song.metadataCheckAttempted = true
-        
-        await fetchMetadataForSong(song, isPartOfBatch: true)
-
-        // Decrement here to ensure it happens regardless of what fetchMetadataForSong does
-        pendingMetadataFetches = max(0, pendingMetadataFetches - 1)
-
-        // Smaller pause
-        try? await Task.sleep(nanoseconds: 50_000_000)  // 0.05s
       }
-
-      // Ensure we hit zero at the end
-      pendingMetadataFetches = 0
-      totalMetadataFetches = 0
-      saveContext()
 
       print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Finished batch fetch")
     } catch {
       print("[DEBUG] SongLibrary.fetchMetadataForNewSongs: Error: \(error)")
-      pendingMetadataFetches = 0
-      totalMetadataFetches = 0
     }
   }
 
@@ -2231,36 +2623,99 @@ extension Notification.Name {
 
     let metadataService = MetadataService.shared
     metadataService.setModelContext(modelContext)
+    let preferences = UserPreferences.getOrCreate(in: modelContext)
 
     indexingStatus = .indexing("Refreshing library…")
 
     let songsCount = songIDs.count
     let totalItems = max(1, songsCount + albums.count)
     progress?(0, totalItems, "Preparing library metadata…")
-    for (index, songID) in songIDs.enumerated() {
+    let maximumConcurrentSongs = 6
+    var completedSongs = 0
+    for batchStart in stride(from: 0, to: songIDs.count, by: maximumConcurrentSongs) {
       guard !Task.isCancelled else { break }
-      indexingStatus = .indexing("Refreshing songs (\(index + 1)/\(songsCount))…")
-      guard let song = self.song(id: songID) else { continue }
-      await refreshEmbeddedMetadata(for: song)
-      if let liveSong = self.song(id: songID) {
-        await metadataService.refreshMetadata(for: liveSong)
+      let batchEnd = min(batchStart + maximumConcurrentSongs, songIDs.count)
+      let batch = Array(songIDs[batchStart..<batchEnd])
+
+      await withTaskGroup(of: Void.self) { group in
+        for songID in batch {
+          group.addTask { @MainActor [weak self] in
+            guard let self, !Task.isCancelled, let song = self.song(id: songID) else { return }
+            await self.refreshEmbeddedMetadata(for: song)
+            guard let liveSong = self.song(id: songID), liveSong.modelContext != nil else { return }
+
+            liveSong.metadataCheckAttempted = true
+            let failureVersion = metadataService.retryableFailureVersion
+            if let metadata = await metadataService.fetchMetadata(for: liveSong) {
+              guard let currentSong = self.song(id: songID), currentSong.modelContext != nil else {
+                return
+              }
+              await self.applyFetchedMetadata(
+                metadata, to: currentSong, preferences: preferences
+              )
+              currentSong.metadataFetchSucceeded = true
+            } else if Task.isCancelled
+              || metadataService.retryableFailureVersion != failureVersion
+            {
+              self.song(id: songID)?.metadataCheckAttempted = false
+              self.song(id: songID)?.metadataFetchSucceeded = false
+            } else {
+              self.song(id: songID)?.metadataFetchSucceeded = true
+            }
+          }
+        }
+
+        for await _ in group {
+          completedSongs += 1
+          indexingStatus = .indexing(
+            "Refreshing songs (\(completedSongs)/\(songsCount))…"
+          )
+          progress?(
+            completedSongs,
+            totalItems,
+            "Refreshed \(completedSongs) of \(totalItems) items"
+          )
+        }
       }
-      progress?(index + 1, totalItems, "Refreshed \(index + 1) of \(totalItems) items")
     }
     saveContext()
 
     let albumIDs = albums.map(\.id)
     let albumCount = albumIDs.count
-    for (index, albumID) in albumIDs.enumerated() {
+    let maximumConcurrentAlbums = 4
+    var completedAlbums = 0
+    for batchStart in stride(from: 0, to: albumIDs.count, by: maximumConcurrentAlbums) {
       guard !Task.isCancelled else { break }
-      indexingStatus = .indexing("Refreshing albums (\(index + 1)/\(albumCount))…")
-      if let album = albums.first(where: { $0.id == albumID }) {
-        await metadataService.refreshMetadata(for: album)
+      let batchEnd = min(batchStart + maximumConcurrentAlbums, albumIDs.count)
+      let batch = Array(albumIDs[batchStart..<batchEnd])
+
+      await withTaskGroup(of: Void.self) { group in
+        for albumID in batch {
+          group.addTask { @MainActor [weak self] in
+            guard let self, !Task.isCancelled,
+              let album = self.albums.first(where: { $0.id == albumID })
+            else { return }
+            await metadataService.refreshMetadata(for: album)
+          }
+        }
+
+        for await _ in group {
+          completedAlbums += 1
+          indexingStatus = .indexing(
+            "Refreshing albums (\(completedAlbums)/\(albumCount))…"
+          )
+          let completed = songsCount + completedAlbums
+          progress?(
+            completed,
+            totalItems,
+            "Refreshed \(completed) of \(totalItems) items"
+          )
+        }
       }
-      let completed = songsCount + index + 1
-      progress?(completed, totalItems, "Refreshed \(completed) of \(totalItems) items")
     }
 
+    saveContext()
+    if hasPendingMetadataWork { Self.metadataWorkNeedsScheduling?() }
     indexingStatus = .complete
   }
 
@@ -2338,7 +2793,7 @@ extension Notification.Name {
     }
     if !song.userEditedFields.contains("artist"), metadata.metadataSourceArtist == "embedded" {
       song.artist = metadata.artist
-      song.artists = metadata.artists
+      song.artists = ArtistParser.normalizedArtists(metadata.artists, fallback: metadata.artist)
       song.artistConfidence = metadata.artistConfidence
       song.metadataSourceArtist = metadata.metadataSourceArtist
     }
@@ -2535,6 +2990,7 @@ extension Notification.Name {
       (song.artistConfidence < 0.8 || song.artist == "Unknown Artist" || song.artist.isEmpty)
     {
       song.artist = artist
+      song.artists = ArtistParser.parseArtists(from: artist)
       song.artistConfidence = (metadata.source == .appleMusic) ? 0.95 : MetadataConfidenceScorer.scoreMusicBrainz(value: artist)
       song.metadataSourceArtist = metadata.source.rawValue
       needsSave = true
@@ -2884,6 +3340,14 @@ extension Notification.Name {
   /// Handles security-scoped referenced files, which need to be opened before
   /// their existence can be checked.
   func fileExists(for song: LibrarySong) -> Bool {
+    if song.isRemote {
+      if song.remoteIsDownloaded, localDownloadedFileExists(for: song) { return true }
+      guard let sourceID = song.remoteSourceID,
+        Self.remoteSourceIsAvailable?(sourceID) == true
+      else { return false }
+      return Self.remoteStreamURLResolver?(song) != nil
+    }
+
     let url = getFileURL(for: song)
     if song.storageMode == .referenced {
       guard !PathManager.isTrashed(url), !PathManager.isInside(url, directory: songsDirectory) else { return false }
@@ -2906,6 +3370,17 @@ extension Notification.Name {
   }
 
   func getFileURL(for song: LibrarySong) -> URL {
+    if song.isRemote {
+      if song.remoteIsDownloaded, let localURL = localDownloadedFileURL(for: song),
+        fileManager.fileExists(atPath: localURL.path)
+      {
+        return localURL
+      }
+      if let remoteURL = Self.remoteStreamURLResolver?(song) { return remoteURL }
+      return songsDirectory.deletingLastPathComponent()
+        .appendingPathComponent(".unavailable-remote/\(song.id.uuidString)")
+    }
+
     if song.storageMode == .referenced {
       return referencedFileURL(for: song)
     }
@@ -2913,6 +3388,16 @@ extension Notification.Name {
     let url = resolveFileURL(for: song)
     resolvedURLCache[song.id] = url
     return url
+  }
+
+  private func localDownloadedFileURL(for song: LibrarySong) -> URL? {
+    guard let filePath = song.filePath, !filePath.isEmpty else { return nil }
+    return PathManager.absoluteURL(for: filePath)?.standardizedFileURL
+  }
+
+  private func localDownloadedFileExists(for song: LibrarySong) -> Bool {
+    guard let url = localDownloadedFileURL(for: song) else { return false }
+    return fileManager.fileExists(atPath: url.path)
   }
 
   private func referencedFileURL(for song: LibrarySong) -> URL {
@@ -3223,9 +3708,7 @@ extension Notification.Name {
         album.songs.removeAll { deletedIDs.contains($0.id) }
       }
 
-      let names = song.artists.isEmpty
-        ? ArtistParser.parseArtists(from: song.albumArtist ?? song.artist)
-        : song.artists
+      let names = ArtistParser.normalizedArtists(song.artists, fallback: song.artist)
       affectedArtistNames.formUnion(
         names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
           .filter { !$0.isEmpty }
@@ -3257,9 +3740,7 @@ extension Notification.Name {
     where affectedArtistNames.contains(artist.name.lowercased())
     {
       let remainingSongs = songs.filter { song in
-        let names = song.artists.isEmpty
-          ? ArtistParser.parseArtists(from: song.albumArtist ?? song.artist)
-          : song.artists
+        let names = ArtistParser.normalizedArtists(song.artists, fallback: song.artist)
         return names.contains {
           $0.caseInsensitiveCompare(artist.name) == .orderedSame
         }
@@ -3507,6 +3988,8 @@ extension Notification.Name {
     || song.genre == nil || song.genre?.isEmpty == true
     || song.year == nil
     || song.albumArtist == nil || song.albumArtist?.isEmpty == true
+    || song.composer == nil || song.composer?.isEmpty == true
+    || song.trackNumber == nil
     || song.title.contains("Untitled")
     || song.artist == "Unknown Artist"
     || song.artist.isEmpty

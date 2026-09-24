@@ -259,7 +259,7 @@ enum AudioMetadataExtractor: Sendable {
         ?? id3.firstValue(for: "TXXX", descriptor: "comment") ?? songDescription
       replayGainDB = id3.firstValue(for: "TXXX", descriptor: "REPLAYGAIN_TRACK_GAIN")
         .flatMap { parseReplayGain($0) } ?? replayGainDB
-      isAIGenerated = id3.hasC2PAProvider(named: "Suno, Inc.")
+      isAIGenerated = id3.hasAIGeneratedIndicator
     }
 
     // AVFoundation exposes FLAC/Vorbis fields as opaque Objective-C tag
@@ -522,8 +522,12 @@ enum AudioMetadataExtractor: Sendable {
       }?.value
     }
 
-    func hasC2PAProvider(named expected: String) -> Bool {
-      c2paProviders.contains { $0.caseInsensitiveCompare(expected) == .orderedSame }
+    var hasAIGeneratedIndicator: Bool {
+      if c2paProviders.contains(where: AudioMetadataExtractor.isKnownAIMusicProvider) {
+        return true
+      }
+
+      return tags.contains(where: AudioMetadataExtractor.tagIndicatesAIGeneration)
     }
   }
 
@@ -535,7 +539,7 @@ enum AudioMetadataExtractor: Sendable {
   }
 
   static func readID3AIGeneratedFlag(from url: URL) -> Bool {
-    readID3Metadata(from: url)?.hasC2PAProvider(named: "Suno, Inc.") == true
+    readID3Metadata(from: url)?.hasAIGeneratedIndicator == true
   }
 
   /// Reads the ID3v2.3/v2.4 USLT and SYLT layouts defined by ID3.org.
@@ -810,13 +814,21 @@ enum AudioMetadataExtractor: Sendable {
               )
             )
             let object = Data(data[descriptorEnd.nextOffset...])
-            let c2paFields = [
-              "providerName", "createdAt", "systemName", "systemVersion", "contentId",
-              "digitalSourceType",
-            ].compactMap { key -> String? in
-              cborTextValue(forKey: key, in: object).map { "\(key)=\($0)" }
-            }
-            let provider = cborTextValue(forKey: "providerName", in: object)
+            let isC2PA = mimeType?.localizedCaseInsensitiveContains("c2pa") == true
+              || descriptor?.localizedCaseInsensitiveContains("c2pa") == true
+              || fileName?.localizedCaseInsensitiveContains("c2pa") == true
+            let c2paFields = isC2PA
+              ? [
+                "providerName", "createdAt", "systemName", "systemVersion", "contentId",
+                "digitalSourceType",
+              ].compactMap { key -> String? in
+                cborTextValue(forKey: key, in: object).map { "\(key)=\($0)" }
+              }
+              : []
+            let provider = isC2PA
+              ? cborTextValue(forKey: "providerName", in: object)
+                ?? cborTextValue(forKey: "systemName", in: object)
+              : nil
             return (
               tag(
                 value: c2paFields.isEmpty ? nil : c2paFields.joined(separator: "; "),
@@ -839,6 +851,77 @@ enum AudioMetadataExtractor: Sendable {
     let normalized = text?.replacingOccurrences(of: "\0", with: "\n")
       .trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
     return normalized?.isEmpty == false ? normalized : nil
+  }
+
+  /// Recognizes standards-based provenance and deliberately structured custom
+  /// fields. Free-form comments, titles, artists, and URLs are not considered.
+  nonisolated private static func tagIndicatesAIGeneration(_ tag: ID3v2Tag) -> Bool {
+    let isC2PA = tag.mimeType?.localizedCaseInsensitiveContains("c2pa") == true
+      || tag.descriptor?.localizedCaseInsensitiveContains("c2pa") == true
+      || tag.fileName?.localizedCaseInsensitiveContains("c2pa") == true
+    if tag.frameID == "GEOB",
+      isC2PA,
+      let value = tag.value,
+      isAIDigitalSourceType(value)
+    {
+      return true
+    }
+
+    guard tag.frameID == "TXXX", let descriptor = tag.descriptor, let value = tag.value else {
+      return false
+    }
+
+    switch normalizedMetadataIdentifier(descriptor) {
+    case "digitalsourcetype", "iptcdigitalsourcetype", "c2padigitalsourcetype":
+      return isAIDigitalSourceType(value)
+    case "aigenerated", "isgeneratedbyai", "isgeneratedwithai", "generativeai":
+      return ["1", "true", "yes", "ai", "aigenerated", "generated", "synthetic"]
+        .contains(normalizedMetadataIdentifier(value))
+    case "aiprovider", "generatorprovider", "providername", "systemname", "softwareagent",
+      "claimgenerator", "aitool", "aimodel", "generatedby":
+      return isKnownAIMusicProvider(value)
+    default:
+      return false
+    }
+  }
+
+  nonisolated private static func isAIDigitalSourceType(_ value: String) -> Bool {
+    let normalized = normalizedMetadataIdentifier(value)
+    return normalized.contains("trainedalgorithmicmedia")
+      || normalized.contains("compositewithtrainedalgorithmicmedia")
+  }
+
+  nonisolated private static func isKnownAIMusicProvider(_ value: String) -> Bool {
+    let normalized = normalizedProviderName(value)
+    return knownAIMusicProviders.contains(normalized)
+  }
+
+  nonisolated private static let knownAIMusicProviders: Set<String> = [
+    "aiva", "aiva technologies", "aiva technologies sarl",
+    "beatoven", "beatoven ai",
+    "boomy", "boomy corporation",
+    "loudly", "loudly ai",
+    "mubert", "mubert inc",
+    "riffusion",
+    "soundful",
+    "soundraw",
+    "stable audio", "stability ai", "stability ai ltd",
+    "suno", "suno ai", "suno inc",
+    "udio", "uncharted labs", "uncharted labs inc",
+  ]
+
+  nonisolated private static func normalizedMetadataIdentifier(_ value: String) -> String {
+    value.lowercased().unicodeScalars
+      .filter(CharacterSet.alphanumerics.contains)
+      .map(String.init)
+      .joined()
+  }
+
+  nonisolated private static func normalizedProviderName(_ value: String) -> String {
+    let scalars = value.lowercased().unicodeScalars.map { scalar -> Character in
+      CharacterSet.alphanumerics.contains(scalar) ? Character(String(scalar)) : " "
+    }
+    return String(scalars).split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
   }
 
   private static func id3PictureTypeName(_ type: UInt8) -> String {

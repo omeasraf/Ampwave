@@ -7,6 +7,30 @@
 
 internal import SwiftUI
 
+enum LibraryArtworkShape: String, CaseIterable, Identifiable {
+  case roundedRectangle
+  case circle
+
+  // Keep the original key so existing artwork preferences survive this wider scope.
+  static let storageKey = "com.ampwave.artistArtworkShape.v1"
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .roundedRectangle: return "Rounded"
+    case .circle: return "Circular"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .roundedRectangle: return "square.roundedcorners"
+    case .circle: return "circle"
+    }
+  }
+}
+
 struct ArtworkImage: View {
   let artworkPath: String?
   let size: CGFloat
@@ -72,9 +96,14 @@ struct ArtworkImage: View {
 struct ArtistImageView: View {
   let artworkPath: String?
   let size: CGFloat
+  var shape: LibraryArtworkShape = .roundedRectangle
 
   @State private var image: PlatformImage?
   @Environment(\.displayScale) private var displayScale
+
+  private var cornerRadius: CGFloat {
+    shape == .circle ? size / 2 : min(18, size * 0.18)
+  }
 
   var body: some View {
     Group {
@@ -89,7 +118,7 @@ struct ArtistImageView: View {
             .aspectRatio(contentMode: .fill)
         #endif
       } else {
-        Circle()
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
           .fill(.gray.opacity(0.15))
           .overlay(
             Image(systemName: "person.fill")
@@ -99,7 +128,7 @@ struct ArtistImageView: View {
       }
     }
     .frame(width: size, height: size)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     .task(id: loadKey) {
       await loadImage()
     }

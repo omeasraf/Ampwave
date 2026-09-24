@@ -601,6 +601,7 @@ struct SongEditSheet: View {
     guard let song = library.song(id: songID) else { return }
     song.title = title
     song.artist = artist
+    song.artists = ArtistParser.parseArtists(from: artist)
     song.album = album.isEmpty ? nil : album
     song.genre = genre.isEmpty ? nil : genre
 

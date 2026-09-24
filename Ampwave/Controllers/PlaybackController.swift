@@ -68,16 +68,50 @@ final class AudioSessionActivation {
           do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default, options: [])
+            // Tell AVFoundation that a local file or server stream may contain
+            // more than stereo; the system still chooses the route/layout.
+            do {
+              try session.setSupportsMultichannelContent(true)
+            } catch {
+              // A route that rejects this hint must not break ordinary stereo
+              // playback; spatial/surround support simply stays unavailable.
+              print("[DEBUG] Multichannel session hint unavailable: \(error)")
+            }
             // `activate(options:completionHandler:)` is unavailable on iOS.
             // Keep the supported blocking API off the main actor on this
             // dedicated serial queue, then bridge its result back to async.
             try session.setActive(true)
+            preferSurroundChannels(on: session)
             continuation.resume()
           } catch { continuation.resume(throwing: error) }
         }
       }
     #endif
   }
+
+  nonisolated static func configureMultichannelOutput() async {
+    #if os(iOS)
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        queue.async {
+          preferSurroundChannels(on: AVAudioSession.sharedInstance())
+          continuation.resume()
+        }
+      }
+    #endif
+  }
+
+  #if os(iOS)
+    nonisolated private static func preferSurroundChannels(on session: AVAudioSession) {
+      let maximum = session.maximumOutputNumberOfChannels
+      guard maximum > 2, session.outputNumberOfChannels < maximum else { return }
+      do {
+        try session.setPreferredOutputNumberOfChannels(maximum)
+        print("[DEBUG] Surround output channels requested=\(maximum) actual=\(session.outputNumberOfChannels)")
+      } catch {
+        print("[DEBUG] Surround output channel request unavailable: \(error)")
+      }
+    }
+  #endif
 }
 
 /// Finds long, effectively-silent tails without modifying the source file.
@@ -163,6 +197,10 @@ private enum GaplessSilenceAnalyzer {
 @Observable
 @MainActor
 final class LyricsPlaybackClock {
+  /// TimelineView drives karaoke redraws itself. Publishing every player sample
+  /// made SwiftUI invalidate the active line in addition to the timeline's own
+  /// display updates, effectively rendering it twice at high frequency.
+  @ObservationIgnored
   fileprivate(set) var currentTime: TimeInterval = 0 {
     didSet { anchorUptime = ProcessInfo.processInfo.systemUptime }
   }
@@ -299,6 +337,43 @@ final class PlaybackController {
   func refreshAudioEnhancementsFromSettings() {
     applyEQPresetForPlayback()
     applyPlayerOutputVolume()
+    if let song = currentItem, !Self.canUseStereoAudioTap(reportedChannels: song.channels) {
+      player?.currentItem?.audioMix = nil
+      if VocalIsolator.shared.requiresProcessing {
+        removeGaplessPreloadedItems()
+      } else {
+        prepareNextItem()
+      }
+      DiagnosticLog.shared.log("audio-processing", "Bypassed EQ tap for surround playback title=\(song.title)")
+      return
+    }
+    if VocalIsolator.shared.requiresProcessing {
+      // EQ may have been enabled after this item started. An already playing
+      // item has no tap until one is explicitly attached.
+      removeGaplessPreloadedItems()
+      attachAudioProcessingToCurrentItemIfNeeded()
+    } else {
+      player?.currentItem?.audioMix = nil
+      prepareNextItem()
+    }
+  }
+
+  private func removeGaplessPreloadedItems() {
+    gaplessPreloadToken = nil
+    gaplessPreloadSongID = nil
+    guard let player else { return }
+    for item in player.items() where item !== player.currentItem {
+      player.remove(item)
+      releaseResources(for: item)
+    }
+  }
+
+  func refreshSpatialAudioSettings() {
+    let mode = SpatialAudioMode.current
+    player?.items().forEach { mode.apply(to: $0) }
+    if let crossfadeItem = crossfadePlayer?.currentItem {
+      mode.apply(to: crossfadeItem)
+    }
   }
 
   private func applyEQPresetForPlayback() {
@@ -350,8 +425,8 @@ final class PlaybackController {
   }
 
   func toggleVocalSlider() {
-    guard isVocalSliderSessionActive else {
-      DiagnosticLog.shared.log("audio-processing", "Ignored VocalSlider outside lyrics view")
+    guard isVocalSliderSessionActive, (currentItem?.channels ?? 2) <= 2 else {
+      DiagnosticLog.shared.log("audio-processing", "Ignored VocalSlider outside lyrics or for surround audio")
       return
     }
     withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
@@ -373,7 +448,7 @@ final class PlaybackController {
   var vocalLevel: Float {
     get { currentVocalLevel }
     set {
-      guard isVocalSliderSessionActive else {
+      guard isVocalSliderSessionActive, (currentItem?.channels ?? 2) <= 2 else {
         currentVocalLevel = 1
         VocalIsolator.shared.vocalLevel = 1
         return
@@ -402,8 +477,10 @@ final class PlaybackController {
   }
 
   private func attachAudioProcessingToCurrentItemIfNeeded() {
-    guard isVocalSliderSessionActive,
+    guard VocalIsolator.shared.requiresProcessing,
       let item = player?.currentItem,
+      let song = currentItem,
+      Self.canUseStereoAudioTap(reportedChannels: song.channels),
       item.audioMix == nil
     else { return }
     Task { @MainActor [weak self, weak item] in
@@ -411,7 +488,9 @@ final class PlaybackController {
       do {
         guard let track = try await item.asset.loadTracks(withMediaType: .audio).first,
           self.player?.currentItem === item,
-          let song = self.currentItem
+          let song = self.currentItem,
+          VocalIsolator.shared.requiresProcessing,
+          !(await Self.trackIsMultichannel(track))
         else { return }
         let instrumentActivity = SonicRecommendationService.shared.instrumentActivity(for: song)
         self.currentInstrumentActivity = instrumentActivity
@@ -421,7 +500,7 @@ final class PlaybackController {
         )
         DiagnosticLog.shared.log(
           "audio-processing",
-          "Attached VocalSlider tap title=\(song.title) level=\(self.currentVocalLevel) "
+          "Attached audio processing tap title=\(song.title) eq=\(VocalIsolator.shared.isEQEnabled) level=\(self.currentVocalLevel) "
             + "mode=\(instrumentActivity == nil ? "fallback" : "music-understanding") "
             + "vocalPoints=\(instrumentActivity?.vocal.count ?? 0)"
         )
@@ -1005,6 +1084,7 @@ final class PlaybackController {
       } else {
         DiagnosticLog.shared.log("audio-session", "Route changed reason=\(reason.rawValue)")
       }
+      Task { await AudioSessionActivation.configureMultichannelOutput() }
     }
   #endif
 
@@ -1410,7 +1490,7 @@ final class PlaybackController {
       else { return }
       let item = await createPlayerItem(
         for: song,
-        trimTrailingSilence: shouldTrimGaplessEnding(
+        trimTrailingSilence: !song.isRemote && shouldTrimGaplessEnding(
           at: currentQueueIndex,
           songID: song.id
         )
@@ -1440,7 +1520,8 @@ final class PlaybackController {
           // Local files are already on disk, so letting the player hold back
           // to build a buffer only inserts a delay at each track transition —
           // which is exactly the gap gapless playback is meant to avoid.
-          self.player?.automaticallyWaitsToMinimizeStalling = false
+          self.player?.automaticallyWaitsToMinimizeStalling =
+            song.isRemote && !song.remoteIsDownloaded
           self.applyEQPresetForPlayback()
           self.addTimeObserver()
           self.observePlayerItemChange()
@@ -1450,6 +1531,8 @@ final class PlaybackController {
           self.player?.removeAllItems()
           self.player?.insert(item, after: nil)
         }
+        self.player?.automaticallyWaitsToMinimizeStalling =
+          song.isRemote && !song.remoteIsDownloaded
 
         self.applyRepeatModeToPlayer()
 
@@ -1457,6 +1540,7 @@ final class PlaybackController {
         self.duration = song.duration > 0 ? song.duration : 0
         self.currentTime = 0
         self.lyricsClock.currentTime = 0
+        self.attachAudioProcessingToCurrentItemIfNeeded()
 
         // After `currentItem` is set: the normalization gain is per-track, so
         // applying it earlier used the *previous* song's tag. The reuse branch
@@ -1498,11 +1582,17 @@ final class PlaybackController {
     // earlier frame, and AVQueuePlayer can run past the advertised duration
     // without advancing. Precise timing makes AVFoundation build the timing
     // information it needs from the stream itself.
-    let asset = AVURLAsset(
-      url: url,
-      options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
-    )
+    let asset: AVURLAsset
+    if song.isRemote && !song.remoteIsDownloaded {
+      asset = AVURLAsset(url: url)
+    } else {
+      asset = AVURLAsset(
+        url: url,
+        options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+      )
+    }
     let item = AVPlayerItem(asset: asset)
+    SpatialAudioMode.current.apply(to: item)
     let itemKey = ObjectIdentifier(item)
     let songID = song.id
     let songTitle = song.title
@@ -1561,14 +1651,17 @@ final class PlaybackController {
     // A processing tap is expensive and has historically been the least
     // reliable part of long-running FLAC playback. Do not install a no-op tap,
     // and never analyze a native gapless preload.
-    let shouldProcess = includeAudioProcessing ?? VocalIsolator.shared.requiresProcessing
+    let shouldProcess = (includeAudioProcessing ?? VocalIsolator.shared.requiresProcessing)
+      && Self.canUseStereoAudioTap(reportedChannels: song.channels)
     if shouldProcess {
       do {
       let tracks = try await asset.loadTracks(withMediaType: .audio)
       guard let song = library.song(id: songID), itemSongIDs[itemKey] == songID else {
         return item
       }
-      if let audioTrack = tracks.first {
+      if let audioTrack = tracks.first,
+        !(await Self.trackIsMultichannel(audioTrack))
+      {
         let instrumentActivity = SonicRecommendationService.shared.instrumentActivity(for: song)
         if let audioMix = VocalIsolator.shared.createAudioMix(
           for: audioTrack,
@@ -1577,7 +1670,7 @@ final class PlaybackController {
           item.audioMix = audioMix
           DiagnosticLog.shared.log(
             "audio-processing",
-            "Created VocalSlider tap title=\(song.title) level=\(currentVocalLevel) "
+            "Created audio processing tap title=\(song.title) eq=\(VocalIsolator.shared.isEQEnabled) level=\(currentVocalLevel) "
               + "mode=\(instrumentActivity == nil ? "fallback" : "music-understanding") "
               + "vocalPoints=\(instrumentActivity?.vocal.count ?? 0)"
           )
@@ -1588,7 +1681,10 @@ final class PlaybackController {
           print("[ERROR] PlaybackController: Failed to create audioMix for \(song.title)")
         }
       } else {
-        print("[ERROR] PlaybackController: No audio track found for \(song.title)")
+        DiagnosticLog.shared.log(
+          "audio-processing",
+          "Skipped stereo-only EQ/VocalSlider tap for missing or multichannel track title=\(song.title)"
+        )
       }
       } catch {
         DiagnosticLog.shared.log("error", "Audio processing setup failed title=\(songTitle): \(error)")
@@ -1602,6 +1698,26 @@ final class PlaybackController {
     )
     observePlayerItem(item)
     return item
+  }
+
+  private static func trackIsMultichannel(_ track: AVAssetTrack) async -> Bool {
+    // Audio effects are optional; when the layout cannot be verified, keep
+    // native playback rather than risk a surround track entering the stereo tap.
+    guard let descriptions = try? await track.load(.formatDescriptions),
+      !descriptions.isEmpty
+    else { return true }
+    return descriptions.contains { description in
+      guard let stream = CMAudioFormatDescriptionGetStreamBasicDescription(description)
+      else { return true }
+      return stream.pointee.mChannelsPerFrame != 1
+        && stream.pointee.mChannelsPerFrame != 2
+    }
+  }
+
+  /// A missing count is checked against the decoded track before installation.
+  /// Known surround content must stay on AVFoundation's unmodified path.
+  nonisolated static func canUseStereoAudioTap(reportedChannels: Int?) -> Bool {
+    (reportedChannels ?? 2) <= 2
   }
 
   private func observePlayerItem(_ item: AVPlayerItem) {
@@ -1833,13 +1949,14 @@ final class PlaybackController {
   func playAlbum(_ album: Album, startingAtTrack index: Int = 0) {
     // Must match the order AlbumView lists tracks in — the caller passes an
     // index into that list, so a divergent sort here plays the wrong song.
-    let sortedSongs = album.songs.sorted(by: LibrarySong.albumTrackOrder)
+    let sortedSongs = library.visibleSongs(from: album.songs)
+      .sorted(by: LibrarySong.albumTrackOrder)
     playQueue(sortedSongs, startingAt: index, from: .album)
   }
 
   func playPlaylist(_ playlist: Playlist, startingAt index: Int = 0) {
     playQueue(
-      playlist.orderedSongs,
+      library.visibleSongs(from: playlist.orderedSongs),
       startingAt: index,
       from: .playlist,
       playlistId: playlist.id
@@ -1874,6 +1991,13 @@ final class PlaybackController {
       DiagnosticLog.shared.log("playback", "Resume title=\(currentItem?.title ?? "unknown") at=\(currentTime)")
       isPlaying = true
       historyTracker.songResumed()
+      RemoteLibraryService.shared.playbackProgress(
+        songID: currentItem?.id,
+        position: currentTime,
+        duration: duration,
+        isPaused: false,
+        force: true
+      )
       refreshAnimatedArtworkForCurrentSong()
       updateNowPlaying()
     }
@@ -1914,6 +2038,13 @@ final class PlaybackController {
     isPlaying = false
     DiagnosticLog.shared.log("playback", "Pause title=\(currentItem?.title ?? "unknown") at=\(currentTime)")
     historyTracker.songPaused()
+    RemoteLibraryService.shared.playbackProgress(
+      songID: currentItem?.id,
+      position: currentTime,
+      duration: duration,
+      isPaused: true,
+      force: true
+    )
     updateNowPlaying()
   }
 
@@ -1923,6 +2054,13 @@ final class PlaybackController {
     player?.pause()
     isPlaying = false
     historyTracker.songPaused()
+    RemoteLibraryService.shared.playbackProgress(
+      songID: currentItem?.id,
+      position: currentTime,
+      duration: duration,
+      isPaused: true,
+      force: true
+    )
 
     if resetPosition {
       seek(to: 0)
@@ -2796,6 +2934,7 @@ final class PlaybackController {
           self.player?.automaticallyWaitsToMinimizeStalling = false
           self.applyRepeatModeToPlayer()
           self.applyEQPresetForPlayback()
+          self.attachAudioProcessingToCurrentItemIfNeeded()
           self.applyPlayerOutputVolume()
           item.seek(
             to: CMTime(
@@ -2915,6 +3054,7 @@ final class PlaybackController {
     currentQueueIndex = nextIndex
     currentItem = nextSong
     isPlaying = true
+    attachAudioProcessingToCurrentItemIfNeeded()
 
     prepareNextItem()
     updateUIForNewItem()
@@ -2952,9 +3092,10 @@ final class PlaybackController {
       lyricTimeObserver = nil
     }
 
-    // Word timing is isolated from the general playback model so this higher
-    // cadence only refreshes the active karaoke line.
-    let lyricInterval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+    // A 10 Hz sample is precise enough to select the active line. The karaoke
+    // timeline interpolates between these anchors, so word highlighting remains
+    // smooth without waking the main actor 30 times every second.
+    let lyricInterval = CMTime(seconds: 0.1, preferredTimescale: 600)
     let lyricObserver = player.addPeriodicTimeObserver(
       forInterval: lyricInterval,
       queue: .main
@@ -2998,6 +3139,7 @@ final class PlaybackController {
           self.reconcileCurrentPlayerItem(activeItem, source: "periodic clock")
         }
         self.currentTime = time.seconds
+        self.remoteLibraryPlaybackProgress()
 
         // Keep duration tied to whatever is actually playing. A gapless
         // hand-off reuses an item that became ready while it was still
@@ -3049,5 +3191,14 @@ final class PlaybackController {
       }
     }
     timeObserver = (observer, player)
+  }
+
+  private func remoteLibraryPlaybackProgress() {
+    RemoteLibraryService.shared.playbackProgress(
+      songID: currentItem?.id,
+      position: currentTime,
+      duration: duration,
+      isPaused: !isPlaying
+    )
   }
 }

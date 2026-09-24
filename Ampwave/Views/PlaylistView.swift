@@ -28,6 +28,9 @@ struct PlaylistView: View {
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
   private var library: SongLibrary { SongLibrary.shared }
+  private var visiblePlaylistSongs: [LibrarySong] {
+    library.visibleSongs(from: playlist.orderedSongs)
+  }
 
   private var playlistExportStamp: String {
     "\(playlist.id.uuidString)-\(playlist.songCount)"
@@ -47,7 +50,7 @@ struct PlaylistView: View {
 
       songSection
 
-      if !playlist.orderedSongs.isEmpty {
+      if !visiblePlaylistSongs.isEmpty {
         sonicRecommendationSection
       }
     }
@@ -91,7 +94,7 @@ struct PlaylistView: View {
       Text("This action cannot be undone.")
     }
     .task(id: playlistExportStamp) {
-      guard !playlist.orderedSongs.isEmpty else {
+      guard !visiblePlaylistSongs.isEmpty else {
         playlistJSONShareURL = nil
         playlistM3UShareURL = nil
         return
@@ -164,7 +167,7 @@ struct PlaylistView: View {
 
   @MainActor
   private func loadSonicRecommendations(force: Bool = false) async {
-    guard !playlist.orderedSongs.isEmpty else {
+    guard !visiblePlaylistSongs.isEmpty else {
       sonicRecommendations = []
       return
     }
@@ -197,7 +200,7 @@ struct PlaylistView: View {
 
   @ViewBuilder
   private var songSection: some View {
-    if playlist.orderedSongs.isEmpty {
+    if visiblePlaylistSongs.isEmpty {
       emptySongsSection
     } else if isSmartPlaylist {
       smartSongListSection
@@ -208,12 +211,14 @@ struct PlaylistView: View {
 
   private var smartSongListSection: some View {
     Section {
-      ForEach(playlist.orderedSongs) { song in
+      ForEach(visiblePlaylistSongs) { song in
         SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
           .contentShape(Rectangle())
           .onTapGesture {
-            let idx = playlist.orderedSongs.firstIndex(where: { $0.id == song.id }) ?? 0
-            playback.playPlaylist(playlist, startingAt: idx)
+            let idx = visiblePlaylistSongs.firstIndex(where: { $0.id == song.id }) ?? 0
+            playback.playQueue(
+              visiblePlaylistSongs, startingAt: idx, from: .playlist, playlistId: playlist.id
+            )
           }
       }
     }
@@ -222,12 +227,14 @@ struct PlaylistView: View {
 
   private var editableSongListSection: some View {
     Section {
-      ForEach(playlist.orderedSongs) { song in
+      ForEach(visiblePlaylistSongs) { song in
         SongRow(song: song, isCurrent: playback.currentItem?.id == song.id)
           .contentShape(Rectangle())
           .onTapGesture {
-            let idx = playlist.orderedSongs.firstIndex(where: { $0.id == song.id }) ?? 0
-            playback.playPlaylist(playlist, startingAt: idx)
+            let idx = visiblePlaylistSongs.firstIndex(where: { $0.id == song.id }) ?? 0
+            playback.playQueue(
+              visiblePlaylistSongs, startingAt: idx, from: .playlist, playlistId: playlist.id
+            )
           }
       }
       .onDelete(perform: deleteSongs)
@@ -288,7 +295,7 @@ struct PlaylistView: View {
 
     shareLinks
 
-    if !playlist.orderedSongs.isEmpty {
+    if !visiblePlaylistSongs.isEmpty {
       Button { showingCreateCapsuleSheet = true } label: {
         Label {
           Text("Create Capsule")
@@ -320,18 +327,6 @@ struct PlaylistView: View {
       }
     }
 
-    #if os(iOS)
-      Button {
-        WatchSyncService.shared.updateSyncStatus(
-          for: playlist, shouldSync: !playlist.shouldSyncToWatch)
-      } label: {
-        Label(
-          playlist.shouldSyncToWatch ? "Remove from Watch" : "Sync to Watch",
-          systemImage: playlist.shouldSyncToWatch ? "applewatch.slash" : "applewatch"
-        )
-      }
-    #endif
-
     if playlist.playlistType == .custom || playlist.playlistType == .smart {
       Divider()
       Button(role: .destructive) { showingDeleteConfirmation = true } label: {
@@ -342,7 +337,7 @@ struct PlaylistView: View {
 
   @ViewBuilder
   private var shareLinks: some View {
-    if !playlist.orderedSongs.isEmpty, let url = playlistJSONShareURL {
+    if !visiblePlaylistSongs.isEmpty, let url = playlistJSONShareURL {
       ShareLink(
         item: url,
         subject: Text(playlist.name),
@@ -354,7 +349,7 @@ struct PlaylistView: View {
         Label("Share JSON Playlist…", systemImage: "square.and.arrow.up")
       }
     }
-    if !playlist.orderedSongs.isEmpty, let url = playlistM3UShareURL {
+    if !visiblePlaylistSongs.isEmpty, let url = playlistM3UShareURL {
       ShareLink(
         item: url,
         subject: Text(playlist.name),
@@ -397,27 +392,30 @@ struct PlaylistView: View {
 
         HStack(spacing: 8) {
           Text(
-            "\(playlist.songCount) song\(playlist.songCount == 1 ? "" : "s")"
+            "\(visiblePlaylistSongs.count) song\(visiblePlaylistSongs.count == 1 ? "" : "s")"
           )
           .font(.system(size: 14))
           .foregroundStyle(.secondary)
 
-          if playlist.totalDuration > 0 {
+          let visibleDuration = visiblePlaylistSongs.reduce(0) { $0 + $1.duration }
+          if visibleDuration > 0 {
             Text("•")
               .font(.system(size: 14))
               .foregroundStyle(.secondary)
 
-            Text(formatDuration(playlist.totalDuration))
+            Text(formatDuration(visibleDuration))
               .font(.system(size: 14))
               .foregroundStyle(.secondary)
           }
         }
       }
 
-      if !playlist.orderedSongs.isEmpty {
+      if !visiblePlaylistSongs.isEmpty {
         HStack(spacing: 16) {
           Button {
-            playback.playPlaylist(playlist)
+            playback.playQueue(
+              visiblePlaylistSongs, from: .playlist, playlistId: playlist.id
+            )
           } label: {
             HStack {
               Image(systemName: "play.fill")
@@ -434,11 +432,13 @@ struct PlaylistView: View {
           Button {
             playback.shuffleMode = .on
             let randomStartIndex = Int.random(
-              in: 0..<playlist.orderedSongs.count
+              in: 0..<visiblePlaylistSongs.count
             )
-            playback.playPlaylist(
-              playlist,
-              startingAt: randomStartIndex
+            playback.playQueue(
+              visiblePlaylistSongs,
+              startingAt: randomStartIndex,
+              from: .playlist,
+              playlistId: playlist.id
             )
           } label: {
             HStack {
@@ -465,10 +465,15 @@ struct PlaylistView: View {
   }
 
   private func deleteSongs(at offsets: IndexSet) {
-    playlistManager.removeSongs(at: offsets, from: playlist)
+    for song in offsets.compactMap({ index in
+      visiblePlaylistSongs.indices.contains(index) ? visiblePlaylistSongs[index] : nil
+    }) {
+      playlistManager.removeSong(song, from: playlist)
+    }
   }
 
   private func moveSongs(from source: IndexSet, to destination: Int) {
+    guard visiblePlaylistSongs.count == playlist.orderedSongs.count else { return }
     playlistManager.moveSongs(in: playlist, from: source, to: destination)
   }
 
@@ -642,7 +647,10 @@ struct RadioStationView: View {
   }
 
   private func refreshVisibleSongs() {
-    let liveSongs = Dictionary(uniqueKeysWithValues: library.songs.map { ($0.id, $0) })
+    let liveSongs = Dictionary(
+      library.songs.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
     visibleSongs = stationSongIDs.compactMap { liveSongs[$0] }
   }
 }

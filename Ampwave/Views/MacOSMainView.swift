@@ -85,12 +85,14 @@ struct MacOSMainView: View {
         if historyTracker.modelContext == nil { historyTracker.setModelContext(modelContext) }
         if lyricsService.modelContext == nil { lyricsService.setModelContext(modelContext) }
         if metadataService.modelContext == nil { metadataService.setModelContext(modelContext) }
+        RemoteLibraryService.shared.setModelContext(modelContext)
         if recommendationEngine.modelContext == nil {
           recommendationEngine.setModelContext(modelContext)
         }
       }
 
       await library.loadSongs()
+      await RemoteLibraryService.shared.refreshAll(syncIfNeeded: true)
 
       await MainActor.run {
         playback.setModelContext(modelContext)

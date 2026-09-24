@@ -20,6 +20,11 @@ extension Notification.Name {
 final class LyricsService {
   static let shared = LyricsService()
 
+  /// App-target bridge for lyrics exposed by remote music servers. Keeping it
+  /// injectable lets this shared service continue to build for watch/widgets.
+  @ObservationIgnored
+  static var remoteLyricsFetcher: ((LibrarySong) async -> String?)?
+
   var modelContext: ModelContext?
   private let lrclibBaseURL = "https://lrclib.net/api"
   private let lyricsOvhBaseURL = "https://api.lyrics.ovh/v1"
@@ -184,6 +189,19 @@ final class LyricsService {
         let sanitized = LRCParser.plainText(from: embedded)
         if !sanitized.isEmpty { plain = sanitized }
       }
+    }
+
+    if song.isRemote, lines.isEmpty, plain?.isEmpty ?? true,
+      let remoteLyrics = await Self.remoteLyricsFetcher?(song), !remoteLyrics.isEmpty
+    {
+      let remoteLines = LRCParser.parse(remoteLyrics)
+      if remoteLines.isEmpty {
+        let sanitized = LRCParser.plainText(from: remoteLyrics)
+        if !sanitized.isEmpty { plain = sanitized }
+      } else {
+        lines = remoteLines
+      }
+      source = .local
     }
 
     // Nothing left for a provider to add — don't go online at all. When word

@@ -11,10 +11,15 @@ struct AlbumView: View {
   let album: Album
 
   @State private var showingAddToPlaylist = false
+  @AppStorage(LibraryArtworkShape.storageKey) private var artworkShapeRaw =
+    LibraryArtworkShape.roundedRectangle.rawValue
 
   private var playback: PlaybackController { PlaybackController.shared }
   private var playlistManager: PlaylistManager { PlaylistManager.shared }
   private var library: SongLibrary { SongLibrary.shared }
+  private var artworkShape: LibraryArtworkShape {
+    LibraryArtworkShape(rawValue: artworkShapeRaw) ?? .roundedRectangle
+  }
 
   /// Library-wide work already reports through `IndexingStatusView`; this just
   /// keeps the menu item from queuing a second pass on top of it.
@@ -26,7 +31,8 @@ struct AlbumView: View {
   }
 
   var sortedSongs: [LibrarySong] {
-    album.songs.sorted(by: LibrarySong.albumTrackOrder)
+    library.visibleSongs(from: album.songs)
+      .sorted(by: LibrarySong.albumTrackOrder)
   }
 
   /// Tracks split into discs, in order. A single-disc album yields one group
@@ -161,9 +167,9 @@ struct AlbumView: View {
     VStack(spacing: 16) {
       AlbumArtworkView(
         artworkPath: album.artworkPath,
-        size: 220
+        size: 220,
+        cornerRadius: artworkShape == .circle ? 110 : 16
       )
-      .clipShape(RoundedRectangle(cornerRadius: 16))
       .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
 
       VStack(spacing: 4) {

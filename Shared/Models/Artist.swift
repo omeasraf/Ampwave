@@ -67,14 +67,16 @@ final class Artist: Identifiable, Hashable {
   func updateStatistics(songs: [LibrarySong], albums: [Album]) {
     // Direct filter without async call
     let artistSongs = songs.filter { song in
-      let songArtists =
-        song.artists.isEmpty ? [song.artist] : song.artists
+      let songArtists = ArtistParser.normalizedArtists(song.artists, fallback: song.artist)
       return songArtists.contains { $0.lowercased() == name.lowercased() }
     }
     self.songCount = artistSongs.count
     let normalizedName = name.lowercased()
     self.albumCount =
-      albums.filter { ($0.artist ?? "").lowercased() == normalizedName }
+      albums.filter {
+        ArtistParser.parseArtists(from: $0.artist ?? "")
+          .contains { $0.lowercased() == normalizedName }
+      }
       .count
     self.lastUpdatedDate = Date()
   }

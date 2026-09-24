@@ -135,6 +135,7 @@ final class LibraryMonitorService {
   private let managedFolderStampKey = "com.ampwave.liveLibraryManagedFolderStamp"
   nonisolated private static let audioExtensions: Set<String> = [
     "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "aiff", "wma", "alac", "m4b",
+    "ac3", "eac3", "caf",
   ]
 
   private var registrations: [PresenterRegistration] = []

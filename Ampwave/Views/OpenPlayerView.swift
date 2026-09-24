@@ -29,6 +29,9 @@ struct OpenPlayerView: View {
   @State private var showingSleepTimerOptions = false
   @State private var sonicRecommendations: [LibrarySong] = []
   @State private var isLoadingSonicRecommendations = false
+  @State private var isAnalyzingMusic = false
+  @State private var showingMusicAnalysisResult = false
+  @State private var musicAnalysisMessage = ""
   @State private var sonicRecommendationSeedID: UUID?
   @State private var artworkColor: Color = .clear
   @State private var rawArtworkColor: Color = .clear
@@ -283,6 +286,29 @@ struct OpenPlayerView: View {
                   systemImage: "star"
                 )
               }
+
+                if MusicUnderstandingAnalyzer.isUserInitiatedAvailable,
+                  !song.isRemote || song.remoteIsDownloaded
+                {
+                  Button {
+                    isAnalyzingMusic = true
+                    Task {
+                      let succeeded = await SonicRecommendationService.shared
+                        .analyzeUserInitiated(song)
+                      musicAnalysisMessage = succeeded
+                        ? "Instrument activity is ready for this song."
+                        : "Analysis could not finish. Try again while the song is available locally."
+                      isAnalyzingMusic = false
+                      showingMusicAnalysisResult = true
+                    }
+                  } label: {
+                    Label(
+                      isAnalyzingMusic ? "Analyzing Music…" : "Analyze Music",
+                      systemImage: "waveform.path"
+                    )
+                  }
+                  .disabled(isAnalyzingMusic)
+                }
             }
           } label: {
             Image(systemName: "ellipsis")
@@ -343,6 +369,11 @@ struct OpenPlayerView: View {
         Button("Cancel", role: .cancel) {}
       } message: {
         Text(sleepTimer.isActive ? sleepTimer.statusText : "Choose when playback should stop.")
+      }
+      .alert("Music Understanding", isPresented: $showingMusicAnalysisResult) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text(musicAnalysisMessage)
       }
     }
     #if os(iOS)
@@ -501,30 +532,44 @@ struct OpenPlayerView: View {
             color: .primary
           )
 
-          if let song = playback.currentItem,
-            let artist = SongLibrary.shared.getArtist(named: song.artist)
-          {
-            // Collapses the player first rather than pushing inside its own
-            // cover, which would hide the player and mini player with no way
-            // back to playback.
-            Button {
-              AppNavigator.shared.show(.artist(artist), collapsingPlayer: true)
-            } label: {
-              Text(song.artist)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            }
-            .buttonStyle(.plain)
-          } else {
-            Text(playback.currentItem?.artist ?? "")
+          if let song = playback.currentItem {
+            let names = ArtistParser.normalizedArtists(song.artists, fallback: song.artist)
+            ScrollView(.horizontal, showsIndicators: false) {
+              HStack(spacing: 0) {
+                ForEach(Array(names.enumerated()), id: \.offset) { index, name in
+                  if index > 0 {
+                    Text(", ").foregroundStyle(.secondary)
+                  }
+                  if let artist = SongLibrary.shared.artists.first(where: {
+                    $0.name.caseInsensitiveCompare(name) == .orderedSame
+                  }) {
+                    Button {
+                      AppNavigator.shared.show(.artist(artist), collapsingPlayer: true)
+                    } label: {
+                      Text(name).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open artist \(name)")
+                  } else {
+                    Text(name).foregroundStyle(.secondary)
+                  }
+                }
+              }
               .font(.system(size: 18, weight: .medium))
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
+              .fixedSize(horizontal: true, vertical: false)
+            }
           }
 
           if let song = playback.currentItem {
-            technicalBadge(for: song)
+            HStack(spacing: 7) {
+              if song.isExplicit {
+                ExplicitBadge(size: 15)
+              }
+              if song.isAIGenerated {
+                AIGeneratedBadge(size: 14)
+              }
+              technicalBadge(for: song)
+            }
           }
         }
 
@@ -585,6 +630,14 @@ struct OpenPlayerView: View {
       showingTechnicalInfo = true
     } label: {
       HStack(spacing: 4) {
+        if let channels = song.channels, channels > 2 {
+          Text("\(channels)ch")
+            .font(.system(size: 10, weight: .bold))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(.secondary.opacity(0.2))
+            .cornerRadius(4)
+        }
         if let format = song.format {
           Text(format)
             .font(.system(size: 10, weight: .bold))
@@ -1143,7 +1196,7 @@ struct TechnicalInfoSheet: View {
               label: "Channels",
               value: channels == 2
                 ? "Stereo"
-                : (channels == 1 ? "Mono" : "\(channels)")
+                : (channels == 1 ? "Mono" : "\(channels) channels")
             )
           }
           InfoRow(

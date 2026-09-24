@@ -14,6 +14,8 @@
 		48EE978190F3189FCE41911E /* UnicodeCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB099B1137DA8F182593757 /* UnicodeCleanup.swift */; };
 		5A6FDD55062D72E905CF85A2 /* ReleaseReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAD57F75BABB6B807C9218D /* ReleaseReadinessTests.swift */; };
 		648D6563B066201A8F4F9B0A /* MetadataConfidenceScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C26CE288281572E8DECF5F /* MetadataConfidenceScorer.swift */; };
+		A9F000012F8B458F00FF14A5 /* WatchCatalogSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9F000032F8B458F00FF14A5 /* WatchCatalogSnapshot.swift */; };
+		A9F000022F8B458F00FF14A5 /* WatchCatalogSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9F000032F8B458F00FF14A5 /* WatchCatalogSnapshot.swift */; };
 		AC1820DC60D8B71ABD95305C /* FilenameParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60CDBA89F93E38F963A7E75B /* FilenameParser.swift */; };
 		B40A39302F411B23005DD316 /* MobileVLCKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40A392F2F411B23005DD316 /* MobileVLCKit.xcframework */; platformFilter = ios; };
 		B40A39322F411B23005DD316 /* MobileVLCKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B40A392F2F411B23005DD316 /* MobileVLCKit.xcframework */; platformFilter = ios; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -230,6 +232,7 @@
 		4CAD57F75BABB6B807C9218D /* ReleaseReadinessTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReleaseReadinessTests.swift; sourceTree = "<group>"; };
 		60CDBA89F93E38F963A7E75B /* FilenameParser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FilenameParser.swift; sourceTree = "<group>"; };
 		9EB099B1137DA8F182593757 /* UnicodeCleanup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = UnicodeCleanup.swift; sourceTree = "<group>"; };
+		A9F000032F8B458F00FF14A5 /* WatchCatalogSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchCatalogSnapshot.swift; sourceTree = "<group>"; };
 		B40A39192F411B23005DD316 /* Ampwave.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ampwave.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B40A392F2F411B23005DD316 /* MobileVLCKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = MobileVLCKit.xcframework; sourceTree = "<group>"; };
 		B40A39342F411B23005DD316 /* VLCKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = VLCKit.xcframework; sourceTree = "<group>"; };
@@ -458,6 +461,7 @@
 				B46195842F8B458F00FF14A5 /* NetworkStatus.swift */,
 				B46195852F8B458F00FF14A5 /* PlaybackState.swift */,
 				B46195862F8B458F00FF14A5 /* Playlist.swift */,
+				A9F000032F8B458F00FF14A5 /* WatchCatalogSnapshot.swift */,
 				B46195872F8B458F00FF14A5 /* PlaylistSortOrder.swift */,
 				B46195882F8B458F00FF14A5 /* PlaylistType.swift */,
 				B46195892F8B458F00FF14A5 /* PlaySource.swift */,
@@ -695,6 +699,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A9F000012F8B458F00FF14A5 /* WatchCatalogSnapshot.swift in Sources */,
 				B461956B2F8B3F8D00FF14A5 /* SharedPlaybackInfo.swift in Sources */,
 				B461950C2F8B3A8900FF14A5 /* DataExtensions.swift in Sources */,
 				B46195F42F8B458F00FF14A5 /* LimitSort.swift in Sources */,
@@ -751,6 +756,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A9F000022F8B458F00FF14A5 /* WatchCatalogSnapshot.swift in Sources */,
 				B46195CA2F8B458F00FF14A5 /* LimitSort.swift in Sources */,
 				B46195CB2F8B458F00FF14A5 /* FetchedMetadata.swift in Sources */,
 				B46195CC2F8B458F00FF14A5 /* RuleOperation.swift in Sources */,
@@ -1023,7 +1029,7 @@
 				CODE_SIGN_ENTITLEMENTS = Ampwave/Ampwave.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readonly;
@@ -1089,7 +1095,7 @@
 				CODE_SIGN_ENTITLEMENTS = Ampwave/Ampwave.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readonly;
@@ -1156,7 +1162,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Ampwave;
@@ -1191,7 +1197,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Ampwave;
@@ -1227,7 +1233,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1273,7 +1279,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;

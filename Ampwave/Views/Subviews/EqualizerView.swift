@@ -151,6 +151,9 @@ private struct EQHandlesView: View {
                                 gains[i] = raw
                                 VocalIsolator.shared.setEQGain(raw, atBand: i)
                                 EQManager.shared.currentPresetName = "Custom"
+                                if !EQManager.shared.isEnabled {
+                                    EQManager.shared.isEnabled = true
+                                }
                             }
                             .onEnded { _ in
                                 withAnimation(.spring(response: 0.25)) { draggingBand = nil }
@@ -229,6 +232,7 @@ private struct DBScaleView: View {
 struct EqualizerView: View {
     @Environment(ThemeManager.self) private var themeManager
     @Bindable private var eq: EQManager = .shared
+    @Bindable private var playback: PlaybackController = .shared
     @State private var draggingBand: Int? = nil
     @State private var isSavingPreset = false
     @State private var newPresetName = ""
@@ -239,6 +243,14 @@ struct EqualizerView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
                 .padding(.bottom, 14)
+
+            if (playback.currentItem?.channels ?? 2) > 2 {
+                Label("EQ is bypassed for surround tracks to prevent audio dropouts.", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+            }
 
             presetScroll
                 .padding(.bottom, 14)

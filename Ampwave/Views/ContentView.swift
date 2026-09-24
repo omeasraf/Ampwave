@@ -115,6 +115,7 @@ struct ContentView: View {
     UserPreferences.sharedContextForNetworkCheck = modelContext
     LastFMScrobbler.shared.setModelContext(modelContext)
     WatchSyncService.shared.setModelContext(modelContext)
+    RemoteLibraryService.shared.setModelContext(modelContext)
     _ = UserPreferences.getOrCreate(in: modelContext)
     WidgetSyncService.shared.refreshTheme()
 
@@ -128,6 +129,7 @@ struct ContentView: View {
       performMaintenance: false,
       includeCollections: false
     )
+    WatchSyncService.shared.songLibraryDidLoad()
     PlaybackController.shared.setModelContext(modelContext)
   }
 
@@ -139,6 +141,9 @@ struct ContentView: View {
       guard !Task.isCancelled, generation == SongLibrary.shared.importGeneration,
         !SongLibrary.shared.isResetting else { return }
       await SongLibrary.shared.finishDeferredLoading()
+      guard generation == SongLibrary.shared.importGeneration,
+        !SongLibrary.shared.isResetting else { return }
+      await RemoteLibraryService.shared.refreshAll(syncIfNeeded: true)
       guard generation == SongLibrary.shared.importGeneration,
         !SongLibrary.shared.isResetting else { return }
       LibraryMonitorService.shared.start()

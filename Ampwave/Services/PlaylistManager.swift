@@ -56,9 +56,11 @@ final class PlaylistManager {
       // Smart playlists are snapshots of the library, so they go stale as songs
       // are imported or removed. Re-evaluate them once the library is loaded.
       refreshAllSmartPlaylists()
+      WatchSyncService.shared.playlistLibraryDidLoad()
     } catch {
       print("[DEBUG] PlaylistManager.loadPlaylists: Error: \(error)")
       playlists = []
+      WatchSyncService.shared.playlistLibraryDidLoad()
     }
   }
 
@@ -118,6 +120,7 @@ final class PlaylistManager {
       try modelContext.save()
       playlists.append(playlist)
       sortPlaylists()
+      RemoteLibraryService.shared.requestDownload(for: songs)
       return playlist
     } catch {
       print("Failed to create playlist: \(error)")
@@ -187,6 +190,7 @@ final class PlaylistManager {
     playlist.addSong(song)
     save()
     sortPlaylists()
+    RemoteLibraryService.shared.requestDownload(for: song)
   }
 
   func addSongs(_ songs: [LibrarySong], to playlist: Playlist) {
@@ -195,6 +199,7 @@ final class PlaylistManager {
     }
     save()
     sortPlaylists()
+    RemoteLibraryService.shared.requestDownload(for: songs)
   }
 
   /// Swaps every occurrence of `song` for `replacement` across all playlists,
@@ -268,6 +273,7 @@ final class PlaylistManager {
     LastFMScrobbler.shared.setLoved(isLiked, song: song)
 
     save()
+    if isLiked { RemoteLibraryService.shared.requestDownload(for: song) }
   }
 
   func setDisliked(_ isDisliked: Bool, for song: LibrarySong) {
@@ -306,6 +312,7 @@ final class PlaylistManager {
     }
     save()
     sortPlaylists()
+    RemoteLibraryService.shared.requestDownload(for: album.songs)
   }
 
   // MARK: - Add Artist to Playlist
@@ -319,6 +326,7 @@ final class PlaylistManager {
     }
     save()
     sortPlaylists()
+    RemoteLibraryService.shared.requestDownload(for: artistSongs)
   }
 
   // MARK: - Pin/Unpin Playlist
@@ -379,6 +387,7 @@ final class PlaylistManager {
     playlist.touch()
 
     save()
+    RemoteLibraryService.shared.requestDownload(for: matchingSongs)
   }
 
   /// Re-evaluates every smart playlist. Call after the library changes, so
@@ -395,6 +404,7 @@ final class PlaylistManager {
       let matching = SmartPlaylistEvaluator.evaluate(songs: songs, rules: rules, stats: stats)
       playlist.songs = matching
       playlist.songOrder = matching.map { $0.id }
+      RemoteLibraryService.shared.requestDownload(for: matching)
     }
     save()
   }
