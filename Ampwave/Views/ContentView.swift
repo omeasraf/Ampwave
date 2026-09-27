@@ -16,6 +16,8 @@ struct ContentView: View {
   @State private var isPlayerExpanded = false
   @State private var isShowingLaunchSplash = true
   @State private var servicesInitialized = false
+  @State private var isPreparingUnlockedApp = false
+  @State private var purchases = EntitlementManager.shared
 
   private var widgetThemeSignature: String {
     let preferences = themeManager.userPreferences
@@ -34,13 +36,16 @@ struct ContentView: View {
   var body: some View {
     ZStack {
       #if os(iOS)
-        if isShowingLaunchSplash {
+        if isShowingLaunchSplash || (purchases.access.isUnlocked && !servicesInitialized) {
           LaunchSplashView()
             .transition(.opacity)
             .zIndex(1)
             .allowsHitTesting(true)
-        } else {
+        } else if purchases.access.isUnlocked {
           appContent
+            .transition(.opacity)
+        } else {
+          AccessGateView()
             .transition(.opacity)
         }
       #else
@@ -59,17 +64,23 @@ struct ContentView: View {
     .onChange(of: widgetThemeSignature) { _, _ in
       WidgetSyncService.shared.refreshTheme()
     }
+    .onChange(of: purchases.access.isUnlocked) { _, isUnlocked in
+      if isUnlocked {
+        Task { await prepareUnlockedApp() }
+      } else {
+        PlaybackController.shared.pause()
+        SiriPlaybackRouter.shared.stopExternalPlayback()
+        isPlayerExpanded = false
+      }
+    }
     #if os(iOS)
       .task {
-        guard isShowingLaunchSplash else { return }
-        let delay: UInt64 = reduceMotion ? 850_000_000 : 1_850_000_000
-        async let minimumSplashTime: Void = waitForSplashDuration(delay)
-        await initializeServices()
-        await minimumSplashTime
-        withAnimation(.easeInOut(duration: reduceMotion ? 0.15 : 0.42)) {
-          isShowingLaunchSplash = false
+        await purchases.refresh()
+        if purchases.access.isUnlocked {
+          await prepareUnlockedApp()
+        } else {
+          withAnimation(.easeInOut(duration: 0.2)) { isShowingLaunchSplash = false }
         }
-        startDeferredServices()
       }
     #endif
   }
@@ -92,6 +103,22 @@ struct ContentView: View {
 
   private func waitForSplashDuration(_ nanoseconds: UInt64) async {
     try? await Task.sleep(nanoseconds: nanoseconds)
+  }
+
+  private func prepareUnlockedApp() async {
+    guard !isPreparingUnlockedApp, purchases.access.isUnlocked else { return }
+    isPreparingUnlockedApp = true
+    defer { isPreparingUnlockedApp = false }
+    isShowingLaunchSplash = true
+    let delay: UInt64 = reduceMotion ? 850_000_000 : 1_850_000_000
+    async let minimumSplashTime: Void = waitForSplashDuration(delay)
+    if !servicesInitialized { await initializeServices() }
+    await minimumSplashTime
+    guard purchases.access.isUnlocked else { return }
+    withAnimation(.easeInOut(duration: reduceMotion ? 0.15 : 0.42)) {
+      isShowingLaunchSplash = false
+    }
+    startDeferredServices()
   }
 
   /// Loads the saved library before revealing the app. Keeping

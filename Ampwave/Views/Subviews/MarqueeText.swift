@@ -8,45 +8,31 @@ struct MarqueeText: View {
   @State private var offset: CGFloat = 0
   @State private var textWidth: CGFloat = 0
   @State private var containerWidth: CGFloat = 0
-  @State private var isAnimating = false
-
-  private let spacing: CGFloat = 40
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     GeometryReader { geometry in
       ZStack(alignment: .leading) {
         if textWidth > geometry.size.width {
-          // Animated continuous loop
-          HStack(spacing: spacing) {
-            textView
-            textView
-          }
+          textView
           .offset(x: offset)
-          .onAppear {
-            containerWidth = geometry.size.width
-            startAnimation()
-          }
         } else {
-          // Static text
           textView
             .frame(maxWidth: .infinity, alignment: .leading)
-            .onAppear {
-              containerWidth = geometry.size.width
-              stopAnimation()
-            }
         }
       }
       .onAppear {
         containerWidth = geometry.size.width
       }
-      .onChange(of: text) { _, _ in
-        resetAnimation()
+      .onChange(of: geometry.size.width) { _, width in
+        containerWidth = width
       }
     }
-    // Recreate marquee measurement/animation state when the title changes.
-    .id(text)
     .frame(height: 38)
     .clipped()
+    .task(id: animationIdentity) {
+      await animateTitle()
+    }
     .mask {
       if textWidth > containerWidth {
         HStack(spacing: 0) {
@@ -98,32 +84,34 @@ struct MarqueeText: View {
       )
   }
 
-  private func stopAnimation() {
-    isAnimating = false
-    offset = 0
+  private var animationIdentity: String {
+    "\(text)|\(Int(textWidth.rounded()))|\(Int(containerWidth.rounded()))|\(reduceMotion)"
   }
 
-  private func resetAnimation() {
-    isAnimating = false
+  @MainActor
+  private func animateTitle() async {
     withAnimation(.none) {
       offset = 0
     }
-    // Brief delay to allow textWidth to update and state to settle
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-      if textWidth > containerWidth {
-        startAnimation()
+    let overflow = textWidth - containerWidth
+    guard overflow > 1, !reduceMotion else { return }
+
+    let travelDuration = max(2, Double(overflow) / 30)
+    do {
+      try await Task.sleep(for: .seconds(1.25))
+      while !Task.isCancelled {
+        withAnimation(.linear(duration: travelDuration)) {
+          offset = -overflow
+        }
+        try await Task.sleep(for: .seconds(travelDuration + 1.25))
+        withAnimation(.linear(duration: travelDuration)) {
+          offset = 0
+        }
+        try await Task.sleep(for: .seconds(travelDuration + 1.25))
       }
-    }
-  }
-
-  private func startAnimation() {
-    guard textWidth > containerWidth, !isAnimating else { return }
-    isAnimating = true
-
-    let duration = Double(textWidth + spacing) / 30.0
-
-    withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
-      offset = -(textWidth + spacing)
+    } catch {
+      // A new title or layout cancels this task. Its replacement always starts
+      // from the leading edge, avoiding stale end-of-title offsets.
     }
   }
 }

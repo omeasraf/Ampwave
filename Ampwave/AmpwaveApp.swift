@@ -165,10 +165,13 @@ struct AmpwaveApp: App {
           switch phase {
           case .active:
             DiagnosticLog.shared.log("lifecycle", "Scene became active")
+            Task { await EntitlementManager.shared.refresh() }
             SonicRecommendationService.shared.applicationDidBecomeActive()
             PlaybackController.shared.applicationDidBecomeActive()
             LibraryMonitorService.shared.applicationDidBecomeActive()
-            Task { await RemoteLibraryService.shared.refreshAll(syncIfNeeded: false) }
+            if EntitlementManager.shared.access.isUnlocked {
+              Task { await RemoteLibraryService.shared.refreshAll(syncIfNeeded: false) }
+            }
           case .background:
             DiagnosticLog.shared.log(
               "lifecycle",
@@ -213,6 +216,7 @@ struct AmpwaveApp: App {
   }
 
   private func handleOpenURL(_ url: URL) {
+    guard EntitlementManager.shared.canUseApp else { return }
     guard url.pathExtension.lowercased() == CapsulePackage.fileExtension else {
       AmpwaveURLRouter.handle(url)
       return

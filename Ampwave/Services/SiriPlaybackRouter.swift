@@ -14,6 +14,7 @@ enum SiriPlaybackRouterError: LocalizedError {
   case authorizationDenied
   case noPlayableMatch
   case musicSubscriptionUnavailable
+  case ampwaveAccessRequired
 
   var errorDescription: String? {
     switch self {
@@ -23,6 +24,8 @@ enum SiriPlaybackRouterError: LocalizedError {
       return "Ampwave couldn't find a playable match for that request."
     case .musicSubscriptionUnavailable:
       return "Ampwave found a catalog match, but Apple Music playback isn't available on this account."
+    case .ampwaveAccessRequired:
+      return "Open Ampwave to restore or purchase access before playing music."
     }
   }
 }
@@ -49,7 +52,14 @@ final class SiriPlaybackRouter {
 
   private init() {}
 
+  func stopExternalPlayback() {
+    musicPlayer.stop()
+  }
+
   func playSong(songTitle: String, artistName: String? = nil) async throws -> PlaybackResolution {
+    guard EntitlementManager.shared.canUseApp else {
+      throw SiriPlaybackRouterError.ampwaveAccessRequired
+    }
     let title = songTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     let artist = artistName?.trimmingCharacters(in: .whitespacesAndNewlines)
 

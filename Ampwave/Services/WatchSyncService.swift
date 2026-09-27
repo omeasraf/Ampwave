@@ -43,6 +43,7 @@ final class WatchSyncService: NSObject {
   private var lastSentCatalog: WatchCatalogSnapshot?
   private var saveObserver: NSObjectProtocol?
   private var libraryObserver: NSObjectProtocol?
+  private var accessObserver: NSObjectProtocol?
 
   #if os(iOS)
     private lazy var transport = WatchSyncTransport { [weak self] in
@@ -70,6 +71,11 @@ final class WatchSyncService: NSObject {
       forName: .songLibraryDidChange, object: SongLibrary.shared, queue: nil
     ) { [weak self] _ in
       Task { @MainActor [weak self] in self?.scheduleCatalogRefresh() }
+    }
+    accessObserver = NotificationCenter.default.addObserver(
+      forName: .ampwaveAccessDidChange, object: nil, queue: nil
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in self?.scheduleCatalogRefresh(force: true) }
     }
   }
 
@@ -110,9 +116,14 @@ final class WatchSyncService: NSObject {
   ) {
     #if os(iOS)
       guard !isLibraryResetting else { return }
+      let unlocked = EntitlementManager.shared.access.isUnlocked
       transport.sendPlayback(
-        songID: song?.id.uuidString, title: song?.title, artist: song?.artist,
-        isPlaying: isPlaying, currentTime: currentTime, duration: duration
+        songID: unlocked ? song?.id.uuidString : nil,
+        title: unlocked ? song?.title : nil,
+        artist: unlocked ? song?.artist : nil,
+        isPlaying: unlocked && isPlaying,
+        currentTime: unlocked ? currentTime : 0,
+        duration: unlocked ? duration : 0
       )
     #endif
   }
@@ -135,7 +146,9 @@ final class WatchSyncService: NSObject {
     #if os(iOS)
       guard !isLibraryResetting, songsReady, playlistsReady else { return }
       let library = SongLibrary.shared
-      let songs = library.songs.filter { library.isVisibleInLibrary($0) }.sorted {
+      let songs = library.songs.filter {
+        EntitlementManager.shared.access.isUnlocked && library.isVisibleInLibrary($0)
+      }.sorted {
         let order = $0.title.localizedCaseInsensitiveCompare($1.title)
         return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
       }
@@ -146,7 +159,8 @@ final class WatchSyncService: NSObject {
           album: $0.album ?? "", duration: $0.duration
         )
       }
-      let playlists = PlaylistManager.shared.playlists.sorted {
+      let playlists = (EntitlementManager.shared.access.isUnlocked
+        ? PlaylistManager.shared.playlists : []).sorted {
         let order = $0.name.localizedCaseInsensitiveCompare($1.name)
         return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
       }.map { playlist in

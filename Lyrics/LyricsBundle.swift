@@ -13,5 +13,6 @@ struct LyricsBundle: WidgetBundle {
   var body: some Widget {
     Lyrics()
     NowPlayingWidget()
+    AmpwaveLauncherWidget()
   }
 }

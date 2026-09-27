@@ -10,6 +10,10 @@ import Foundation
 import SwiftData
 internal import SwiftUI
 
+extension Notification.Name {
+  static let playlistLibraryDidChange = Notification.Name("com.ampwave.playlistLibraryDidChange")
+}
+
 @MainActor
 @Observable
 final class PlaylistManager {
@@ -29,6 +33,7 @@ final class PlaylistManager {
   func resetInMemoryState() {
     playlists = []
     likedSongsPlaylist = nil
+    notifyLibraryChanged()
   }
 
   func setModelContext(_ context: ModelContext) {
@@ -57,10 +62,12 @@ final class PlaylistManager {
       // are imported or removed. Re-evaluate them once the library is loaded.
       refreshAllSmartPlaylists()
       WatchSyncService.shared.playlistLibraryDidLoad()
+      notifyLibraryChanged()
     } catch {
       print("[DEBUG] PlaylistManager.loadPlaylists: Error: \(error)")
       playlists = []
       WatchSyncService.shared.playlistLibraryDidLoad()
+      notifyLibraryChanged()
     }
   }
 
@@ -426,9 +433,14 @@ final class PlaylistManager {
     do {
       try modelContext.save()
       print("[DEBUG] PlaylistManager.save: Successfully saved")
+      notifyLibraryChanged()
     } catch {
       print("[DEBUG] PlaylistManager.save: Error saving: \(error)")
     }
+  }
+
+  private func notifyLibraryChanged() {
+    NotificationCenter.default.post(name: .playlistLibraryDidChange, object: self)
   }
 
   private func sortPlaylists() {

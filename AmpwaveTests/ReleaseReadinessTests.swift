@@ -2,6 +2,57 @@ import XCTest
 import SwiftData
 @testable import Ampwave
 
+final class PurchasePolicyTests: XCTestCase {
+  func testPriorPaidCustomersKeepLifetimeAccessAcrossBuildNumberReset() {
+    XCTAssertGreaterThan(40, 9) // v1.0 build 40 predates v1.2 build 9.
+    XCTAssertTrue(AmpwavePurchasePolicy.isLegacyOwner(
+      originalPurchaseDate: AmpwavePurchasePolicy.freeAcquisitionCutover.addingTimeInterval(-1),
+      isProduction: true
+    ))
+  }
+
+  func testPaidBuildNineCustomersKeepLifetimeAccess() {
+    XCTAssertTrue(AmpwavePurchasePolicy.isLegacyOwner(
+      originalPurchaseDate: Date(timeIntervalSince1970: 1_759_000_000),
+      isProduction: true
+    ))
+  }
+
+  func testFreeAcquisitionsRequireAPlan() {
+    XCTAssertFalse(AmpwavePurchasePolicy.isLegacyOwner(
+      originalPurchaseDate: AmpwavePurchasePolicy.freeAcquisitionCutover,
+      isProduction: true
+    ))
+    XCTAssertFalse(AmpwavePurchasePolicy.isLegacyOwner(
+      originalPurchaseDate: AmpwavePurchasePolicy.freeAcquisitionCutover.addingTimeInterval(1),
+      isProduction: true
+    ))
+  }
+
+  func testSandboxDoesNotMistakeSyntheticPurchaseDateForPaidOwner() {
+    XCTAssertFalse(AmpwavePurchasePolicy.isLegacyOwner(
+      originalPurchaseDate: Date(timeIntervalSince1970: 1_357_000_000),
+      isProduction: false
+    ))
+  }
+
+  func testFreeAcquisitionCutoverIsStable() {
+    XCTAssertEqual(
+      AmpwavePurchasePolicy.freeAcquisitionCutover.timeIntervalSince1970,
+      1_791_288_000
+    )
+  }
+
+  func testOnlyVerifiedAccessStatesUnlockPlayback() {
+    XCTAssertTrue(AmpwaveAccess.legacyOwner.isUnlocked)
+    XCTAssertTrue(AmpwaveAccess.lifetime.isUnlocked)
+    XCTAssertTrue(AmpwaveAccess.subscription.isUnlocked)
+    XCTAssertFalse(AmpwaveAccess.purchaseRequired.isUnlocked)
+    XCTAssertFalse(AmpwaveAccess.verificationUnavailable.isUnlocked)
+    XCTAssertFalse(AmpwaveAccess.checking.isUnlocked)
+  }
+}
+
 final class SpatialAudioModeTests: XCTestCase {
   func testSpatializationEligibilityMatchesSelectedMode() {
     XCTAssertEqual(SpatialAudioMode.off.allowedFormats, [])

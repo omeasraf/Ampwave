@@ -22,12 +22,28 @@
 
     // Observation storage
     private var nowPlayingButtons: [CPNowPlayingButton] = []
+    private var accessObserver: NSObjectProtocol?
+    private var libraryObservers: [NSObjectProtocol] = []
+    private var playlistsTemplate: CPListTemplate?
 
     public func templateApplicationScene(
       _ scene: CPTemplateApplicationScene, didConnect controller: CPInterfaceController
     ) {
       print("[DEBUG] CarPlay: Connected")
       self.interfaceController = controller
+
+      accessObserver = NotificationCenter.default.addObserver(
+        forName: .ampwaveAccessDidChange, object: nil, queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor [weak self] in self?.updateRootTemplate() }
+      }
+      libraryObservers = [.playlistLibraryDidChange, .songLibraryDidChange].map { name in
+        NotificationCenter.default.addObserver(
+          forName: name, object: nil, queue: .main
+        ) { [weak self] _ in
+          Task { @MainActor [weak self] in self?.refreshPlaylistsTemplate() }
+        }
+      }
 
       // Configure standard Now Playing experience
       setupNowPlaying()
@@ -43,6 +59,13 @@
       print("[DEBUG] CarPlay: Disconnected")
       CPNowPlayingTemplate.shared.remove(self)
       self.interfaceController = nil
+      if let accessObserver {
+        NotificationCenter.default.removeObserver(accessObserver)
+        self.accessObserver = nil
+      }
+      libraryObservers.forEach(NotificationCenter.default.removeObserver)
+      libraryObservers = []
+      playlistsTemplate = nil
     }
 
     private func setupNowPlaying() {
@@ -123,12 +146,23 @@
     }
 
     private func updateRootTemplate() {
+      guard EntitlementManager.shared.access.isUnlocked else {
+        let item = CPListItem(
+          text: "Open Ampwave to restore access",
+          detailText: "Your music is safe on your iPhone"
+        )
+        let template = CPListTemplate(
+          title: "Ampwave", sections: [CPListSection(items: [item])]
+        )
+        interfaceController?.setRootTemplate(template, animated: true, completion: nil)
+        return
+      }
       let recentlyPlayed = createRecentlyPlayedTemplate()
       let libraryTemplate = createLibraryTemplate()
       let playlistsTemplate = createPlaylistsTemplate()
 
       let tabBar = CPTabBarTemplate(templates: [
-        recentlyPlayed, libraryTemplate, playlistsTemplate,
+        recentlyPlayed, playlistsTemplate, libraryTemplate,
       ])
       interfaceController?.setRootTemplate(tabBar, animated: true, completion: nil)
     }
@@ -136,23 +170,25 @@
     // MARK: - Templates
 
     private func createRecentlyPlayedTemplate() -> CPListTemplate {
-      let songs = ListeningHistoryTracker.shared.getRecentlyPlayed(limit: 24)
+      let songs = library.visibleSongs(
+        from: ListeningHistoryTracker.shared.getRecentlyPlayed(limit: 24)
+      )
 
-      let items = songs.map { song in
+      let items = songs.enumerated().map { index, song in
         let item = CPListItem(text: song.title, detailText: song.artist)
         item.setImage(loadUIImage(from: song.effectiveArtworkPath, size: 60))
         item.accessoryType = .none
         item.handler = { _, completion in
           Task { @MainActor in
-            PlaybackController.shared.play(song, from: .library)
+            PlaybackController.shared.playQueue(songs, startingAt: index, from: .library)
             completion()
           }
         }
         return item
       }
 
-      let section = CPListSection(items: items)
-      let template = CPListTemplate(title: "Listen Now", sections: [section])
+      let sections = playbackSections(for: songs, items: items, source: .library)
+      let template = CPListTemplate(title: "Listen Now", sections: sections)
       template.tabImage = UIImage(systemName: "play.circle.fill")
       return template
     }
@@ -262,44 +298,65 @@
     }
 
     private func showSongsInAlbum(_ album: Album) {
-      let songs = album.songs.sorted(by: LibrarySong.albumTrackOrder)
-      let items = songs.map { song in
+      let songs = library.visibleSongs(from: album.songs).sorted(by: LibrarySong.albumTrackOrder)
+      let items = songs.enumerated().map { index, song in
         let item = CPListItem(text: song.title, detailText: nil)
         item.handler = { _, completion in
           Task { @MainActor in
-            PlaybackController.shared.play(song, from: .album)
+            PlaybackController.shared.playQueue(songs, startingAt: index, from: .album)
             completion()
           }
         }
         return item
       }
 
-      let section = CPListSection(items: items)
-      let template = CPListTemplate(title: album.name, sections: [section])
+      let sections = playbackSections(for: songs, items: items, source: .album)
+      let template = CPListTemplate(title: album.name, sections: sections)
       interfaceController?.pushTemplate(template, animated: true, completion: nil)
     }
 
     private func showAllSongs() {
-      let songs = library.songs.sorted { $0.title < $1.title }.prefix(200)
-      let items = songs.map { song in
+      let songs = Array(library.songs.sorted { $0.title < $1.title }.prefix(200))
+      let items = songs.enumerated().map { index, song in
         let item = CPListItem(text: song.title, detailText: song.artist)
         item.setImage(loadUIImage(from: song.effectiveArtworkPath, size: 60))
         item.handler = { _, completion in
           Task { @MainActor in
-            PlaybackController.shared.play(song, from: .library)
+            PlaybackController.shared.playQueue(songs, startingAt: index, from: .library)
             completion()
           }
         }
         return item
       }
 
-      let section = CPListSection(items: items)
-      let template = CPListTemplate(title: "Songs", sections: [section])
+      let sections = playbackSections(for: songs, items: items, source: .library)
+      let template = CPListTemplate(title: "Songs", sections: sections)
       interfaceController?.pushTemplate(template, animated: true, completion: nil)
     }
 
     private func createPlaylistsTemplate() -> CPListTemplate {
+      let template = CPListTemplate(title: "Playlists", sections: playlistSections())
+      template.tabImage = UIImage(systemName: "music.note.house.fill")
+      playlistsTemplate = template
+      return template
+    }
+
+    private func refreshPlaylistsTemplate() {
+      playlistsTemplate?.updateSections(playlistSections())
+    }
+
+    private func playlistSections() -> [CPListSection] {
       let playlists = playlistManager.playlists
+      guard !playlists.isEmpty else {
+        let item = CPListItem(
+          text: playlistManager.modelContext == nil ? "Loading playlists…" : "No playlists yet",
+          detailText: playlistManager.modelContext == nil
+            ? "Your playlists will appear automatically"
+            : "Create a playlist in Ampwave on your iPhone"
+        )
+        item.isEnabled = false
+        return [CPListSection(items: [item])]
+      }
 
       let items = playlists.map { playlist in
         let item = CPListItem(
@@ -313,32 +370,58 @@
         }
         return item
       }
-
-      let section = CPListSection(items: items)
-      let template = CPListTemplate(title: "Playlists", sections: [section])
-      template.tabImage = UIImage(systemName: "music.note.house.fill")
-      return template
+      return [CPListSection(items: items)]
     }
 
     private func showPlaylistSongs(_ playlist: Playlist) {
-      let items = playlist.orderedSongs.map { song in
+      let songs = library.visibleSongs(from: playlist.orderedSongs)
+      let items = songs.enumerated().map { index, song in
         let item = CPListItem(text: song.title, detailText: song.artist)
         item.setImage(loadUIImage(from: song.effectiveArtworkPath, size: 60))
         item.handler = { _, completion in
           Task { @MainActor in
-            PlaybackController.shared.play(song, from: .playlist, playlistId: playlist.id)
+            PlaybackController.shared.playQueue(
+              songs, startingAt: index, from: .playlist, playlistId: playlist.id
+            )
             completion()
           }
         }
         return item
       }
 
-      let section = CPListSection(items: items)
-      let template = CPListTemplate(title: playlist.name, sections: [section])
+      let sections = playbackSections(
+        for: songs, items: items, source: .playlist, playlistId: playlist.id
+      )
+      let template = CPListTemplate(title: playlist.name, sections: sections)
       interfaceController?.pushTemplate(template, animated: true, completion: nil)
     }
 
     // MARK: - Helpers
+
+    private func playbackSections(
+      for songs: [LibrarySong],
+      items: [CPListItem],
+      source: PlaySource,
+      playlistId: UUID? = nil
+    ) -> [CPListSection] {
+      guard !songs.isEmpty else {
+        let empty = CPListItem(text: "No songs available", detailText: nil)
+        empty.isEnabled = false
+        return [CPListSection(items: [empty])]
+      }
+
+      let playAll = CPListItem(text: "Play All", detailText: "\(songs.count) songs")
+      playAll.setImage(UIImage(systemName: "play.fill"))
+      playAll.handler = { _, completion in
+        Task { @MainActor in
+          PlaybackController.shared.playQueue(
+            songs, startingAt: 0, from: source, playlistId: playlistId
+          )
+          completion()
+        }
+      }
+      return [CPListSection(items: [playAll]), CPListSection(items: items)]
+    }
 
     private func loadUIImage(from path: String?, size: CGFloat) -> UIImage? {
       guard let path = path, !path.isEmpty else { return nil }
@@ -414,17 +497,19 @@
       }
 
       // Filter songs based on search text
-      let filteredSongs = library.songs.filter {
+      let filteredSongs = Array(library.songs.filter {
         $0.title.localizedCaseInsensitiveContains(searchText)
           || $0.artist.localizedCaseInsensitiveContains(searchText)
-      }.prefix(24)
+      }.prefix(24))
 
-      let items = filteredSongs.map { song in
+      let items = filteredSongs.enumerated().map { index, song in
         let item = CPListItem(text: song.title, detailText: song.artist)
         item.setImage(loadUIImage(from: song.effectiveArtworkPath, size: 60))
         item.handler = { _, completion in
           Task { @MainActor in
-            PlaybackController.shared.play(song, from: .library)
+            PlaybackController.shared.playQueue(
+              filteredSongs, startingAt: index, from: .search
+            )
             completion()
           }
         }

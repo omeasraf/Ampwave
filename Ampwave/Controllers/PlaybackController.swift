@@ -1449,6 +1449,7 @@ final class PlaybackController {
     from source: PlaySource = .library,
     playlistId: UUID? = nil
   ) {
+    guard EntitlementManager.shared.canUseApp else { return }
     guard !library.isResetting else { return }
     DiagnosticLog.shared.log(
       "playback",
@@ -1485,7 +1486,8 @@ final class PlaybackController {
       defer {
         if playbackRequestID == requestID { isLoading = false }
       }
-      guard await setupAudioSession(), playbackRequestID == requestID,
+      guard await setupAudioSession(), EntitlementManager.shared.canUseApp,
+        playbackRequestID == requestID,
         let song = library.song(id: requestedSongID)
       else { return }
       let item = await createPlayerItem(
@@ -1497,7 +1499,8 @@ final class PlaybackController {
       )
 
       await MainActor.run {
-        guard self.playbackRequestID == requestID,
+        guard EntitlementManager.shared.canUseApp,
+          self.playbackRequestID == requestID,
           let song = self.library.song(id: requestedSongID),
           self.library.fileExists(for: song)
         else {
@@ -1964,6 +1967,7 @@ final class PlaybackController {
   }
 
   func play() {
+    guard EntitlementManager.shared.canUseApp else { return }
     if let song = currentItem, !library.fileExists(for: song) {
       rejectUnavailableSource(song)
       return
@@ -1981,7 +1985,8 @@ final class PlaybackController {
     isLoading = true
     Task {
       defer { if playbackRequestID == request { isLoading = false } }
-      guard await setupAudioSession(), playbackRequestID == request,
+      guard await setupAudioSession(), EntitlementManager.shared.canUseApp,
+        playbackRequestID == request,
         self.player === player, currentItem?.id == songID, !library.isResetting else { return }
       if let song = currentItem, !library.fileExists(for: song) {
         rejectUnavailableSource(song)

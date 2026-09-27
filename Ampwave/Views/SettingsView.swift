@@ -91,6 +91,8 @@ struct SettingsView: View {
   @State private var backupExportURL: URL?
   @State private var showingBulkTagEditor = false
   @State private var showingOnboarding = false
+  @State private var showingAccessDetails = false
+  @State private var purchases = EntitlementManager.shared
   @AppStorage("com.ampwave.spatialAudioMode") private var spatialAudioModeRaw = "multichannel"
 
   private var library: SongLibrary { SongLibrary.shared }
@@ -202,6 +204,13 @@ struct SettingsView: View {
       .listRowBackground(themeManager.cardBackgroundColor)
 
       Section("App") {
+        if purchases.access == .subscription {
+          Button {
+            showingAccessDetails = true
+          } label: {
+            Label("Annual Subscription", systemImage: "checkmark.seal")
+          }
+        }
         settingsCategoryLink(
           title: "Data & Storage",
           systemImage: "externaldrive"
@@ -230,6 +239,10 @@ struct SettingsView: View {
     .navigationTitle("Settings")
     .sheet(isPresented: $showingOnboarding) {
       OnboardingView()
+        .environment(ThemeManager.shared)
+    }
+    .sheet(isPresented: $showingAccessDetails) {
+      AccessGateView()
         .environment(ThemeManager.shared)
     }
     .sheet(isPresented: $showingBulkTagEditor) {

@@ -1,148 +1,1229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>App Store Screenshot Export · V4 · iPhone 6.5-inch</title>
 <style>
-  @import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Serif+Display:ital@0;1&display=swap");
-  * {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
-  .wrap {
-    display: flex;
-    flex-direction: row;
-    gap: 16px;
-    padding: 32px 24px;
-    background: #080808;
-    align-items: flex-start;
-    overflow-x: auto;
-    min-width: max-content;
-  }
-  .slide {
-    width: 180px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-  }
-  .tagline {
-    font-size: 10px;
-    font-weight: 600;
-    color: #ff4d8d;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    text-align: center;
-    font-family: "DM Sans", sans-serif;
-  }
-  .headline {
-    font-family: "DM Serif Display", serif;
-    font-size: 18px;
-    color: #fff;
-    text-align: center;
-    line-height: 1.2;
-  }
-  .sub {
-    font-size: 10px;
-    color: #666;
-    text-align: center;
-    line-height: 1.5;
-    font-family: "DM Sans", sans-serif;
-  }
-  .phone-frame {
-    width: 170px;
-    height: 368px;
-    border-radius: 32px;
-    border: 2px solid #2a2a2a;
-    overflow: hidden;
-    background: #000;
-    box-shadow:
-      0 0 0 1px #111,
-      0 24px 60px rgba(0, 0, 0, 0.8);
-  }
-  .phone-frame img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    object-position: top center;
-    display: block;
-  }
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Serif+Display:ital@0;1&display=swap");
+:root { color-scheme: dark; --accent: #ff4d8d; --muted: #a1a1a8; --line: #29292e; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body { background: #080808; color: #fff; font-family: "DM Sans", Arial, sans-serif; }
+button, select { font: 500 13px "DM Sans", Arial, sans-serif; color: #eee; background: #1b1b1f; border: 1px solid #36363d; border-radius: 9px; min-height: 40px; padding: 9px 13px; }
+button { cursor: pointer; }
+button:hover:not(:disabled) { border-color: #9a9aa3; background: #232328; }
+button:disabled, select:disabled { opacity: .5; cursor: not-allowed; }
+button:focus-visible, select:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+select { max-width: 100%; }
+a { color: #ff8bb5; text-underline-offset: 3px; }
+[hidden] { display: none !important; }
+.export-panel { padding: 28px 28px 22px; background: #111113; border-bottom: 1px solid var(--line); }
+.eyebrow { color: var(--accent); font-size: 10px; font-weight: 600; letter-spacing: .16em; margin-bottom: 9px; }
+.export-heading { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 20px; }
+h1 { font-size: clamp(24px, 3vw, 32px); font-weight: 600; letter-spacing: -.045em; line-height: 1.2; }
+.intro { font-size: 13px; color: var(--muted); margin-top: 8px; line-height: 1.6; }
+#export-all { color: #19030c; border-color: var(--accent); background: var(--accent); font-weight: 600; min-height: 45px; padding-inline: 20px; }
+#export-all:hover:not(:disabled) { background: #ff73a5; border-color: #ff73a5; }
+.export-controls { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+.export-field { display: grid; gap: 7px; }
+.export-field > span { font-size: 11px; color: #aaaab3; }
+.load-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.export-help { color: var(--muted); font-size: 12px; line-height: 1.7; margin-top: 14px; max-width: 1060px; }
+.export-status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 12px; min-height: 24px; }
+#export-status { font-size: 12px; line-height: 1.65; color: #b7b7bf; max-width: 1150px; overflow-wrap: anywhere; }
+#export-status[data-state="error"] { color: #ffabab; }
+#export-status[data-state="success"] { color: #b6dfc6; }
+#export-status[data-state="warning"] { color: #eed49f; }
+#download-again { font-size: 12px; }
+#export-progress { width: 190px; height: 6px; accent-color: var(--accent); }
+.device-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.device-nav a { color: #cacad1; text-decoration: none; font-size: 11px; padding: 6px 10px; border: 1px solid #303036; border-radius: 20px; }
+.device-section { border-bottom: 1px solid var(--line); padding-top: 26px; scroll-margin-top: 12px; }
+.device-header { padding: 0 28px; display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; justify-content: space-between; }
+h2 { font-size: 20px; font-weight: 600; letter-spacing: -.025em; }
+.count { font-size: 11px; color: #aaaab4; background: #1e1e23; border: 1px solid var(--line); padding: 3px 7px; border-radius: 6px; vertical-align: middle; margin-left: 8px; }
+.device-summary { color: var(--muted); font-size: 12px; line-height: 1.65; margin-top: 6px; max-width: 570px; }
+.device-controls { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; }
+.device-controls select { font-size: 12px; max-width: 270px; }
+.preview-shell { overflow-x: auto; width: 100%; }
+.wrap { display: flex; flex-direction: row; gap: 22px; padding: 30px 28px 26px; background: #080808; align-items: flex-start; min-width: max-content; }
+.segment { display: flex; flex-direction: column; align-items: center; align-self: stretch; width: 180px; flex-shrink: 0; }
+.slide { width: 180px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.tagline { font-size: 10px; font-weight: 600; color: #ff4d8d; letter-spacing: .1em; text-transform: uppercase; text-align: center; font-family: "DM Sans", Arial, sans-serif; }
+.headline { font-family: "DM Serif Display", Georgia, serif; font-size: 18px; color: #fff; text-align: center; line-height: 1.2; }
+.sub { font-size: 10px; color: #888; text-align: center; line-height: 1.5; font-family: "DM Sans", Arial, sans-serif; }
+.phone-frame, .device-frame { position: relative; width: 170px; height: 368px; border-radius: 32px; border: 2px solid #2a2a2a; overflow: hidden; background: #000; box-shadow: 0 0 0 1px #111, 0 24px 60px rgba(0,0,0,.8); }
+.phone-frame img, .device-frame img { width: 100%; height: 100%; object-fit: contain; object-position: center; display: block; }
+.segment[data-state="missing"] img { visibility: hidden; }
+.image-placeholder { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; color: #9696a1; font: 11px/1.8 "DM Sans", Arial, sans-serif; padding: 12px; overflow-wrap: anywhere; }
+.image-placeholder span { color: #595963; }
+.segment-actions { display: flex; flex-wrap: wrap; width: 100%; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 24px; }
+.segment-actions .name { font-size: 10px; color: #b5b5bf; overflow-wrap: anywhere; width: 100%; }
+.segment-buttons { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.segment-actions .source-size, .segment-actions .target-size { width: 100%; font-size: 10px; color: #82828d; font-variant-numeric: tabular-nums; }
+.segment-actions .target-size { color: #c6dccc; }
+.slot-help { margin: 16px 28px 0; padding: 12px 14px; border: 1px solid #48323c; border-radius: 9px; color: #d8c3cb; background: #191216; font-size: 12px; line-height: 1.7; }
+@media (max-width: 650px) { .slot-help { margin-inline: 16px; } }
+.segment-actions button { font-size: 11px; min-height: 31px; padding: 5px 9px; background: transparent; }
+[data-device="ipad"] .segment, [data-device="ipad"] .slide { width: 270px; }
+[data-device="ipad"] .ipad-frame { width: 260px; height: 347px; border-radius: 18px; }
+[data-device="ipad"] .segment.landscape, [data-device="ipad"] .segment.landscape .slide { width: 370px; }
+[data-device="ipad"] .segment.landscape .ipad-frame { width: 360px; }
+[data-device="ipad"] .headline { font-size: 22px; }
+[data-device="ipad"] .sub { max-width: 250px; }
+[data-device="watch"] .segment, [data-device="watch"] .slide { width: 210px; }
+[data-device="watch"] .watch-frame { width: 210px; height: 256px; border: 0; border-radius: 0; box-shadow: none; }
+.raw-mode .tagline, .raw-mode .headline, .raw-mode .sub { display: none; }
+.raw-mode .phone-frame, .raw-mode .ipad-frame { border: 0; border-radius: 0; box-shadow: none; }
+.export-notes { margin: 24px 28px 32px; max-width: 1100px; color: #aaaab3; font-size: 12px; line-height: 1.85; }
+.export-notes summary { color: #d0d0d7; cursor: pointer; width: fit-content; }
+.export-notes p { margin-top: 12px; }
+.export-notes code { color: #dcdce3; }
+.drop-overlay { position: fixed; inset: 16px; z-index: 1000; border: 2px dashed var(--accent); border-radius: 20px; display: grid; place-content: center; background: rgba(8,8,8,.96); pointer-events: none; text-align: center; font-size: 24px; }
+.drop-overlay p { margin-top: 12px; color: #aaa; font-size: 13px; }
+@media (max-width: 650px) {
+ .export-panel { padding: 22px 16px; }
+ .device-header { padding-inline: 16px; }
+ .device-controls { width: 100%; }
+ .device-controls .export-field:first-child { width: 100%; }
+ .device-controls .export-field:first-child select { max-width: 100%; width: 100%; }
+ .wrap { padding-inline: 16px; }
+ .export-notes { margin-inline: 16px; }
+ #export-all { width: 100%; }
+ .export-controls { gap: 14px; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+#export-preview { margin: auto; padding: 20px; border: 1px solid #393940; border-radius: 14px; background: #111113; color: #fff; width: min(92vw, 820px); max-height: 94vh; overflow: auto; }
+#export-preview::backdrop { background: rgba(0,0,0,.85); }
+.preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+#preview-title { font-size: 15px; overflow-wrap: anywhere; }
+#preview-detail { color: #aaaab3; font-size: 12px; line-height: 1.7; margin: 12px 0; }
+#preview-image { display: block; width: auto; height: auto; max-width: 100%; max-height: 70vh; margin: 0 auto 16px; object-fit: contain; background: #080808; }
+#preview-download { display: inline-block; border: 1px solid #ff4d8d; border-radius: 8px; padding: 10px 14px; font-size: 13px; text-decoration: none; }
 </style>
-
-<div class="wrap">
-  <div class="slide">
-    <div class="tagline">Made for music lovers</div>
-    <div class="headline">Your music,<br /><em>offline & free</em></div>
-    <div class="phone-frame"><img src="./home.PNG" alt="Home screen" /></div>
-    <div class="sub">Recently played &<br />personalized mixes</div>
+</head>
+<body>
+<header class="export-panel" aria-label="Screenshot export controls">
+  <div class="eyebrow">APP STORE CONNECT · SCREENSHOT EXPORT · V4</div>
+  <div class="export-heading">
+    <div><h1>One folder. Every screen.</h1><p class="intro">8 iPhone · 5 iPad · 3 Apple Watch. Export one screenshot, one device, or all 16.</p></div>
+    <button id="export-all" type="button">Export everything (ZIP)</button>
   </div>
-
-  <div class="slide">
-    <div class="tagline">Full library control</div>
-    <div class="headline">Every song,<br /><em>right at hand</em></div>
-    <div class="phone-frame">
-      <img src="./library.PNG" alt="Library screen" />
+  <div class="export-controls">
+    <div class="load-controls">
+      <button id="choose-folder" type="button">Choose screenshot folder…</button>
+      <button id="choose-images" type="button">Choose image files…</button>
+      <input id="folder-files" type="file" webkitdirectory multiple hidden />
+      <input id="image-files" type="file" accept="image/png,image/jpeg,.png,.PNG,.jpg,.jpeg" multiple hidden />
     </div>
-    <div class="sub">Songs, albums, artists<br />& playlists - all local</div>
+    <label class="export-field"><span>Image format</span><select id="export-format"><option value="png">PNG · lossless RGB</option><option value="jpg">JPEG · high quality</option></select></label>
+    <label class="export-field"><span>Typography</span><select id="export-fonts"><option value="original">Original fonts (online)</option><option value="system">System fonts (offline)</option></select></label>
   </div>
-
-  <!-- <div class="slide">
-    <div class="tagline">Your music, your rules</div>
-    <div class="headline">
+  <p class="export-help" id="export-help">Choose the folder above once, or drag in the screenshot files. All three devices are matched by filename, including .PNG and .png. The PDF and “AppStore Snapshot.png” are ignored. Screenshots are processed locally, not uploaded.</p>
+  <div class="export-status-row"><p id="export-status" role="status" aria-live="polite" aria-atomic="true">Checking images…</p><progress id="export-progress" max="100" value="0" aria-label="Export progress" hidden></progress><a id="download-again" hidden>Download again</a></div>
+  <nav class="device-nav" aria-label="Device screenshot sections"><a href="#device-iphone">iPhone · 8</a><a href="#device-ipad">iPad · 5</a><a href="#device-watch">Apple Watch · 3</a></nav>
+</header>
+<main aria-label="Screenshot segments">
+<section id="device-iphone" class="device-section" data-device="iphone" aria-labelledby="heading-iphone">
+<div class="device-header"><div><h2 id="heading-iphone">iPhone<span class="count">8</span></h2><p class="device-summary" id="summary-iphone">Complete iPhone segments.</p></div>
+<div class="device-controls"><label class="export-field"><span>App Store iPhone upload slot</span><select id="slot-iphone" aria-describedby="iphone-slot-help"></select></label><label class="export-field"><span>Export size</span><select id="size-iphone" aria-describedby="summary-iphone iphone-slot-help"></select></label><label class="export-field"><span>Orientation</span><select id="orientation-iphone"><option value="auto">Match source</option><option value="portrait" selected>Portrait</option><option value="landscape">Landscape</option></select></label><label class="export-field"><span>Layout</span><select id="style-iphone"><option value="designed">Designed segments</option><option value="raw">Screenshots only</option></select></label><button class="export-device" type="button" data-device="iphone">Export iPhone ZIP</button></div></div>
+<p class="slot-help" id="iphone-slot-help" role="status">Default: 6.5-inch slot · 1284 × 2778 px. Match the upload slot shown in App Store Connect.</p>
+<div class="preview-shell"><div class="wrap"><div class="slide">
+<div class="tagline">Made for music lovers</div>
+<div class="headline">Your music,<br/><em>offline &amp; free</em></div>
+<div class="phone-frame"><img alt="Home screen" src="./home.PNG"/></div>
+<div class="sub">Recently played &amp;<br/>personalized mixes</div>
+</div>
+<div class="slide">
+<div class="tagline">Full library control</div>
+<div class="headline">Every song,<br/><em>right at hand</em></div>
+<div class="phone-frame">
+<img alt="Library screen" src="./library.PNG"/>
+</div>
+<div class="sub">Songs, albums, artists<br/>&amp; playlists - all local</div>
+</div>
+<div class="slide">
+<div class="tagline">Your music, your rules</div>
+<div class="headline">
       Build <em>perfect playlists, make it your own</em>
+</div>
+<div class="phone-frame">
+<img alt="Playlists screen" src="./playlists.PNG"/>
+</div>
+<div class="sub">
+      Custom images, names, descriptions. Mix MP3, FLAC, WAV &amp; more.
     </div>
-    <div class="phone-frame">
-      <img src="./playlists.PNG" alt="Playlists screen" />
-    </div>
-    <div class="sub">
-      Custom images, names, descriptions. Mix MP3, FLAC, WAV & more.
-    </div>
-  </div> -->
-
-  <div class="slide">
-    <div class="tagline">Beautiful playback</div>
-    <div class="headline">Music that<br /><em>feels alive</em></div>
-    <div class="phone-frame">
-      <img src="./nowPlaying.PNG" alt="Now playing screen" />
-    </div>
-    <div class="sub">Full player, lyrics &<br />queue - no account</div>
-  </div>
-
-  <!-- <div class="slide">
-    <div class="tagline">Sing along</div>
-    <div class="headline">Lyrics that<br /><em>follow you</em></div>
-    <div class="phone-frame">
-      <img src="./lyrics.PNG" alt="Lyrics screen" />
-    </div>
-    <div class="sub">Synced lyrics, works<br />fully offline always</div>
-  </div> -->
-
-  <div class="slide">
-    <div class="tagline">Own your library</div>
-    <div class="headline">Bring your<br /><em>own files</em></div>
-    <div class="phone-frame">
-      <img src="./settings.PNG" alt="Settings screen" />
-    </div>
-    <div class="sub">MP3, FLAC, WAV & more.<br />No cloud, ever</div>
-  </div>
-
-  <div class="slide">
-    <div class="tagline">Find it fast</div>
-    <div class="headline">Search your<br /><em>entire library</em></div>
-    <div class="phone-frame">
-      <img src="./search.PNG" alt="Search screen" />
-    </div>
-    <div class="sub">
-      Instant local search across songs,<br />artists, albums, lyrics and
+</div>
+<div class="slide">
+<div class="tagline">Beautiful playback</div>
+<div class="headline">Music that<br/><em>feels alive</em></div>
+<div class="phone-frame">
+<img alt="Now playing screen" src="./nowPlaying.PNG"/>
+</div>
+<div class="sub">Full player, lyrics &amp;<br/>queue - no account</div>
+</div>
+<div class="slide">
+<div class="tagline">Sing along</div>
+<div class="headline">Lyrics that<br/><em>follow you</em></div>
+<div class="phone-frame">
+<img alt="Lyrics screen" src="./lyrics.PNG"/>
+</div>
+<div class="sub">Synced lyrics, works<br/>fully offline always</div>
+</div>
+<div class="slide">
+<div class="tagline">Own your library</div>
+<div class="headline">Bring your<br/><em>own files</em></div>
+<div class="phone-frame">
+<img alt="Settings screen" src="./settings.PNG"/>
+</div>
+<div class="sub">MP3, FLAC, WAV &amp; more.<br/>No cloud, ever</div>
+</div>
+<div class="slide">
+<div class="tagline">Find it fast</div>
+<div class="headline">Search your<br/><em>entire library</em></div>
+<div class="phone-frame">
+<img alt="Search screen" src="./search.PNG"/>
+</div>
+<div class="sub">
+      Instant local search across songs,<br/>artists, albums, lyrics and
       playlists.
     </div>
-  </div>
-
-  <!-- <div class="slide">
-    <div class="tagline">Artist spotlight</div>
-    <div class="headline">Explore<br /><em>artist pages</em></div>
-    <div class="phone-frame">
-      <img src="./artist.PNG" alt="Artist screen" />
-    </div>
-    <div class="sub">
-      Browse artists, albums & related<br />tracks all offline.
-    </div>
-  </div> -->
 </div>
+<div class="slide">
+<div class="tagline">Artist spotlight</div>
+<div class="headline">Explore<br/><em>artist pages</em></div>
+<div class="phone-frame">
+<img alt="Artist screen" src="./artist.PNG"/>
+</div>
+<div class="sub">
+      Browse artists, albums &amp; related<br/>tracks all offline.
+    </div>
+</div></div></div>
+</section><section id="device-ipad" class="device-section" data-device="ipad" aria-labelledby="heading-ipad">
+<div class="device-header"><div><h2 id="heading-ipad">iPad<span class="count">5</span></h2><p class="device-summary" id="summary-ipad">Native iPad screenshots with matching artwork.</p></div>
+<div class="device-controls"><label class="export-field"><span>Export size</span><select id="size-ipad" aria-describedby="summary-ipad"></select></label><label class="export-field"><span>Orientation</span><select id="orientation-ipad"><option value="auto">Match source</option><option value="portrait" >Portrait</option><option value="landscape">Landscape</option></select></label><label class="export-field"><span>Layout</span><select id="style-ipad"><option value="designed">Designed segments</option><option value="raw">Screenshots only</option></select></label><button class="export-device" type="button" data-device="ipad">Export iPad ZIP</button></div></div>
+<div class="preview-shell"><div class="wrap"><div class="slide">
+<div class="tagline">Made for music lovers</div>
+<div class="headline">Your music,<br/><em>offline &amp; free</em></div>
+<div class="device-frame ipad-frame"><img alt="iPad Home screen" src="./iPad_Home.png"/></div>
+<div class="sub">Recently played &amp;<br/>personalized mixes</div>
+</div>
+<div class="slide">
+<div class="tagline">Full library control</div>
+<div class="headline">Every song,<br/><em>right at hand</em></div>
+<div class="device-frame ipad-frame">
+<img alt="iPad Library screen" src="./iPad_Library.png"/>
+</div>
+<div class="sub">Songs, albums, artists<br/>&amp; playlists - all local</div>
+</div>
+<div class="slide">
+<div class="tagline">Beautiful playback</div>
+<div class="headline">Music that<br/><em>feels alive</em></div>
+<div class="device-frame ipad-frame">
+<img alt="iPad Now playing screen" src="./iPad_Now_Playing.png"/>
+</div>
+<div class="sub">Full player, lyrics &amp;<br/>queue - no account</div>
+</div>
+<div class="slide">
+<div class="tagline">Sing along</div>
+<div class="headline">Lyrics that<br/><em>follow you</em></div>
+<div class="device-frame ipad-frame">
+<img alt="iPad Lyrics screen" src="./iPad_Lyrics.png"/>
+</div>
+<div class="sub">Synced lyrics, works<br/>fully offline always</div>
+</div>
+<div class="slide">
+<div class="tagline">Own your library</div>
+<div class="headline">Bring your<br/><em>own files</em></div>
+<div class="device-frame ipad-frame">
+<img alt="iPad Settings screen" src="./iPad_Settings.png"/>
+</div>
+<div class="sub">MP3, FLAC, WAV &amp; more.<br/>No cloud, ever</div>
+</div></div></div>
+</section><section id="device-watch" class="device-section" data-device="watch" aria-labelledby="heading-watch">
+<div class="device-header"><div><h2 id="heading-watch">Apple Watch<span class="count">3</span></h2><p class="device-summary" id="summary-watch">Screenshot-only exports at Apple Watch dimensions.</p></div>
+<div class="device-controls"><label class="export-field"><span>Export size</span><select id="size-watch" aria-describedby="summary-watch"></select></label><button class="export-device" type="button" data-device="watch">Export Apple Watch ZIP</button></div></div>
+<div class="preview-shell"><div class="wrap"><div class="slide"><div class="device-frame watch-frame"><img src="./Watch_Home.PNG" alt="Apple Watch home screen" /></div></div>
+<div class="slide"><div class="device-frame watch-frame"><img src="./Watch_Playing.PNG" alt="Apple Watch now playing screen" /></div></div>
+<div class="slide"><div class="device-frame watch-frame"><img src="./Watch_Songs.PNG" alt="Apple Watch songs screen" /></div></div></div></div>
+</section></main>
+<details class="export-notes"><summary>How exports work &amp; Apple requirements</summary>
+<p><strong>Local files:</strong> place this HTML next to your screenshots. Opening HTML directly uses the browser’s local-file protection. “Choose screenshot folder…” gives this page permission to read the matching images for this session; nothing is uploaded. Clicking Export before choosing a folder opens the picker and resumes the export after loading. “Choose image files…” and drag-and-drop are alternatives. Reloading the page requires selecting the folder again.</p>
+<p><strong>No file picker when using a local server:</strong> from this folder run <code>python3 -m http.server 8000 --bind 127.0.0.1</code>, then open <code>http://127.0.0.1:8000/</code> and select this HTML. The screenshot files load from the same local origin and can be exported directly.</p>
+<p><strong>Everything means all 16 screenshots:</strong> iPhone includes home, library, playlists, nowPlaying, lyrics, settings, search, and artist. iPad includes Home, Library, Now_Playing, Lyrics, and Settings. Watch includes Home, Playing, and Songs. The composite snapshot image and PDF are not app screenshots, so they are not exported. Missing images block the requested batch instead of silently producing an incomplete ZIP.</p>
+<p><strong>Fixed renderer:</strong> v4 draws text, frames, and fully decoded screenshots directly onto the final canvas. It does not render HTML inside SVG. Screenshot pixels are checked before encoding, and the actual file dimensions are checked after encoding. Use “Preview export” on any card to inspect the actual output image before downloading.</p>
+<p><strong>Artwork:</strong> designed iPhone and iPad segments include their text and device frame. Screenshots are contained at their original aspect ratio, never stretched. Each complete segment is fitted into its target canvas; padding can be added. Watch exports contain the screenshot only, without a decorative frame or marketing text. “Match source” sets iPhone/iPad canvas orientation from each source image; it does not rotate the app UI.</p>
+<p><strong>Apple dimensions:</strong> the iPhone default is <strong>1284 × 2778 for the 6.5-inch upload slot</strong>. That slot accepts 1284 × 2778 or 1242 × 2688 in portrait, and 2778 × 1284 or 2688 × 1242 in landscape. The iPhone upload-slot selector filters the size choices: a size accepted in another slot is not necessarily accepted in the slot you are uploading to. Actual encoded dimensions are checked before any download. The iPad default is 2064 × 2752 (swapped for landscape). Watch Auto preserves a common accepted source size; otherwise it uses 422 × 514 for the entire Watch set. Use an explicit Watch size to keep the same dimensions across localizations. Resizing cannot add detail or substitute for a real device-specific capture.</p>
+<p><strong>Upload the images, not the ZIP:</strong> unzip first. Files are grouped by device and pixel size, with a JSON manifest and a README. Apple accepts 1–10 screenshots per set in PNG or JPEG, without alpha channels or transparency. The limit is checked per device, not across the whole archive. PNG output is 8-bit RGB with an sRGB tag and no alpha channel; JPEG is rendered onto an opaque sRGB canvas at 98% quality.</p>
+<p><strong>Browser &amp; fonts:</strong> use a current desktop browser. PNG uses CompressionStream when available, with a standards-based uncompressed fallback. No JavaScript libraries are downloaded. Canvas exports use the fonts already loaded by the page. Original DM fonts load from Google Fonts at runtime; use System fonts for offline use. Font files are not bundled. A font-loading failure uses built-in Arial/Georgia and reports a warning.</p>
+<p>Dimensions and no-alpha rules checked on September 25, 2026 against <a href="https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications/" target="_blank" rel="noopener noreferrer">Apple’s screenshot specifications ↗</a>. Correct pixel dimensions do not guarantee App Review approval. Check your final artwork before uploading.</p>
+</details>
+<div id="drop-overlay" class="drop-overlay" hidden><div>Drop your screenshot files here<p>iPhone, iPad and Watch are matched automatically.</p></div></div>
+<dialog id="export-preview" aria-labelledby="preview-title" aria-describedby="preview-detail">
+  <div class="preview-heading"><h2 id="preview-title">Export preview</h2><button id="preview-close" type="button" autofocus>Close</button></div>
+  <p id="preview-detail"></p><img id="preview-image" alt="Actual rendered screenshot export" />
+  <a id="preview-download" download>Download this image</a>
+</dialog>
+<noscript><p class="export-notes">Enable JavaScript to use screenshot exports.</p></noscript>
+<script>
+/*
+ * All-device screenshot export, v4. Native Canvas 2D, no SVG foreignObject.
+ * No third-party JavaScript dependencies. Images are decoded before drawing.
+ * Edit the .slide artwork in HTML; source filenames determine device grouping.
+ * Specs: https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications/
+ * PNG: https://www.w3.org/TR/png-3/ ; ZIP uses standard stored entries.
+ */
+(() => {
+  'use strict';
+  const BACKGROUND = '#080808';
+  const $ = (id) => document.getElementById(id);
+  const formatSelect = $('export-format');
+  const exportAll = $('export-all');
+  const status = $('export-status');
+  const progress = $('export-progress');
+  const downloadAgain = $('download-again');
+  const originalNames = new WeakMap();
+  const imported = new WeakSet();
+  const imageDataCache = new WeakMap();
+  let busy = false;
+  let pendingRequest = null;
+  let downloadURL = null;
+  let previewURL = null;
+  let importNote = '';
+
+  // Only dimensions explicitly accepted by Apple are offered. The iPhone Duo
+  // sizes are deliberately absent: Apple's page says upload support is pending.
+  const DEVICES = {
+    iphone: {
+      name: 'iPhone', folder: 'iPhone', defaultSize: '1284x2778',
+      presets: [
+        ['1284x2778', '6.5-inch · 1284 × 2778'], ['1242x2688', '6.5-inch · 1242 × 2688'],
+        ['1320x2868', '6.9-inch · 1320 × 2868'], ['1290x2796', '6.9-inch · 1290 × 2796'],
+        ['1260x2736', '6.9-inch · 1260 × 2736'], ['1206x2622', '6.3-inch · 1206 × 2622'],
+        ['1179x2556', '6.3-inch · 1179 × 2556'], ['1170x2532', '6.1-inch · 1170 × 2532'],
+        ['1125x2436', '6.1-inch · 1125 × 2436'], ['1080x2340', '6.1-inch · 1080 × 2340'],
+        ['1242x2208', '5.5-inch · 1242 × 2208'], ['750x1334', '4.7-inch · 750 × 1334'],
+        ['640x1136', '4-inch · 640 × 1136'], ['640x960', '3.5-inch · 640 × 960']
+      ]
+    },
+    ipad: {
+      name: 'iPad', folder: 'iPad', defaultSize: '2064x2752',
+      presets: [
+        ['2064x2752', '13-inch · 2064 × 2752'], ['2048x2732', '13 / 12.9-inch · 2048 × 2732'],
+        ['1668x2420', '11-inch · 1668 × 2420'], ['1668x2388', '11-inch · 1668 × 2388'],
+        ['1640x2360', '11-inch · 1640 × 2360'], ['1488x2266', '11-inch · 1488 × 2266'],
+        ['1668x2224', '10.5-inch · 1668 × 2224'], ['1536x2048', '9.7-inch · 1536 × 2048'],
+        ['768x1024', '9.7-inch · 768 × 1024']
+      ]
+    },
+    watch: {
+      name: 'Apple Watch', folder: 'Apple-Watch', defaultSize: 'auto',
+      presets: [
+        ['auto', 'Auto · common source size'], ['422x514', 'Ultra 4 / 3 · 422 × 514'],
+        ['410x502', 'Ultra 2 / Ultra · 410 × 502'], ['416x496', 'Series 12 / 11 / 10 · 416 × 496'],
+        ['396x484', 'Series 9 / 8 / 7 · 396 × 484'], ['368x448', 'Series 6 / 5 / 4 / SE · 368 × 448'],
+        ['312x390', 'Series 3 / 2 / 1 · 312 × 390']
+      ]
+    }
+  };
+  const allSlides = [];
+
+  // App Store Connect validates each upload slot separately. Derive slot choices
+  // from the presets so a 6.9-inch size cannot be selected in the 6.5-inch slot.
+  const iphoneSlotSelect = $('slot-iphone');
+  for (const slot of new Set(DEVICES.iphone.presets.map(([, label]) => label.split(' · ')[0]))) {
+    iphoneSlotSelect.add(new Option(slot === '6.5-inch' ? slot + ' · default' : slot, slot));
+  }
+  iphoneSlotSelect.value = '6.5-inch';
+
+  function iphoneSlotPresets() {
+    const prefix = iphoneSlotSelect.value + ' · ';
+    const presets = DEVICES.iphone.presets.filter(([, label]) => label.startsWith(prefix));
+    if (!presets.length) throw new Error('Choose a valid iPhone upload slot.');
+    return presets;
+  }
+
+  function populateIphoneSizes() {
+    const size = $('size-iphone'), previous = size.value;
+    const presets = iphoneSlotPresets();
+    size.replaceChildren(...presets.map(([value, label]) => new Option(label, value)));
+    size.value = presets.some(([value]) => value === previous) ? previous : presets[0][0];
+  }
+
+  function assertAcceptedDimensions(device, target) {
+    if (![target.width, target.height].every((value) => Number.isInteger(value) && value > 0)) {
+      throw new Error('The export has invalid pixel dimensions. Nothing was downloaded.');
+    }
+    const key = device === 'watch' ? `${target.width}x${target.height}` :
+      `${Math.min(target.width, target.height)}x${Math.max(target.width, target.height)}`;
+    const presets = device === 'iphone' ? iphoneSlotPresets() : DEVICES[device].presets;
+    if (!presets.some(([value]) => value === key)) {
+      const slot = device === 'iphone' ? ' ' + iphoneSlotSelect.value + ' upload slot' : '';
+      throw new Error(`${target.width} × ${target.height} is not accepted for ${DEVICES[device].name}${slot}. Choose a matching export size.`);
+    }
+  }
+
+  function syncExportSize(slide) {
+    const label = slide.parentElement.querySelector('.target-size');
+    if (!label) return;
+    const target = dimensions(slide);
+    label.textContent = `Export · ${target.width} × ${target.height} px`;
+  }
+
+  function filename(source) {
+    try { return decodeURIComponent(new URL(source, location.href).pathname.split('/').pop()); }
+    catch { return source.split('/').pop().split('?')[0]; }
+  }
+  function imageName(image) { return originalNames.get(image) || filename(image.getAttribute('src') || image.src) || image.alt || 'image'; }
+  function nameKey(name) { return name.normalize('NFC').toLowerCase(); }
+  function setStatus(message, state = '') { status.textContent = message; status.dataset.state = state; }
+  function deviceOf(slide) { return slide.closest('[data-device].device-section').dataset.device; }
+  function deviceSlides(device) { return allSlides.filter((slide) => deviceOf(slide) === device); }
+  function imageOf(slide) { return slide.querySelector('img'); }
+  function hasImage(image) { return image.complete && image.naturalWidth > 0 && image.naturalHeight > 0; }
+  function rawMode(device) { return device === 'watch' || $(`style-${device}`).value === 'raw'; }
+
+  for (const [device, config] of Object.entries(DEVICES)) {
+    const size = $(`size-${device}`);
+    for (const [value, label] of config.presets) size.add(new Option(label, value));
+    size.value = config.defaultSize;
+    if (device === 'iphone') populateIphoneSizes();
+    document.querySelectorAll(`#device-${device} .wrap > .slide`).forEach((slide, index) => {
+      const segment = document.createElement('section');
+      segment.className = 'segment';
+      segment.setAttribute('aria-label', `${config.name} screenshot ${index + 1}`);
+      slide.before(segment); segment.append(slide); allSlides.push(slide);
+      const image = imageOf(slide);
+      originalNames.set(image, filename(image.getAttribute('src') || image.src));
+      const placeholder = document.createElement('div');
+      placeholder.className = 'image-placeholder'; placeholder.setAttribute('data-no-export', '');
+      const label = document.createElement('div'); label.textContent = imageName(image);
+      const detail = document.createElement('span'); detail.textContent = 'Choose your screenshot folder';
+      placeholder.append(label, detail); image.parentElement.append(placeholder);
+      const actions = document.createElement('div'); actions.className = 'segment-actions';
+      const name = document.createElement('span'); name.className = 'name';
+      name.textContent = `${String(index + 1).padStart(2,'0')} · ${imageName(image)}`;
+      const source = document.createElement('span'); source.className = 'source-size';
+      const targetLabel = document.createElement('span'); targetLabel.className = 'target-size';
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'export-one';
+      button.textContent = 'Export PNG'; button.setAttribute('aria-label', `Export ${config.name} ${imageName(image)}`);
+      button.addEventListener('click', () => requestExport({ kind: 'one', slide }));
+      const preview = document.createElement('button'); preview.type = 'button'; preview.className = 'preview-one';
+      preview.textContent = 'Preview export'; preview.setAttribute('aria-label', `Preview exported ${config.name} ${imageName(image)}`);
+      preview.addEventListener('click', () => requestExport({ kind: 'preview', slide }));
+      const buttons = document.createElement('div'); buttons.className = 'segment-buttons'; buttons.append(preview, button);
+      actions.append(name, source, targetLabel, buttons); segment.append(actions);
+      image.addEventListener('load', () => { syncPreview(slide); if (!busy) updateImageStatus(); });
+      image.addEventListener('error', () => { syncPreview(slide); if (!busy) updateImageStatus(); });
+      syncPreview(slide);
+    });
+    size.addEventListener('change', updateImageStatus);
+    if (device !== 'watch') {
+      $(`orientation-${device}`).addEventListener('change', updateImageStatus);
+      $(`style-${device}`).addEventListener('change', () => {
+        $(`device-${device}`).classList.toggle('raw-mode', rawMode(device));
+        deviceSlides(device).forEach(syncPreview); updateImageStatus();
+      });
+    }
+  }
+
+  iphoneSlotSelect.addEventListener('change', () => { populateIphoneSizes(); updateImageStatus(); });
+
+  function syncPreview(slide) {
+    const image = imageOf(slide), segment = slide.parentElement;
+    const loaded = hasImage(image), device = deviceOf(slide);
+    segment.dataset.state = loaded ? 'loaded' : 'missing';
+    segment.querySelector('.image-placeholder').hidden = loaded;
+    segment.querySelector('.source-size').textContent = loaded ? `Source · ${image.naturalWidth} × ${image.naturalHeight} px` : 'Source · Not loaded';
+    syncExportSize(slide);
+    const landscape = loaded && image.naturalWidth > image.naturalHeight;
+    segment.classList.toggle('landscape', landscape);
+    const frame = image.parentElement;
+    const width = device === 'ipad' ? (landscape ? 360 : 260) : device === 'watch' ? 210 : 170;
+    const ratio = loaded ? image.naturalHeight / image.naturalWidth : device === 'ipad' ? 4/3 : device === 'watch' ? 514/422 : 368/170;
+    // Keep native aspect ratio inside the border, avoiding object-fit:cover crop.
+    const border = (device === 'watch' || rawMode(device)) ? 0 : 4;
+    frame.style.height = `${(width - border) * ratio + border}px`;
+  }
+
+  function watchSize() {
+    const value = $('size-watch').value;
+    if (value !== 'auto') return value;
+    const sizes = new Set(deviceSlides('watch').map(imageOf).filter(hasImage).map((image) => `${image.naturalWidth}x${image.naturalHeight}`));
+    const common = sizes.size === 1 ? [...sizes][0] : null;
+    return DEVICES.watch.presets.some(([size]) => size === common) ? common : '422x514';
+  }
+  function dimensions(slide) {
+    const device = deviceOf(slide), selected = $(`size-${device}`).value;
+    if (!DEVICES[device].presets.some(([value]) => value === selected)) throw new Error(`Choose an accepted ${DEVICES[device].name} size.`);
+    let [width, height] = (device === 'watch' ? watchSize() : selected).split('x').map(Number);
+    if (device !== 'watch') {
+      const orientation = $(`orientation-${device}`).value;
+      if (!['auto','portrait','landscape'].includes(orientation)) throw new Error('Choose a valid screenshot orientation.');
+      const image = imageOf(slide);
+      if (orientation === 'landscape' || (orientation === 'auto' && image.naturalWidth > image.naturalHeight)) [width, height] = [height, width];
+    }
+    const target = { width, height };
+    assertAcceptedDimensions(device, target);
+    return target;
+  }
+
+  function setBusy(value) {
+    busy = value;
+    document.querySelectorAll('button, select').forEach((control) => { control.disabled = value; });
+    exportAll.setAttribute('aria-busy', String(value));
+    exportAll.textContent = value ? 'Working…' : 'Export everything (ZIP)';
+    progress.hidden = !value;
+    if (value) progress.value = 0;
+  }
+
+  function updateImageStatus() {
+    const allowed = iphoneSlotPresets().map(([value]) => value.split('x').map(Number));
+    const portrait = allowed.map(([w, h]) => `${w} × ${h}`).join(' or ');
+    const landscape = allowed.map(([w, h]) => `${h} × ${w}`).join(' or ');
+    $('iphone-slot-help').textContent = `Upload to the ${iphoneSlotSelect.value} iPhone slot. Accepted: ${portrait} px (portrait), or ${landscape} px (landscape). Choose the same slot in App Store Connect; do not mix sizes from other slots.`;
+    for (const slide of allSlides) syncExportSize(slide);
+    for (const [device, config] of Object.entries(DEVICES)) {
+      const current = deviceSlides(device), ready = current.filter((slide) => hasImage(imageOf(slide))).length;
+      let detail;
+      if (device === 'watch') detail = `Screenshot only · ${watchSize().replace('x',' × ')} px for the whole set. Keep this size consistent across localizations.`;
+      else {
+        const base = $(`size-${device}`).value.replace('x',' × ');
+        const orientation = $(`orientation-${device}`).value;
+        detail = `${rawMode(device) ? 'Screenshot only' : 'Complete designed segments'} · ${base} px${orientation === 'auto' ? ', swapped for landscape sources' : orientation === 'landscape' ? ', swapped to landscape' : ', portrait'}.${device === 'iphone' ? ` Upload slot: ${iphoneSlotSelect.value}.` : ''}`;
+      }
+      $(`summary-${device}`).textContent = `${ready}/${current.length} loaded. ${detail}`;
+    }
+    if (busy) return;
+    const missing = allSlides.map(imageOf).filter((image) => !hasImage(image));
+    const localPermission = allSlides.map(imageOf).some((image) => !imported.has(image) && new URL(image.src,location.href).protocol === 'file:');
+    if (missing.length) {
+      setStatus(`${allSlides.length - missing.length}/${allSlides.length} screenshots loaded. Choose the screenshot folder to load everything.${importNote ? ' '+importNote : ''}`, 'warning');
+    } else if (localPermission) {
+      setStatus('All 16 previews loaded. Choose the screenshot folder once to allow local-file export, or click Export to open the picker.');
+    } else setStatus(`All ${allSlides.length} screenshots ready · 8 iPhone / 5 iPad / 3 Watch · ${formatSelect.value.toUpperCase()} · no alpha channel.${importNote ? ' '+importNote : ''}`, 'success');
+  }
+  function timeout(promise, milliseconds, message) {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); })
+    ]).finally(() => clearTimeout(timer));
+  }
+
+  const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  async function fetchWithTimeout(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(url, { mode: 'cors', credentials: 'same-origin', signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      // Consume inside the timeout too, so a stalled response body cannot hang export.
+      return await response.blob();
+    } finally { clearTimeout(timer); }
+  }
+
+  function asDataURL(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('An image or font file could not be read.'));
+      reader.onabort = () => reject(new Error('File reading was interrupted.'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function decodeImage(source) {
+    return timeout(new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = async () => {
+        try {
+          if (typeof image.decode === 'function') await image.decode();
+          if (!image.naturalWidth || !image.naturalHeight) throw new Error('The image has no readable pixels.');
+          resolve(image);
+        } catch { reject(new Error('An image could not be fully decoded. Select the screenshot files again.')); }
+      };
+      image.onerror = () => reject(new Error('An image could not be decoded. Use a valid PNG or JPEG.'));
+      image.src = source;
+    }), 15000, 'Image rendering timed out. Retry in a current desktop browser.');
+  }
+
+  async function waitForImage(image) {
+    if (!image.complete) {
+      await timeout(new Promise((resolve, reject) => {
+        const cleanup = () => {
+          image.removeEventListener('load', loaded);
+          image.removeEventListener('error', failed);
+        };
+        const loaded = () => { cleanup(); resolve(); };
+        const failed = () => { cleanup(); reject(new Error(imageName(image))); };
+        image.addEventListener('load', loaded, { once: true });
+        image.addEventListener('error', failed, { once: true });
+      }), 15000, imageName(image));
+    }
+    if (!image.naturalWidth || !image.naturalHeight) throw new Error(imageName(image));
+    if (image.decode) await image.decode();
+  }
+
+  async function prepareFonts(currentSlides) {
+    if (!document.fonts) return { fallback: true };
+    try {
+      const faces = [
+        ['400 18px "DM Serif Display"', 'Your music'],
+        ['italic 400 18px "DM Serif Display"', 'offline & free'],
+        ['600 10px "DM Sans"', 'MADE FOR MUSIC LOVERS'],
+        ['400 10px "DM Sans"', 'Recently played']
+      ];
+      const loaded = await timeout(Promise.all(faces.map(([font, text]) => document.fonts.load(font, text))),
+        8000, 'Font loading timed out.');
+      return { fallback: loaded.some((list) => list.length === 0) };
+    } catch { return { fallback: true }; }
+  }
+
+  function canvasFor(target, background = BACKGROUND) {
+    const canvas = document.createElement('canvas');
+    canvas.width = target.width; canvas.height = target.height;
+    const context = canvas.getContext('2d', { alpha: false, colorSpace: 'srgb', willReadFrequently: true });
+    if (!context) throw new Error('Canvas rendering is unavailable in this browser.');
+    context.fillStyle = background; context.fillRect(0, 0, canvas.width, canvas.height);
+    context.imageSmoothingEnabled = true; context.imageSmoothingQuality = 'high';
+    return { canvas, context };
+  }
+
+  function roundedPath(context, x, y, width, height, radius) {
+    const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+    context.beginPath(); context.moveTo(x + r, y);
+    context.lineTo(x + width - r, y); context.quadraticCurveTo(x + width, y, x + width, y + r);
+    context.lineTo(x + width, y + height - r); context.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+    context.lineTo(x + r, y + height); context.quadraticCurveTo(x, y + height, x, y + height - r);
+    context.lineTo(x, y + r); context.quadraticCurveTo(x, y, x + r, y); context.closePath();
+  }
+
+  // Measure a fresh, hidden HTML copy only for layout. It is NEVER serialized
+  // into an SVG. The output is painted with native Canvas 2D calls instead.
+  // This also keeps exports independent of scroll position and preview zoom.
+  function measureSlide(slide, fonts) {
+    const holder = document.createElement('div');
+    holder.dataset.device = deviceOf(slide);
+    holder.setAttribute('aria-hidden', 'true');
+    holder.style.cssText = 'position:fixed;left:-20000px;top:0;width:max-content;height:auto;visibility:hidden;pointer-events:none;contain:layout style;';
+    const segment = document.createElement('div');
+    segment.className = slide.parentElement.className;
+    segment.dataset.state = 'loaded';
+    const clone = slide.cloneNode(true);
+    clone.querySelectorAll('[data-no-export]').forEach((element) => element.remove());
+    if (fonts.fallback) {
+      clone.querySelectorAll('.tagline,.sub').forEach((element) => { element.style.fontFamily = 'Arial, sans-serif'; });
+      clone.querySelectorAll('.headline,.headline em').forEach((element) => { element.style.fontFamily = 'Georgia, serif'; });
+    }
+    segment.append(clone); holder.append(segment);
+    // Keep temporary measurements outside body-level zoom/transforms. The
+    // explicit artwork CSS still applies, but preview scaling cannot leak in.
+    document.documentElement.append(holder);
+    try {
+      const origin = clone.getBoundingClientRect();
+      const width = parseFloat(getComputedStyle(clone).width);
+      const zoom = origin.width / width;
+      if (!(width > 0 && zoom > 0 && origin.height > 0)) throw new Error('The screenshot layout has no measurable size.');
+      const rectOf = (rect) => ({ x: (rect.left - origin.left) / zoom, y: (rect.top - origin.top) / zoom,
+        width: rect.width / zoom, height: rect.height / zoom });
+      const frame = clone.querySelector('.phone-frame,.device-frame');
+      const frameStyle = getComputedStyle(frame);
+      const baselineCache = new Map();
+      const runs = [];
+      const fontOf = (style) => `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      function baselineOf(style) {
+        const font = fontOf(style);
+        if (baselineCache.has(font)) return baselineCache.get(font);
+        // A zero-height inline block sits exactly on the browser's baseline.
+        // Measuring it avoids platform-dependent guesses about font ascent.
+        const probe = document.createElement('span');
+        probe.style.cssText = 'position:absolute;left:0;top:0;white-space:nowrap;';
+        probe.style.font = font;
+        const text = document.createTextNode('Hg');
+        const marker = document.createElement('span');
+        marker.style.cssText = 'display:inline-block;width:0;height:0;padding:0;margin:0;border:0;vertical-align:baseline;';
+        probe.append(text, marker); holder.append(probe);
+        const range = document.createRange(); range.selectNodeContents(text);
+        const result = (marker.getBoundingClientRect().top - range.getBoundingClientRect().top) / zoom;
+        probe.remove(); baselineCache.set(font, result); return result;
+      }
+      for (const element of clone.querySelectorAll('.tagline,.headline,.sub')) {
+        if (getComputedStyle(element).display === 'none') continue;
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          const style = getComputedStyle(node.parentElement);
+          const font = fontOf(style), ascent = baselineOf(style);
+          const spacing = parseFloat(style.letterSpacing) || 0;
+          const range = document.createRange();
+          let offset = 0, run = null;
+          for (const char of node.textContent) {
+            range.setStart(node, offset); offset += char.length; range.setEnd(node, offset);
+            const rect = rectOf(range.getBoundingClientRect());
+            if (!(rect.width > 0 && rect.height > 0)) continue; // Collapsed whitespace.
+            let text = /\s/.test(char) ? ' ' : char;
+            if (style.textTransform === 'uppercase') text = text.toUpperCase();
+            else if (style.textTransform === 'lowercase') text = text.toLowerCase();
+            const baseline = rect.y + ascent;
+            if (!run || Math.abs(run.baseline - baseline) > 0.5) {
+              run = { font, color: style.color, spacing, x: rect.x, baseline, text: '', glyphs: [] };
+              runs.push(run);
+            }
+            run.text += text; run.glyphs.push({ text, x: rect.x });
+          }
+        }
+      }
+      return { width, height: origin.height / zoom, runs,
+        frame: { ...rectOf(frame.getBoundingClientRect()), radius: parseFloat(frameStyle.borderTopLeftRadius) || 0,
+          border: parseFloat(frameStyle.borderTopWidth) || 0, borderColor: frameStyle.borderTopColor } };
+    } finally { holder.remove(); }
+  }
+
+  function paintText(context, run) {
+    context.font = run.font; context.fillStyle = run.color;
+    context.textAlign = 'left'; context.textBaseline = 'alphabetic';
+    if ('fontKerning' in context) context.fontKerning = 'normal';
+    if ('letterSpacing' in context) {
+      context.letterSpacing = `${run.spacing}px`;
+      context.fillText(run.text, run.x, run.baseline);
+      context.letterSpacing = '0px';
+    } else if (run.spacing) {
+      // Older engines lack canvas letterSpacing. DOM-measured glyph positions
+      // keep uppercase taglines correctly tracked without that API.
+      for (const glyph of run.glyphs) context.fillText(glyph.text, glyph.x, run.baseline);
+    } else context.fillText(run.text, run.x, run.baseline);
+  }
+
+  // Check the actual screenshot area, not just file dimensions or byte size.
+  // Compare small interior samples after painting, avoiding rounded corners.
+  // A genuinely black source is allowed; a visible source that disappears fails.
+  function verifyScreenshotPixels(canvas, source, painted) {
+    if (![painted.x, painted.y, painted.width, painted.height].every(Number.isFinite) ||
+        painted.width < 1 || painted.height < 1 || painted.x < -1 || painted.y < -1 ||
+        painted.x + painted.width > canvas.width + 1 || painted.y + painted.height > canvas.height + 1) {
+      throw new Error('Screenshot placement is invalid. No blank image was downloaded.');
+    }
+    const size = 32, inset = 0.15;
+    const expected = canvasFor({ width: size, height: size }, '#000');
+    const actual = canvasFor({ width: size, height: size }, '#000');
+    try {
+      expected.context.drawImage(source, source.naturalWidth * inset, source.naturalHeight * inset,
+        source.naturalWidth * (1 - 2 * inset), source.naturalHeight * (1 - 2 * inset), 0, 0, size, size);
+      actual.context.drawImage(canvas, painted.x + painted.width * inset, painted.y + painted.height * inset,
+        painted.width * (1 - 2 * inset), painted.height * (1 - 2 * inset), 0, 0, size, size);
+      const a = actual.context.getImageData(0, 0, size, size).data;
+      const b = expected.context.getImageData(0, 0, size, size).data;
+      let error = 0, signal = 0;
+      for (let index = 0; index < a.length; index += 4) {
+        for (let channel = 0; channel < 3; channel++) {
+          error += Math.abs(a[index + channel] - b[index + channel]); signal += b[index + channel];
+        }
+      }
+      error /= size * size * 3; signal /= size * size * 3;
+      if (error > Math.max(18, signal * 0.45)) {
+        throw new Error('The screenshot did not paint correctly. Export stopped instead of saving a blank file. Reload the image files and retry.');
+      }
+    } catch (error) {
+      if (error.name === 'SecurityError') throw new Error('Image pixels could not be read. Use “Choose screenshot folder…” to grant local-file access, then retry.');
+      throw error;
+    } finally { expected.canvas.width = actual.canvas.width = 1; expected.canvas.height = actual.canvas.height = 1; }
+  }
+
+  async function renderSlide(slide, target, bounds, imageData, plan) {
+    const source = await decodeImage(imageData.get(imageOf(slide)));
+    const { canvas, context } = canvasFor(target);
+    try {
+      const scale = Math.min(target.width / (bounds.width + 40), target.height / (bounds.height + 48));
+      const offsetX = (target.width - plan.width * scale) / 2;
+      const offsetY = (target.height - bounds.height * scale) / 2;
+      const frame = plan.frame;
+      context.save(); context.setTransform(scale, 0, 0, scale, offsetX, offsetY);
+      // Draw the frame shadow and outline before the screenshot itself.
+      context.save(); context.shadowColor = 'rgba(0,0,0,0.8)';
+      context.shadowBlur = 60 * scale; context.shadowOffsetY = 24 * scale;
+      roundedPath(context, frame.x, frame.y, frame.width, frame.height, frame.radius);
+      context.fillStyle = '#000'; context.fill(); context.restore();
+      roundedPath(context, frame.x - 1, frame.y - 1, frame.width + 2, frame.height + 2, frame.radius + 1);
+      context.fillStyle = '#111'; context.fill();
+      roundedPath(context, frame.x, frame.y, frame.width, frame.height, frame.radius);
+      context.fillStyle = frame.borderColor; context.fill();
+      const inner = { x: frame.x + frame.border, y: frame.y + frame.border,
+        width: frame.width - 2 * frame.border, height: frame.height - 2 * frame.border };
+      context.save(); roundedPath(context, inner.x, inner.y, inner.width, inner.height, frame.radius - frame.border);
+      context.clip(); context.fillStyle = '#000'; context.fillRect(inner.x, inner.y, inner.width, inner.height);
+      const imageScale = Math.min(inner.width / source.naturalWidth, inner.height / source.naturalHeight);
+      const width = source.naturalWidth * imageScale, height = source.naturalHeight * imageScale;
+      const x = inner.x + (inner.width - width) / 2, y = inner.y + (inner.height - height) / 2;
+      context.drawImage(source, x, y, width, height); context.restore();
+      for (const run of plan.runs) paintText(context, run);
+      context.restore();
+      verifyScreenshotPixels(canvas, source, { x: offsetX + x * scale, y: offsetY + y * scale,
+        width: width * scale, height: height * scale });
+      return canvas;
+    } catch (error) { canvas.width = canvas.height = 1; throw error; }
+  }
+
+  const encoder = new TextEncoder();
+  const crcTable = Uint32Array.from({ length: 256 }, (_, index) => {
+    let value = index;
+    for (let bit = 0; bit < 8; bit++) value = (value & 1) ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    return value >>> 0;
+  });
+
+  function crc32(bytes) {
+    let crc = 0xffffffff;
+    for (const byte of bytes) crc = crcTable[(crc ^ byte) & 255] ^ (crc >>> 8);
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function pngChunk(type, data) {
+    const chunk = new Uint8Array(data.length + 12);
+    const view = new DataView(chunk.buffer);
+    view.setUint32(0, data.length, false);
+    chunk.set(encoder.encode(type), 4);
+    chunk.set(data, 8);
+    view.setUint32(data.length + 8, crc32(chunk.subarray(4, data.length + 8)), false);
+    return chunk;
+  }
+
+  async function rgbPNG(canvas) {
+    const { width, height } = canvas;
+    const rgba = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+    const stride = width * 3 + 1;
+    const scanlines = new Uint8Array(stride * height);
+    for (let y = 0; y < height; y++) {
+      const row = y * stride;
+      scanlines[row] = 1; // PNG Sub filter, three bytes per pixel (RGB).
+      for (let x = 0; x < width; x++) {
+        const source = (y * width + x) * 4;
+        const dest = row + 1 + x * 3;
+        for (let channel = 0; channel < 3; channel++) {
+          scanlines[dest + channel] = (rgba[source + channel] - (x ? rgba[source - 4 + channel] : 0)) & 255;
+        }
+      }
+      if (y % 256 === 0) await yieldToBrowser();
+    }
+    const compressed = await deflateBytes(scanlines);
+    const ihdr = new Uint8Array(13);
+    const view = new DataView(ihdr.buffer);
+    view.setUint32(0, width, false);
+    view.setUint32(4, height, false);
+    ihdr[8] = 8; // Eight bits per channel.
+    ihdr[9] = 2; // Truecolor RGB, NOT RGBA. No tRNS chunk is written.
+    return new Blob([
+      new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+      pngChunk('IHDR', ihdr), pngChunk('sRGB', new Uint8Array([0])),
+      pngChunk('IDAT', compressed), pngChunk('IEND', new Uint8Array())
+    ], { type: 'image/png' });
+  }
+
+  function jpeg(canvas) {
+    return new Promise((resolve, reject) => canvas.toBlob((blob) => {
+      if (blob && blob.type === 'image/jpeg') resolve(blob);
+      else reject(new Error('JPEG encoding failed. Try PNG or another desktop browser.'));
+    }, 'image/jpeg', 0.98));
+  }
+
+  async function verifyEncodedDimensions(blob, target, device) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let width = 0, height = 0;
+    if (blob.type === 'image/png') {
+      const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+      if (bytes.length < 33 || !signature.every((value, index) => bytes[index] === value) ||
+          view.getUint32(8) !== 13 || view.getUint32(12) !== 0x49484452 || bytes[24] !== 8 || bytes[25] !== 2) {
+        throw new Error('The encoded PNG is not a valid 8-bit RGB export. Nothing was downloaded.');
+      }
+      width = view.getUint32(16); height = view.getUint32(20);
+    } else if (blob.type === 'image/jpeg') {
+      if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+        throw new Error('The encoded JPEG header is invalid. Nothing was downloaded.');
+      }
+      const frameMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+      let position = 2;
+      while (position + 3 < bytes.length) {
+        if (bytes[position++] !== 0xff) break;
+        while (position < bytes.length && bytes[position] === 0xff) position++;
+        const marker = bytes[position++];
+        if (marker === 0xda || marker === 0xd9) break;
+        if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+        if (position + 2 > bytes.length) break;
+        const length = view.getUint16(position);
+        if (length < 2 || position + length > bytes.length) break;
+        if (frameMarkers.has(marker)) {
+          if (length < 8) break;
+          height = view.getUint16(position + 3); width = view.getUint16(position + 5);
+          break;
+        }
+        position += length;
+      }
+    } else throw new Error('The export is not a PNG or JPEG. Nothing was downloaded.');
+    if (width !== target.width || height !== target.height) {
+      throw new Error(`Encoded file size mismatch: expected ${target.width} × ${target.height}, got ${width} × ${height}. Nothing was downloaded.`);
+    }
+    assertAcceptedDimensions(device, { width, height });
+  }
+
+  // ZIP "store" entries: PNG/JPEG data is already compressed. The archive uses
+  // standard local headers, a central directory and UTF-8 filenames, no library.
+  async function makeZip(files) {
+    const localParts = [];
+    const centralParts = [];
+    let offset = 0;
+    let centralSize = 0;
+    const now = new Date();
+    const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+    const dosDate = ((Math.max(1980, Math.min(2107, now.getFullYear())) - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+    for (const file of files) {
+      const name = encoder.encode(file.name);
+      const data = new Uint8Array(await file.blob.arrayBuffer());
+      const crc = crc32(data);
+      const local = new Uint8Array(30 + name.length);
+      const l = new DataView(local.buffer);
+      l.setUint32(0, 0x04034b50, true);
+      l.setUint16(4, 20, true); l.setUint16(6, 0x0800, true);
+      l.setUint16(10, dosTime, true); l.setUint16(12, dosDate, true);
+      l.setUint32(14, crc, true); l.setUint32(18, data.length, true); l.setUint32(22, data.length, true);
+      l.setUint16(26, name.length, true); local.set(name, 30);
+      const central = new Uint8Array(46 + name.length);
+      const c = new DataView(central.buffer);
+      c.setUint32(0, 0x02014b50, true);
+      c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+      c.setUint16(12, dosTime, true); c.setUint16(14, dosDate, true); c.setUint32(16, crc, true);
+      c.setUint32(20, data.length, true); c.setUint32(24, data.length, true);
+      c.setUint16(28, name.length, true); c.setUint32(42, offset, true); central.set(name, 46);
+      localParts.push(local, data);
+      centralParts.push(central);
+      offset += local.length + data.length;
+      centralSize += central.length;
+      await yieldToBrowser();
+    }
+    const end = new Uint8Array(22);
+    const e = new DataView(end.buffer);
+    e.setUint32(0, 0x06054b50, true);
+    e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+    e.setUint32(12, centralSize, true); e.setUint32(16, offset, true);
+    return new Blob([...localParts, ...centralParts, end], { type: 'application/zip' });
+  }
+
+
+  async function deflateBytes(bytes) {
+    if (typeof CompressionStream !== 'undefined') {
+      return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
+    }
+    // RFC 1950 zlib wrapper + RFC 1951 uncompressed DEFLATE blocks.
+    // Valid lossless PNG, simply larger than the compressed path.
+    const count = Math.ceil(bytes.length / 65535);
+    const out = new Uint8Array(2 + count * 5 + bytes.length + 4);
+    out.set([0x78, 0x01]);
+    let offset = 2, a = 1, b = 0;
+    for (let start = 0; start < bytes.length; start += 65535) {
+      const length = Math.min(65535, bytes.length - start);
+      out[offset++] = start + length === bytes.length ? 1 : 0;
+      out[offset++] = length & 255; out[offset++] = length >>> 8;
+      out[offset++] = (~length) & 255; out[offset++] = ((~length) >>> 8) & 255;
+      out.set(bytes.subarray(start, start + length), offset); offset += length;
+      for (let i = start; i < start + length; i++) {
+        a = (a + bytes[i]) % 65521; b = (b + a) % 65521;
+      }
+      if (start % (65535 * 16) === 0) await yieldToBrowser();
+    }
+    new DataView(out.buffer).setUint32(offset, ((b << 16) | a) >>> 0, false);
+    return out;
+  }
+
+  async function prepareImages(selected) {
+    const images = selected.map(imageOf);
+    const checks = await Promise.allSettled(images.map(waitForImage));
+    const missing = images.filter((_, index) => checks[index].status === 'rejected');
+    if (missing.length) throw new Error(`Cannot export this batch: missing or unreadable ${missing.map(imageName).join(', ')}. Choose the screenshot folder or the missing files. Nothing was skipped.`);
+    const result = new Map();
+    for (const image of images) {
+      const source = image.currentSrc || image.src;
+      const cached = imageDataCache.get(image);
+      if (cached && cached.source === source) { result.set(image,cached.data); continue; }
+      if (source.startsWith('data:')) { result.set(image,source); continue; }
+      if (new URL(source,location.href).protocol === 'file:') throw new Error('Choose the screenshot folder once to permit local export. Your browser does not let a page read neighboring files automatically.');
+      try {
+        const data = await asDataURL(await fetchWithTimeout(source));
+        await decodeImage(data);
+        imageDataCache.set(image,{ source,data }); result.set(image,data);
+      } catch {
+        throw new Error(`Cannot read ${imageName(image)}. Choose the screenshot folder or image files, or serve this folder on localhost.`);
+      }
+    }
+    return result;
+  }
+
+  function selectedSlides(request) {
+    if (request.kind === 'one' || request.kind === 'preview') return allSlides.includes(request.slide) ? [request.slide] : [];
+    if (request.kind === 'device') return deviceSlides(request.device);
+    // Never use visibility or scroll position to decide what "everything" means.
+    return [...allSlides];
+  }
+
+  function requestExport(request) {
+    if (busy) return;
+    const selected = selectedSlides(request);
+    const needsPermission = selected.map(imageOf).some((image) => !imported.has(image) && new URL(image.src,location.href).protocol === 'file:');
+    if (needsPermission) {
+      pendingRequest = request;
+      setStatus('Select the folder containing your screenshots. The requested export starts automatically after the images load. Nothing is uploaded.');
+      if ('webkitdirectory' in $('folder-files')) $('folder-files').click();
+      else $('image-files').click();
+      return;
+    }
+    pendingRequest = null;
+    void exportScreenshots(request);
+  }
+
+  async function importFiles(fileList) {
+    if (busy || !fileList.length) return;
+    setBusy(true); setStatus('Matching screenshot filenames and reading images locally…');
+    const resume = pendingRequest; pendingRequest = null;
+    let ok = false;
+    try {
+      const expected = new Map(allSlides.map((slide) => [nameKey(imageName(imageOf(slide))), imageOf(slide)]));
+      const chosen = new Map();
+      const duplicates = new Set();
+      for (const file of Array.from(fileList)) {
+        const key = nameKey(file.name);
+        if (!expected.has(key)) continue;
+        // Prefer the containing folder over old copies in nested backup folders.
+        const depth = (file.webkitRelativePath || file.name).split('/').length;
+        const previous = chosen.get(key);
+        if (!previous || depth < previous.depth) { chosen.set(key,{file,depth}); duplicates.delete(key); }
+        else if (depth === previous.depth) duplicates.add(key);
+      }
+      if (duplicates.size) throw new Error(`Duplicate screenshot filenames: ${[...duplicates].join(', ')}. Select one copy of each image with “Choose image files…”.`);
+      if (!chosen.size) throw new Error('No matching screenshots found. Choose the folder containing home.PNG, iPad_Home.png and Watch_Home.PNG, or select their screenshot files.');
+      let loaded = 0; const errors = [];
+      for (const [key,{file}] of chosen) {
+        try {
+          if (!/\.(png|jpe?g)$/i.test(file.name) || (file.type && !['image/png','image/jpeg'].includes(file.type))) throw new Error(`${file.name}: use a PNG or JPEG.`);
+          const data = await asDataURL(file); await decodeImage(data);
+          const image = expected.get(key);
+          image.removeAttribute('srcset'); image.src = data;
+          await waitForImage(image); imported.add(image); imageDataCache.delete(image);
+          syncPreview(image.closest('.slide')); loaded++;
+        } catch (error) { errors.push(error.message || file.name); }
+        progress.value = Math.round((loaded + errors.length) / chosen.size * 100);
+        await yieldToBrowser();
+      }
+      const ignored = fileList.length - chosen.size;
+      importNote = ignored > 0 ? `${ignored} unrelated file${ignored === 1 ? '' : 's'} ignored.` : '';
+      if (errors.length) throw new Error(`${loaded} screenshots loaded. Unreadable files: ${errors.join('; ')}`);
+      ok = true;
+    } catch (error) { setStatus(error.message || 'Could not read the selected image files.', 'error'); }
+    finally {
+      $('folder-files').value = ''; $('image-files').value = ''; setBusy(false);
+    }
+    if (ok) {
+      updateImageStatus();
+      if (resume) await exportScreenshots(resume);
+    }
+  }
+
+  async function renderRaw(slide, target, imageData) {
+    const source = await decodeImage(imageData.get(imageOf(slide)));
+    const { canvas, context } = canvasFor(target, '#000');
+    try {
+      const scale = Math.min(target.width / source.naturalWidth, target.height / source.naturalHeight);
+      const width = source.naturalWidth * scale, height = source.naturalHeight * scale;
+      const x = (target.width - width) / 2, y = (target.height - height) / 2;
+      context.drawImage(source, x, y, width, height);
+      verifyScreenshotPixels(canvas, source, { x, y, width, height });
+      return canvas;
+    } catch (error) { canvas.width = canvas.height = 1; throw error; }
+  }
+
+  function showExportPreview(blob, name, target) {
+    if (previewURL) URL.revokeObjectURL(previewURL);
+    previewURL = URL.createObjectURL(blob);
+    $('preview-title').textContent = name;
+    $('preview-detail').textContent = `${target.width} × ${target.height} px · Actual encoded export, not the HTML preview · Encoded dimensions and screenshot pixels verified`;
+    $('preview-image').src = previewURL;
+    $('preview-download').href = previewURL; $('preview-download').download = name;
+    const dialog = $('export-preview');
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  }
+
+  function download(blob, name) {
+    if (downloadURL) URL.revokeObjectURL(downloadURL);
+    downloadURL = URL.createObjectURL(blob);
+    downloadAgain.href = downloadURL; downloadAgain.download = name;
+    downloadAgain.hidden = false; downloadAgain.textContent = 'Download again';
+    downloadAgain.click();
+  }
+  function stemOf(image) {
+    return imageName(image).replace(/\.[^.]+$/, '').replace(/^(ipad|watch)[_ -]+/i,'')
+      .replace(/([a-z])([A-Z])/g,'$1-$2').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'screenshot';
+  }
+
+  async function exportScreenshots(request) {
+    if (busy) return;
+    const focused = document.activeElement;
+    setBusy(true); if (request.kind !== 'preview') downloadAgain.hidden = true;
+    try {
+      const selected = selectedSlides(request);
+      if (!selected.length) throw new Error('There are no screenshots in this export.');
+      const format = formatSelect.value;
+      if (!['png','jpg'].includes(format)) throw new Error('Choose PNG or JPEG.');
+      // Preflight every output against its selected upload slot before rendering.
+      for (const slide of selected) dimensions(slide);
+      const counts = {};
+      for (const slide of selected) { const device = deviceOf(slide); counts[device] = (counts[device] || 0) + 1; }
+      for (const [device,count] of Object.entries(counts)) if (count > 10) throw new Error(`${DEVICES[device].name} has ${count} screenshots. Apple allows at most 10 per set; reduce that device’s cards before exporting.`);
+      setStatus(`Preparing ${selected.length} screenshot${selected.length === 1 ? '' : 's'}…`);
+      const imageData = await prepareImages(selected);
+      const designed = selected.filter((slide) => !rawMode(deviceOf(slide)));
+      let fonts = { fallback: false };
+      if (designed.length) fonts = $('export-fonts').value === 'system' ? { fallback:true } : await prepareFonts(designed);
+      const warnings = new Set();
+      if (fonts.fallback && $('export-fonts').value !== 'system' && designed.length) warnings.add('Google Fonts were unavailable; built-in fallback fonts were used.');
+      if (format === 'png' && typeof CompressionStream === 'undefined') warnings.add('Uncompressed RGB PNG fallback was used; files are larger.');
+      const files = [], manifest = [];
+      const boundsByGroup = new Map(), plans = new Map();
+      // Take one immutable layout snapshot before rendering. Scroll, resize,
+      // CSS zoom, and batch order cannot affect later exported images.
+      for (const slide of allSlides) {
+        const device = deviceOf(slide);
+        if (rawMode(device) || !counts[device]) continue;
+        syncPreview(slide);
+        const plan = measureSlide(slide, fonts); plans.set(slide, plan);
+        const target = dimensions(slide), key = `${device}:${target.width}x${target.height}`;
+        const previous = boundsByGroup.get(key) || { width: 0, height: 0 };
+        boundsByGroup.set(key, { width: Math.max(previous.width, plan.width), height: Math.max(previous.height, plan.height) });
+      }
+      for (let index = 0; index < selected.length; index++) {
+        const slide = selected[index], device = deviceOf(slide), config = DEVICES[device];
+        const target = dimensions(slide), image = imageOf(slide), raw = rawMode(device);
+        const order = String(deviceSlides(device).indexOf(slide) + 1).padStart(2,'0');
+        const key = `${target.width}x${target.height}`;
+        setStatus(`Exporting ${index + 1}/${selected.length} · ${config.name} · ${imageName(image)} · ${target.width} × ${target.height} px…`);
+        progress.value = 8 + index/selected.length*82; await yieldToBrowser();
+        let canvas;
+        try {
+          canvas = raw ? await renderRaw(slide,target,imageData) : await renderSlide(slide,target,boundsByGroup.get(`${device}:${key}`),imageData,plans.get(slide));
+          const blob = format === 'png' ? await rgbPNG(canvas) : await jpeg(canvas);
+          await verifyEncodedDimensions(blob, target, device);
+          const singleName = `${device}-${order}-${stemOf(image)}-${key}.${format}`;
+          const path = `${config.folder}/${key}/${order}-${stemOf(image)}.${format}`;
+          files.push({ name:['one','preview'].includes(request.kind) ? singleName : path, blob });
+          const scale = Math.min(target.width/image.naturalWidth,target.height/image.naturalHeight);
+          const padded = raw && Math.abs(image.naturalWidth/image.naturalHeight-target.width/target.height)>0.0001;
+          if (raw && scale > 1.0001) warnings.add('Some screenshots were upscaled. Native-resolution captures give better detail.');
+          if (padded) warnings.add('Some screenshot-only images were padded to preserve their aspect ratio.');
+          manifest.push({ file:path, source:imageName(image), device:config.name, width:target.width, height:target.height, format, alpha:false, renderer:'canvas-2d-v4', screenshotPixelCheck:true, encodedDimensionsVerified:true,
+            uploadSlot:device === 'iphone' ? iphoneSlotSelect.value : null,
+            sourceWidth:image.naturalWidth, sourceHeight:image.naturalHeight, layout:raw?'screenshot-only':'designed-segment',
+            padded:raw?padded:null, upscaled:raw?scale>1.0001:null });
+        } finally { if (canvas) { canvas.width=1; canvas.height=1; } }
+      }
+      const total = files.length;
+      let result, name;
+      if (request.kind === 'preview') {
+        showExportPreview(files[0].blob, files[0].name, dimensions(selected[0]));
+        setStatus(`Export preview ready. This is the actual ${format.toUpperCase()} file. Encoded dimensions and screenshot pixels verified.${warnings.size ? ' ' + [...warnings].join(' ') : ''}`, warnings.size ? 'warning' : 'success');
+        return;
+      }
+      if (request.kind === 'one') { result=files[0].blob; name=files[0].name; }
+      else {
+        progress.value = 92; setStatus(`Packing ${total} screenshots into device folders…`);
+        const metadata = { renderer:'canvas-2d-v4', screenshotPixelsVerified:true, encodedDimensionsVerified:true,
+          iphoneUploadSlot:counts.iphone ? iphoneSlotSelect.value : null, generatedAt:new Date().toISOString(), specificationChecked:'2026-09-25',
+          specification:'https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications/',
+          screenshotCount:total, counts:Object.fromEntries(Object.entries(counts).map(([d,n])=>[DEVICES[d].name,n])),
+          watchSize:counts.watch?watchSize():null, warnings:[...warnings], screenshots:manifest };
+        files.push({ name:'manifest.json', blob:new Blob([JSON.stringify(metadata,null,2)],{type:'application/json'}) });
+        const readme = [
+          'APP STORE SCREENSHOT EXPORT', '', `${total} screenshots: ${Object.entries(counts).map(([d,n])=>`${n} ${DEVICES[d].name}`).join(', ')}.`,
+          'Unzip, then upload only the PNG/JPEG images to the corresponding device slots in App Store Connect.',
+          'Do not upload this README, the manifest, or the ZIP itself.',
+          'Device folders contain pixel-size folders. Portrait and landscape sources can have separate folders.',
+          'Apple accepts 1-10 screenshots per set. These files are opaque RGB, without alpha channels.',
+          counts.watch?`Apple Watch uses one size: ${watchSize()}. Use the same size across all localizations.`:'',
+          counts.iphone ? `iPhone: upload the images in iPhone/ to the ${iphoneSlotSelect.value} iPhone slot, not another display-size slot.` : '',
+          'The manifest maps every output image to its source, dimensions, and iPhone upload slot.',
+          'Renderer: native Canvas 2D v4. Screenshot pixel checks passed before encoding.',
+          'Actual PNG/JPEG pixel dimensions were read from each encoded file and checked against the selected upload slot.',
+          '', 'Layout and quality notes:',
+          'Designed segments include artwork text and a frame; screenshot-only exports have no decorative frame.',
+          'Proportions are preserved. Padding may be added. Correct dimensions do not guarantee App Review approval.',
+          ...[...warnings].map((warning)=>'- '+warning), '',
+          'Specs checked 2026-09-25:', 'https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications/'
+        ].filter((line)=>line!==null).join('\n');
+        files.push({ name:'README.txt', blob:new Blob([readme],{type:'text/plain'}) });
+        result = await makeZip(files);
+        const iphoneLabel = counts.iphone ? `-iphone-${iphoneSlotSelect.value}-${$('size-iphone').value}` : '';
+        name = `app-store-${request.kind === 'all' ? 'all-devices' : request.device}${iphoneLabel}-${format}.zip`;
+      }
+      progress.value=100; download(result,name);
+      const note = [...warnings].join(' ');
+      setStatus(`${total}/${selected.length} screenshots exported · ${Object.entries(counts).map(([d,n])=>`${n} ${DEVICES[d].name}`).join(' / ')} · ${format.toUpperCase()} · no alpha channel · encoded dimensions and screenshot pixels verified.${counts.iphone ? ` iPhone upload slot: ${iphoneSlotSelect.value}.` : ''} ${request.kind === 'one' ? '' : 'Unzip before uploading. '}${note} Use “Download again” if needed.`, warnings.size?'warning':'success');
+    } catch (error) {
+      console.error('Screenshot export failed:',error);
+      const message = error instanceof Error ? error.message : 'Export failed. Check your images and retry.';
+      setStatus(message,'error');
+    } finally {
+      setBusy(false);
+      if (!$('export-preview').open && focused instanceof HTMLElement) focused.focus({preventScroll:true});
+    }
+  }
+
+  $('preview-close').addEventListener('click', () => {
+    const dialog = $('export-preview');
+    if (typeof dialog.close === 'function') dialog.close(); else dialog.removeAttribute('open');
+  });
+  $('export-preview').addEventListener('click', (event) => {
+    if (event.target !== $('export-preview')) return;
+    const rect = event.target.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.target.close();
+  });
+  $('choose-folder').addEventListener('click',()=>{ pendingRequest=null; $('folder-files').click(); });
+  $('choose-images').addEventListener('click',()=>{ pendingRequest=null; $('image-files').click(); });
+  for (const id of ['folder-files','image-files']) {
+    $(id).addEventListener('change',(event)=>void importFiles(event.target.files));
+    $(id).addEventListener('cancel',()=>{ pendingRequest=null; if(!busy) updateImageStatus(); });
+  }
+  if (!('webkitdirectory' in $('folder-files'))) $('choose-folder').hidden=true;
+  exportAll.addEventListener('click',()=>requestExport({kind:'all'}));
+  document.querySelectorAll('.export-device').forEach((button)=>button.addEventListener('click',()=>requestExport({kind:'device',device:button.dataset.device})));
+  formatSelect.addEventListener('change',()=>{ document.querySelectorAll('.export-one').forEach((button)=>button.textContent=`Export ${formatSelect.value.toUpperCase()}`); updateImageStatus(); });
+  $('export-fonts').addEventListener('change',()=>{
+    const system = $('export-fonts').value === 'system';
+    allSlides.forEach((slide)=>{
+      slide.querySelectorAll('.tagline,.sub').forEach((el)=>el.style.fontFamily=system?'Arial, sans-serif':'');
+      slide.querySelectorAll('.headline,.headline em').forEach((el)=>el.style.fontFamily=system?'Georgia, serif':'');
+    });
+    updateImageStatus();
+  });
+  let dragDepth=0;
+  document.addEventListener('dragenter',(event)=>{
+    if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+    event.preventDefault(); dragDepth++; if(!busy) $('drop-overlay').hidden=false;
+  });
+  document.addEventListener('dragover',(event)=>{
+    if (Array.from(event.dataTransfer?.types || []).includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect=busy?'none':'copy'; }
+  });
+  document.addEventListener('dragleave',()=>{ dragDepth=Math.max(0,dragDepth-1); if(!dragDepth) $('drop-overlay').hidden=true; });
+  document.addEventListener('drop',(event)=>{
+    event.preventDefault(); dragDepth=0; $('drop-overlay').hidden=true;
+    if (busy) return;
+    pendingRequest=null;
+    const files=Array.from(event.dataTransfer?.files || []);
+    if (files.length) void importFiles(files);
+    else setStatus('To load a whole directory, use “Choose screenshot folder…”. You can also drop the screenshot files themselves.','warning');
+  });
+  window.addEventListener('pagehide',()=>{ if(downloadURL) URL.revokeObjectURL(downloadURL); if(previewURL) URL.revokeObjectURL(previewURL); });
+  window.addEventListener('pageshow',(event)=>{ if(event.persisted) { downloadURL=null; downloadAgain.hidden=true; previewURL=null; $('export-preview').removeAttribute('open'); } });
+  updateImageStatus();
+})();
+</script>
+</body>
+</html>
