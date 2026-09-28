@@ -108,6 +108,16 @@ struct AccessGateView: View {
           .font(.footnote)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
+
+        ViewThatFits {
+          HStack(spacing: 12) {
+            legalLinks
+          }
+          VStack(alignment: .leading, spacing: 10) {
+            legalLinks
+          }
+        }
+        .font(.footnote.weight(.medium))
       }
       .frame(maxWidth: 480, alignment: .leading)
       .padding(28)
@@ -154,6 +164,16 @@ struct AccessGateView: View {
     if purchases.trialAvailable { return "Start your 7-day free trial" }
     if purchases.trialConfigurationPending { return "7-day free trial temporarily unavailable" }
     return "Choose yearly access"
+  }
+
+  @ViewBuilder
+  private var legalLinks: some View {
+    Link(destination: AppLegalLinks.termsOfUse) {
+      Label("Terms of Use", systemImage: "doc.text")
+    }
+    Link(destination: AppLegalLinks.privacyPolicy) {
+      Label("Privacy Policy", systemImage: "hand.raised")
+    }
   }
 
   private func annualActionDetail(price: String) -> String {

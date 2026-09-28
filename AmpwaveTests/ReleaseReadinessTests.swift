@@ -3,6 +3,13 @@ import SwiftData
 @testable import Ampwave
 
 final class PurchasePolicyTests: XCTestCase {
+  func testSubscriptionLegalLinksAreSecureAndPublic() {
+    XCTAssertEqual(AppLegalLinks.termsOfUse.scheme, "https")
+    XCTAssertEqual(AppLegalLinks.termsOfUse.host, "www.apple.com")
+    XCTAssertEqual(AppLegalLinks.privacyPolicy.scheme, "https")
+    XCTAssertEqual(AppLegalLinks.privacyPolicy.host, "github.com")
+  }
+
   func testPriorPaidCustomersKeepLifetimeAccessAcrossBuildNumberReset() {
     XCTAssertGreaterThan(40, 9) // v1.0 build 40 predates v1.2 build 9.
     XCTAssertTrue(AmpwavePurchasePolicy.isLegacyOwner(

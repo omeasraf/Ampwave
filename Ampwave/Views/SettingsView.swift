@@ -1273,10 +1273,13 @@ struct SettingsView: View {
       }
 
       Link(
-        destination: URL(
-          string:
-            "https://github.com/omeasraf/AmpwaveDocs/blob/main/privacy.md"
-        )!
+        destination: AppLegalLinks.termsOfUse
+      ) {
+        Label("Terms of Use", systemImage: "doc.text")
+      }
+
+      Link(
+        destination: AppLegalLinks.privacyPolicy
       ) {
         Label("Privacy Policy", systemImage: "hand.raised")
       }
