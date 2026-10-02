@@ -44,23 +44,7 @@ struct BackstageView: View {
 
   private var contributors: [BackstageContributor] {
     _ = refreshRevision
-    var values: [String: BackstageContributor] = [:]
-
-    for song in songs {
-      for credit in song.backstageCredits {
-        let key = credit.name
-          .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-          .lowercased()
-        var contributor = values[key] ?? BackstageContributor(name: credit.name)
-        contributor.add(credit: credit, song: song)
-        values[key] = contributor
-      }
-    }
-
-    return values.values.sorted {
-      if $0.categoryRank != $1.categoryRank { return $0.categoryRank < $1.categoryRank }
-      return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-    }
+    return backstageContributors(from: songs)
   }
 
   private var hasOnlineCredits: Bool {
@@ -301,6 +285,200 @@ struct BackstageView: View {
       completedLookups += 1
       refreshRevision &+= 1
     }
+  }
+}
+
+/// Compact liner notes shown directly after an album's tracks. The album page
+/// already supplies the release artwork and title, so this intentionally skips
+/// the full-screen Backstage hero and leads with the useful credits themselves.
+struct AlbumBackstageSection: View {
+  let songs: [LibrarySong]
+
+  @Environment(ThemeManager.self) private var themeManager
+  @State private var expandedCategories: Set<BackstageCreditCategory> = []
+  @State private var isRefreshing = false
+  @State private var refreshRevision = 0
+  @State private var selectedContributor: BackstageContributor?
+
+  private var credits: [BackstageCredit] {
+    _ = refreshRevision
+    return BackstageCredit.merged(songs.map(\.backstageCredits))
+  }
+
+  private var contributors: [BackstageContributor] {
+    _ = refreshRevision
+    return backstageContributors(from: songs)
+  }
+
+  private var visibleCategories: [BackstageCreditCategory] {
+    BackstageCreditCategory.allCases.filter { category in
+      contributors.contains { $0.categories.contains(category) }
+    }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      HStack(spacing: 10) {
+        Image(systemName: "person.2.fill")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(themeManager.accentColor)
+          .frame(width: 34, height: 34)
+          .background(themeManager.accentColor.opacity(0.14), in: Circle())
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Album credits")
+            .font(.headline)
+          Text("\(contributors.count) contributor\(contributors.count == 1 ? "" : "s") across \(songs.count) track\(songs.count == 1 ? "" : "s")")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        Spacer()
+
+        if isRefreshing {
+          ProgressView()
+            .tint(themeManager.accentColor)
+        } else {
+          Button {
+            Task { await refreshCredits(force: true) }
+          } label: {
+            Image(systemName: "arrow.clockwise")
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(themeManager.accentColor)
+          .accessibilityLabel("Refresh album credits")
+        }
+      }
+
+      if contributors.isEmpty {
+        Text(isRefreshing ? "Looking for liner notes…" : "No album credits were found in these files.")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      } else {
+        ForEach(visibleCategories, id: \.self) { category in
+          categorySection(category)
+        }
+
+        sourceSummary
+      }
+    }
+    .padding(.vertical, 4)
+    .sheet(item: $selectedContributor) { contributor in
+      BackstageContributorView(contributor: contributor)
+    }
+    .task {
+      guard songs.contains(where: { !$0.backstageMetadataCheckAttempted }) else { return }
+      await refreshCredits(force: false)
+    }
+  }
+
+  private func categorySection(_ category: BackstageCreditCategory) -> some View {
+    let matching = contributors.filter { $0.categories.contains(category) }
+    let isExpanded = expandedCategories.contains(category)
+    let visible = isExpanded ? matching : Array(matching.prefix(4))
+
+    return VStack(alignment: .leading, spacing: 8) {
+      Label(category.displayName, systemImage: category.systemImage)
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(themeManager.accentColor)
+
+      ForEach(visible) { contributor in
+        Button {
+          selectedContributor = contributor
+        } label: {
+          HStack(spacing: 10) {
+            Text(contributor.initials)
+              .font(.caption.weight(.bold))
+              .foregroundStyle(themeManager.accentColor)
+              .frame(width: 30, height: 30)
+              .background(themeManager.accentColor.opacity(0.12), in: Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+              Text(contributor.name)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+              Text(contributor.roles(in: category).joined(separator: " · "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Image(systemName: "chevron.right")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(.tertiary)
+          }
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+      }
+
+      if matching.count > 4 {
+        Button(isExpanded ? "Show less" : "Show all \(matching.count)") {
+          withAnimation(.snappy) {
+            if isExpanded {
+              expandedCategories.remove(category)
+            } else {
+              expandedCategories.insert(category)
+            }
+          }
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(themeManager.accentColor)
+        .buttonStyle(.plain)
+      }
+    }
+  }
+
+  private var sourceSummary: some View {
+    let sources = Set(credits.flatMap(\.sources))
+    return HStack(spacing: 6) {
+      ForEach(BackstageCreditSource.allCases.filter(sources.contains), id: \.self) { source in
+        Text(source.displayName)
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 4)
+          .background(.secondary.opacity(0.10), in: Capsule())
+      }
+    }
+  }
+
+  @MainActor
+  private func refreshCredits(force: Bool) async {
+    guard !isRefreshing else { return }
+    isRefreshing = true
+    defer { isRefreshing = false }
+
+    for song in songs {
+      guard !Task.isCancelled else { return }
+      if force || !song.backstageMetadataCheckAttempted {
+        _ = await MetadataService.shared.enrichBackstageCredits(for: song, force: force)
+      }
+      refreshRevision &+= 1
+    }
+  }
+}
+
+private func backstageContributors(from songs: [LibrarySong]) -> [BackstageContributor] {
+  var values: [String: BackstageContributor] = [:]
+
+  for song in songs {
+    for credit in song.backstageCredits {
+      let key = credit.name
+        .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        .lowercased()
+      var contributor = values[key] ?? BackstageContributor(name: credit.name)
+      contributor.add(credit: credit, song: song)
+      values[key] = contributor
+    }
+  }
+
+  return values.values.sorted {
+    if $0.categoryRank != $1.categoryRank { return $0.categoryRank < $1.categoryRank }
+    return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
   }
 }
 

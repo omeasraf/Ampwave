@@ -150,9 +150,23 @@ history engine with a private, cached analysis of the audio signal itself.
   Spotlight, Shortcuts, and on-device library search.
   - [x] Add Siri and Shortcuts playback intents.
   - [ ] Add Spotlight indexing and broader natural-language library requests.
-- [ ] **Natural-Language Mix Builder** — Use Apple's on-device Foundation Model
-  when available to turn requests such as “a calm 45-minute mix with no repeated
-  artists” into structured filters over Ampwave's private local library index.
+- [ ] **Ampwave Intelligence** — Use Apple's on-device Foundation Models
+  framework to understand natural-language music requests without uploading the
+  listener's library or history.
+  - [ ] Hide the experience when the system model is unavailable and preserve
+    deterministic search, smart playlists, and recommendations as fallbacks.
+  - [ ] Ground every response through read-only Ampwave tools that query the
+    real local library, listening history, downloads, credits, and sonic index;
+    never let the model invent songs, credits, or audio properties.
+  - [ ] Build mixes from requests such as “a calm 45-minute mix with no repeated
+    artists,” returning typed rules that the existing queue engine validates.
+  - [ ] Add conversational library search and questions such as “what did I add
+    last month?” or “show downloaded albums with wide stereo mixes.”
+  - [ ] Generate optional plain-language Backstage and Song DNA summaries only
+    from factual metadata Ampwave supplies, with clear source attribution.
+  - [ ] Keep Foundation Models separate from audio analysis: MusicUnderstanding
+    and Ampwave's DSP index measure the signal, while the language model explains
+    and combines those verified results.
 - [ ] **Translated Synced Lyrics** — Translate cached lyrics on device while
   preserving line timing, with Original, Translated, and Both display modes.
 - [ ] **System Sleep Timer** — Integrate the existing sleep timer with AlarmKit

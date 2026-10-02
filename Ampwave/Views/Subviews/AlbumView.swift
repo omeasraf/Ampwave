@@ -11,7 +11,7 @@ struct AlbumView: View {
   let album: Album
 
   @State private var showingAddToPlaylist = false
-  @State private var showingBackstage = false
+  @State private var selectedArtist: Artist?
   @AppStorage(LibraryArtworkShape.storageKey) private var artworkShapeRaw =
     LibraryArtworkShape.roundedRectangle.rawValue
 
@@ -48,12 +48,14 @@ struct AlbumView: View {
     }
   }
 
-  private var albumCredits: [BackstageCredit] {
-    BackstageCredit.merged(sortedSongs.map(\.backstageCredits))
-  }
-
-  private var albumContributorCount: Int {
-    Set(albumCredits.map { $0.name.lowercased() }).count
+  private var albumArtistDestination: Artist? {
+    guard let artistName = album.artist else { return nil }
+    let candidates = [artistName] + ArtistParser.parseArtists(from: artistName)
+    return candidates.lazy.compactMap { candidate in
+      library.artists.first {
+        $0.name.caseInsensitiveCompare(candidate) == .orderedSame
+      }
+    }.first
   }
 
   @Environment(ThemeManager.self) private var themeManager
@@ -78,36 +80,6 @@ struct AlbumView: View {
         }
         .listRowBackground(themeManager.cardBackgroundColor)
       }
-
-      Section("Backstage") {
-        Button {
-          showingBackstage = true
-        } label: {
-          HStack(spacing: 13) {
-            Image(systemName: "person.2.fill")
-              .font(.system(size: 17, weight: .semibold))
-              .foregroundStyle(themeManager.accentColor)
-              .frame(width: 40, height: 40)
-              .background(themeManager.accentColor.opacity(0.14), in: Circle())
-
-            VStack(alignment: .leading, spacing: 3) {
-              Text("Credits & contributors")
-                .font(.headline)
-                .foregroundStyle(.primary)
-              Text("\(albumContributorCount) \(albumContributorCount == 1 ? "person" : "people") across \(sortedSongs.count) \(sortedSongs.count == 1 ? "track" : "tracks")")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Image(systemName: "chevron.right")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(.tertiary)
-          }
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-      }
-      .listRowBackground(themeManager.cardBackgroundColor)
 
       ForEach(discGroups, id: \.disc) { group in
         Section {
@@ -152,6 +124,13 @@ struct AlbumView: View {
         }
         .listRowBackground(themeManager.cardBackgroundColor)
       }
+
+      if !sortedSongs.isEmpty {
+        Section("Backstage") {
+          AlbumBackstageSection(songs: sortedSongs)
+        }
+        .listRowBackground(themeManager.cardBackgroundColor)
+      }
     }
     .background(themeManager.backgroundColor)
     .scrollContentBackground(.hidden)
@@ -192,8 +171,8 @@ struct AlbumView: View {
         }
       }
     }
-    .sheet(isPresented: $showingBackstage) {
-      BackstageView(album: album, songs: sortedSongs)
+    .navigationDestination(item: $selectedArtist) { artist in
+      ArtistView(artist: artist)
     }
   }
 
@@ -220,10 +199,22 @@ struct AlbumView: View {
           .multilineTextAlignment(.center)
           .foregroundStyle(.primary)
 
-        if let artist = album.artist {
-          Text(artist)
-            .font(.system(size: 20, weight: .medium))
-            .foregroundStyle(themeManager.accentColor)
+        if let artistName = album.artist {
+          if let artist = albumArtistDestination {
+            Button {
+              selectedArtist = artist
+            } label: {
+              Text(artistName)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(themeManager.accentColor)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open artist \(artist.name)")
+          } else {
+            Text(artistName)
+              .font(.system(size: 20, weight: .medium))
+              .foregroundStyle(themeManager.accentColor)
+          }
         }
 
         HStack(spacing: 8) {
