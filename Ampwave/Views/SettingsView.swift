@@ -208,8 +208,21 @@ struct SettingsView: View {
           Button {
             showingAccessDetails = true
           } label: {
-            Label("Annual Subscription", systemImage: "checkmark.seal")
+            HStack(spacing: 12) {
+              settingsCategoryIcon(systemImage: "checkmark.seal")
+
+              Text("Annual Subscription")
+                .foregroundStyle(.primary)
+
+              Spacer()
+
+              Image(systemName: "chevron.forward")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+            }
           }
+          .buttonStyle(.plain)
+          .accessibilityHint("Shows subscription and purchase details")
         }
         settingsCategoryLink(
           title: "Data & Storage",
@@ -336,15 +349,19 @@ struct SettingsView: View {
   ) -> some View {
     NavigationLink(destination: destination) {
       HStack(spacing: 12) {
-        Image(systemName: systemImage)
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(.white)
-          .frame(width: 30, height: 30)
-          .background(themeManager.accentColor, in: RoundedRectangle(cornerRadius: 7))
+        settingsCategoryIcon(systemImage: systemImage)
 
         Text(title)
       }
     }
+  }
+
+  private func settingsCategoryIcon(systemImage: String) -> some View {
+    Image(systemName: systemImage)
+      .font(.system(size: 15, weight: .semibold))
+      .foregroundStyle(.white)
+      .frame(width: 30, height: 30)
+      .background(themeManager.accentColor, in: RoundedRectangle(cornerRadius: 7))
   }
 
   private func settingsPage<Content: View>(
