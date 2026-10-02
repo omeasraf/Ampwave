@@ -13,6 +13,119 @@ enum MetadataSource: String, Codable {
   case manual
 }
 
+enum BackstageCreditCategory: String, Codable, CaseIterable, Sendable {
+  case performance
+  case songwriting
+  case production
+  case engineering
+  case other
+
+  var displayName: String {
+    switch self {
+    case .performance: return "Performance"
+    case .songwriting: return "Songwriting"
+    case .production: return "Production"
+    case .engineering: return "Engineering"
+    case .other: return "Additional Credits"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .performance: return "music.mic"
+    case .songwriting: return "pencil.and.scribble"
+    case .production: return "waveform.badge.magnifyingglass"
+    case .engineering: return "slider.horizontal.3"
+    case .other: return "sparkles"
+    }
+  }
+}
+
+enum BackstageCreditSource: String, Codable, CaseIterable, Sendable {
+  case embedded
+  case appleMusic
+  case musicBrainz
+
+  var displayName: String {
+    switch self {
+    case .embedded: return "File"
+    case .appleMusic: return "Apple Music"
+    case .musicBrainz: return "MusicBrainz"
+    }
+  }
+}
+
+/// A normalized person/role pair used by the Backstage credits experience.
+/// Stored as compact JSON on `LibrarySong` so richer provider data can evolve
+/// without introducing a large SwiftData relationship graph.
+struct BackstageCredit: Codable, Hashable, Identifiable, Sendable {
+  let name: String
+  let role: String
+  let category: BackstageCreditCategory
+  var sources: [BackstageCreditSource]
+  var musicBrainzArtistID: String?
+
+  var id: String {
+    "\(Self.normalized(name))|\(Self.normalized(role))"
+  }
+
+  init(
+    name: String,
+    role: String,
+    category: BackstageCreditCategory,
+    sources: [BackstageCreditSource],
+    musicBrainzArtistID: String? = nil
+  ) {
+    self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.role = role.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.category = category
+    self.sources = Array(Set(sources)).sorted { $0.rawValue < $1.rawValue }
+    self.musicBrainzArtistID = musicBrainzArtistID
+  }
+
+  /// Deduplicates providers that report the same contribution while retaining
+  /// every source that corroborated it. Apple Music entries are kept first.
+  static func merged(_ groups: [[BackstageCredit]]) -> [BackstageCredit] {
+    var merged: [String: BackstageCredit] = [:]
+
+    for credit in groups.flatMap({ $0 }) where !credit.name.isEmpty && !credit.role.isEmpty {
+      if var existing = merged[credit.id] {
+        existing.sources = Array(Set(existing.sources + credit.sources)).sorted {
+          sourceRank($0) < sourceRank($1)
+        }
+        if existing.musicBrainzArtistID == nil {
+          existing.musicBrainzArtistID = credit.musicBrainzArtistID
+        }
+        merged[credit.id] = existing
+      } else {
+        merged[credit.id] = credit
+      }
+    }
+
+    return merged.values.sorted {
+      let lhsCategory = BackstageCreditCategory.allCases.firstIndex(of: $0.category) ?? .max
+      let rhsCategory = BackstageCreditCategory.allCases.firstIndex(of: $1.category) ?? .max
+      if lhsCategory != rhsCategory { return lhsCategory < rhsCategory }
+      if $0.role != $1.role { return $0.role.localizedCaseInsensitiveCompare($1.role) == .orderedAscending }
+      return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+    }
+  }
+
+  private static func normalized(_ value: String) -> String {
+    value
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+  }
+
+  private static func sourceRank(_ source: BackstageCreditSource) -> Int {
+    switch source {
+    case .appleMusic: return 0
+    case .musicBrainz: return 1
+    case .embedded: return 2
+    }
+  }
+}
+
 struct FetchedMetadata {
   var title: String?
   var artist: String?
@@ -42,6 +155,7 @@ struct FetchedMetadata {
   var artworkPrimaryTextColor: String?
   var artworkSecondaryTextColor: String?
   var artworkTertiaryTextColor: String?
+  var backstageCredits: [BackstageCredit]
   var source: MetadataSource = .appleMusic
 
   init(
@@ -73,6 +187,7 @@ struct FetchedMetadata {
     artworkPrimaryTextColor: String? = nil,
     artworkSecondaryTextColor: String? = nil,
     artworkTertiaryTextColor: String? = nil,
+    backstageCredits: [BackstageCredit] = [],
     source: MetadataSource = .appleMusic
   ) {
     self.title = title
@@ -103,6 +218,7 @@ struct FetchedMetadata {
     self.artworkPrimaryTextColor = artworkPrimaryTextColor
     self.artworkSecondaryTextColor = artworkSecondaryTextColor
     self.artworkTertiaryTextColor = artworkTertiaryTextColor
+    self.backstageCredits = backstageCredits
     self.source = source
   }
 }

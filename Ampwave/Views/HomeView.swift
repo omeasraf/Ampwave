@@ -740,9 +740,25 @@ struct RadioMixCard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      RadioArtworkCollage(artworkPaths: mix.artworkPaths, colors: mix.colors, size: cardSize)
+      RadioArtworkCollage(
+        artworkPaths: mix.artworkPaths,
+        singleArtworkPath: mix.singleAlbumArtworkPath,
+        size: cardSize
+      )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
+        .overlay(alignment: .topTrailing) {
+          if mix.isSingleAlbumStation {
+            Label("Album radio", systemImage: "rectangle.stack.fill")
+              .font(.system(size: 9, weight: .bold))
+              .textCase(.uppercase)
+              .foregroundStyle(.white)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 6)
+              .background(.black.opacity(0.62), in: Capsule())
+              .padding(9)
+          }
+        }
 
       VStack(alignment: .leading, spacing: 2) {
         Text(mix.name)

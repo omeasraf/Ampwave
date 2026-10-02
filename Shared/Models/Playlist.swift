@@ -279,6 +279,45 @@ final class RadioStation: Identifiable, Hashable {
     colorHexes.map { Color(hex: $0) }
   }
 
+  /// When every track belongs to the same album, radio artwork should read as
+  /// that release rather than as a repeated four-tile collage.
+  var singleAlbumArtworkPath: String? {
+    let ordered = orderedSongs
+    guard !ordered.isEmpty, isSingleAlbumStation else { return nil }
+    return ordered.first?.albumReference?.artworkPath
+      ?? ordered.compactMap(\.effectiveArtworkPath).first
+  }
+
+  var isSingleAlbumStation: Bool {
+    let ordered = orderedSongs
+    guard !ordered.isEmpty else { return false }
+
+    let relationshipIDs = ordered.compactMap { $0.albumReference?.id }
+    if relationshipIDs.count == ordered.count {
+      return Set(relationshipIDs).count == 1
+    }
+
+    let metadataKeys = ordered.compactMap(Self.albumIdentity(for:))
+    return metadataKeys.count == ordered.count && Set(metadataKeys).count == 1
+  }
+
+  private static func albumIdentity(for song: LibrarySong) -> String? {
+    guard let album = song.album?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !album.isEmpty
+    else {
+      return nil
+    }
+    let albumArtist = (song.albumArtist ?? song.albumReference?.artist ?? song.artist)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return "\(normalized(album))|\(normalized(albumArtist))"
+  }
+
+  private static func normalized(_ value: String) -> String {
+    value
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+  }
+
   static func == (lhs: RadioStation, rhs: RadioStation) -> Bool {
     lhs.id == rhs.id
   }

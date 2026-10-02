@@ -25,6 +25,7 @@ struct OpenPlayerView: View {
   @State private var showingAddToPlaylist = false
   @State private var isEditingShown = false
   @State private var showingTechnicalInfo = false
+  @State private var showingBackstage = false
   @State private var showingEqualizer = false
   @State private var showingSleepTimerOptions = false
   @State private var sonicRecommendations: [LibrarySong] = []
@@ -287,6 +288,12 @@ struct OpenPlayerView: View {
                 )
               }
 
+              Button {
+                showingBackstage = true
+              } label: {
+                Label("Backstage Credits", systemImage: "person.2.fill")
+              }
+
                 if MusicUnderstandingAnalyzer.isUserInitiatedAvailable,
                   !song.isRemote || song.remoteIsDownloaded
                 {
@@ -388,6 +395,11 @@ struct OpenPlayerView: View {
     .sheet(isPresented: $isEditingShown) {
       if let song = playback.currentItem {
         SongEditSheet(song: song, isPresented: $isEditingShown)
+      }
+    }
+    .sheet(isPresented: $showingBackstage) {
+      if let song = playback.currentItem {
+        BackstageView(song: song)
       }
     }
     .task(id: playback.currentItem?.id) {
@@ -568,6 +580,7 @@ struct OpenPlayerView: View {
               if song.isAIGenerated {
                 AIGeneratedBadge(size: 14)
               }
+              backstageBadge
               technicalBadge(for: song)
             }
           }
@@ -664,6 +677,21 @@ struct OpenPlayerView: View {
     .sheet(isPresented: $showingTechnicalInfo) {
       TechnicalInfoSheet(song: song)
     }
+  }
+
+  private var backstageBadge: some View {
+    Button {
+      showingBackstage = true
+    } label: {
+      Label("Backstage", systemImage: "person.2.fill")
+        .font(.system(size: 10, weight: .bold))
+        .foregroundStyle(themeManager.accentColor)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(themeManager.accentColor.opacity(0.14), in: Capsule())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Open Backstage credits")
   }
 
   private func formatSampleRate(_ rate: Double) -> String {

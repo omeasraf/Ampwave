@@ -188,6 +188,7 @@ final class MetadataService {
       songDescription: song.songDescription,
       albumArtist: firstRelease?.artistCredit?.first?.name ?? recordingArtist,
       isrc: recording.isrcs?.first,
+      backstageCredits: musicBrainzCredits(from: recording),
       source: .musicBrainz
     )
 
@@ -226,7 +227,7 @@ final class MetadataService {
   }
 
   private func fetchRecordingDetails(mbid: String) async -> MusicBrainzRecordingDetailResponse? {
-    let urlString = "\(musicBrainzDefaultURL)/recording/\(mbid)?inc=genres+tags+artist-credits+releases+release-groups+isrcs&fmt=json"
+    let urlString = "\(musicBrainzDefaultURL)/recording/\(mbid)?inc=genres+tags+artist-credits+releases+release-groups+isrcs+artist-rels+work-rels+work-level-rels&fmt=json"
     guard let url = URL(string: urlString) else { return nil }
     guard let data = await performRequest(url: url) else { return nil }
     do {
@@ -236,6 +237,135 @@ final class MetadataService {
       print("[DEBUG] MetadataService.fetchRecordingDetails: decode error \(error)")
       return nil
     }
+  }
+
+  /// Enriches one song's Backstage credits on demand. MusicKit is consulted
+  /// first for the catalog match and associated artists/composers; MusicBrainz
+  /// then fills recording and work relationships that MusicKit doesn't expose.
+  @discardableResult
+  func enrichBackstageCredits(for initialSong: LibrarySong, force: Bool = false) async -> Bool {
+    guard UserPreferences.networkAllowed else { return false }
+    if initialSong.backstageMetadataCheckAttempted && !force { return true }
+
+    let songID = initialSong.id
+    let lookup = SongLookup(initialSong)
+    var credits = initialSong.backstageCredits
+    var appleMusicID = initialSong.appleMusicId
+    var musicBrainzID = initialSong.musicBrainzId
+    var providerResponded = false
+
+    if force || !credits.contains(where: { $0.sources.contains(.appleMusic) }) {
+      if let apple = await AppleMusicMetadataService.shared.fetchMetadata(
+        title: lookup.title,
+        artist: lookup.artist,
+        duration: lookup.duration
+      ) {
+        credits = BackstageCredit.merged([credits, apple.backstageCredits])
+        appleMusicID = apple.appleMusicId ?? appleMusicID
+        providerResponded = true
+      }
+    }
+
+    var recording: MusicBrainzRecordingDetailResponse?
+    if !force, let musicBrainzID {
+      recording = await fetchRecordingDetails(mbid: musicBrainzID)
+    } else if let match = await searchRecording(song: lookup) {
+      musicBrainzID = match.id
+      recording = await fetchRecordingDetails(mbid: match.id)
+    }
+
+    if let recording {
+      credits = BackstageCredit.merged([credits, musicBrainzCredits(from: recording)])
+      musicBrainzID = recording.id
+      providerResponded = true
+    }
+
+    let song = SongLibrary.shared.song(id: songID) ?? initialSong
+    guard song.modelContext != nil else { return false }
+    song.backstageCredits = credits
+    song.appleMusicId = appleMusicID
+    song.musicBrainzId = musicBrainzID
+    // A completed no-match is still a completed lookup. Do not repeat it on
+    // every sheet presentation; the refresh button remains available for a
+    // later retry after catalog data changes.
+    song.backstageMetadataCheckAttempted = true
+    try? modelContext?.save()
+    return providerResponded
+  }
+
+  private func musicBrainzCredits(
+    from recording: MusicBrainzRecordingDetailResponse
+  ) -> [BackstageCredit] {
+    let primaryArtists = (recording.artistCredit ?? []).map {
+      BackstageCredit(
+        name: $0.name,
+        role: "Artist",
+        category: .performance,
+        sources: [.musicBrainz],
+        musicBrainzArtistID: $0.artist.id
+      )
+    }
+
+    let recordingCredits = (recording.relations ?? []).compactMap(credit(from:))
+    let workCredits = (recording.relations ?? [])
+      .compactMap(\.work)
+      .flatMap { $0.relations ?? [] }
+      .compactMap(credit(from:))
+
+    return BackstageCredit.merged([primaryArtists, recordingCredits, workCredits])
+  }
+
+  private func credit(from relation: MusicBrainzRelation) -> BackstageCredit? {
+    guard let artist = relation.artist else { return nil }
+    let type = relation.type.lowercased()
+    let attributes = (relation.attributes ?? [])
+      .map(friendlyCreditRole)
+      .filter { !$0.isEmpty }
+
+    let category: BackstageCreditCategory
+    let role: String
+    switch type {
+    case "composer", "lyricist", "writer", "librettist", "translator", "arranger", "orchestrator":
+      category = .songwriting
+      role = friendlyCreditRole(relation.type)
+    case "producer", "co-producer", "executive producer", "remixer", "remix", "programming":
+      category = .production
+      role = friendlyCreditRole(relation.type)
+    case "engineer", "mix", "mixing", "mastering", "recording", "sound engineer":
+      category = .engineering
+      switch type {
+      case "mix", "mixing": role = "Mixing Engineer"
+      case "mastering": role = "Mastering Engineer"
+      case "recording": role = "Recording Engineer"
+      default: role = friendlyCreditRole(relation.type)
+      }
+    case "instrument", "vocal", "performer", "conductor", "concertmaster", "dancer", "spoken vocals", "vocals":
+      category = .performance
+      role = attributes.isEmpty ? friendlyCreditRole(relation.type) : attributes.joined(separator: ", ")
+    default:
+      category = .other
+      role = attributes.isEmpty ? friendlyCreditRole(relation.type) : attributes.joined(separator: ", ")
+    }
+
+    return BackstageCredit(
+      name: artist.name,
+      role: role,
+      category: category,
+      sources: [.musicBrainz],
+      musicBrainzArtistID: artist.id
+    )
+  }
+
+  private func friendlyCreditRole(_ value: String) -> String {
+    value
+      .replacingOccurrences(of: "_", with: " ")
+      .split(separator: " ")
+      .map { word in
+        let lower = word.lowercased()
+        if lower == "dj" { return "DJ" }
+        return lower.prefix(1).uppercased() + lower.dropFirst()
+      }
+      .joined(separator: " ")
   }
 
   private func extractGenreLabel(genres: [MusicBrainzGenre]?, tags: [MusicBrainzCountedTag]?) -> String? {
@@ -901,6 +1031,21 @@ final class MetadataService {
     }
     if let appleMusicURL = metadata.appleMusicURL {
       song.appleMusicURL = appleMusicURL.absoluteString
+      needsSave = true
+    }
+    if let appleMusicId = metadata.appleMusicId, song.appleMusicId != appleMusicId {
+      song.appleMusicId = appleMusicId
+      needsSave = true
+    }
+    if let musicBrainzId = metadata.musicBrainzId, song.musicBrainzId != musicBrainzId {
+      song.musicBrainzId = musicBrainzId
+      needsSave = true
+    }
+    if !metadata.backstageCredits.isEmpty {
+      song.backstageCredits = BackstageCredit.merged([
+        song.backstageCredits,
+        metadata.backstageCredits,
+      ])
       needsSave = true
     }
 

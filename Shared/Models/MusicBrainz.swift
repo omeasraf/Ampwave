@@ -157,6 +157,7 @@ struct MusicBrainzRecordingDetailResponse: Codable {
   let artistCredit: [MusicBrainzArtistCredit]?
   let releases: [MusicBrainzReleaseRef]?
   let isrcs: [String]?
+  let relations: [MusicBrainzRelation]?
 
   enum CodingKeys: String, CodingKey {
     case id
@@ -168,5 +169,33 @@ struct MusicBrainzRecordingDetailResponse: Codable {
     case artistCredit = "artist-credit"
     case releases
     case isrcs
+    case relations
   }
+}
+
+/// Relationship payload returned by MusicBrainz recording lookups. Recording
+/// relationships contain performers and studio personnel; related works carry
+/// composition and lyric-writing credits.
+struct MusicBrainzRelation: Codable {
+  let type: String
+  let targetType: String?
+  let direction: String?
+  let attributes: [String]?
+  let artist: MusicBrainzArtistRef?
+  let work: MusicBrainzWorkRef?
+
+  enum CodingKeys: String, CodingKey {
+    case type
+    case targetType = "target-type"
+    case direction
+    case attributes
+    case artist
+    case work
+  }
+}
+
+struct MusicBrainzWorkRef: Codable {
+  let id: String
+  let title: String
+  let relations: [MusicBrainzRelation]?
 }

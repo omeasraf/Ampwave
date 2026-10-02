@@ -66,6 +66,13 @@ enum LibraryBackupService {
       match.discNumber = backupSong.discNumber
       match.isrc = backupSong.isrc
       match.appleMusicURL = backupSong.appleMusicURL
+      match.appleMusicId = backupSong.appleMusicId
+      match.musicBrainzId = backupSong.musicBrainzId
+      if let backstageCredits = backupSong.backstageCredits {
+        match.backstageCredits = backstageCredits
+      }
+      match.backstageMetadataCheckAttempted =
+        backupSong.backstageMetadataCheckAttempted ?? false
       match.lyricsTimingOffset = backupSong.lyricsTimingOffset ?? 0
       match.shouldSyncToWatch = backupSong.shouldSyncToWatch
       match.userEditedFields = backupSong.userEditedFields
@@ -322,6 +329,10 @@ private struct BackupSong: Codable {
   let discNumber: Int?
   let isrc: String?
   let appleMusicURL: String?
+  let appleMusicId: String?
+  let musicBrainzId: String?
+  let backstageCredits: [BackstageCredit]?
+  let backstageMetadataCheckAttempted: Bool?
   let importedDate: Date
   let shouldSyncToWatch: Bool
   let userEditedFields: [String]
@@ -367,6 +378,10 @@ private struct BackupSong: Codable {
     discNumber = song.discNumber
     isrc = song.isrc
     appleMusicURL = song.appleMusicURL
+    appleMusicId = song.appleMusicId
+    musicBrainzId = song.musicBrainzId
+    backstageCredits = song.backstageCredits
+    backstageMetadataCheckAttempted = song.backstageMetadataCheckAttempted
     importedDate = song.importedDate
     shouldSyncToWatch = song.shouldSyncToWatch
     userEditedFields = song.userEditedFields

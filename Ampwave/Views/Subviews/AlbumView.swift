@@ -11,6 +11,7 @@ struct AlbumView: View {
   let album: Album
 
   @State private var showingAddToPlaylist = false
+  @State private var showingBackstage = false
   @AppStorage(LibraryArtworkShape.storageKey) private var artworkShapeRaw =
     LibraryArtworkShape.roundedRectangle.rawValue
 
@@ -47,6 +48,14 @@ struct AlbumView: View {
     }
   }
 
+  private var albumCredits: [BackstageCredit] {
+    BackstageCredit.merged(sortedSongs.map(\.backstageCredits))
+  }
+
+  private var albumContributorCount: Int {
+    Set(albumCredits.map { $0.name.lowercased() }).count
+  }
+
   @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
@@ -69,6 +78,36 @@ struct AlbumView: View {
         }
         .listRowBackground(themeManager.cardBackgroundColor)
       }
+
+      Section("Backstage") {
+        Button {
+          showingBackstage = true
+        } label: {
+          HStack(spacing: 13) {
+            Image(systemName: "person.2.fill")
+              .font(.system(size: 17, weight: .semibold))
+              .foregroundStyle(themeManager.accentColor)
+              .frame(width: 40, height: 40)
+              .background(themeManager.accentColor.opacity(0.14), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+              Text("Credits & contributors")
+                .font(.headline)
+                .foregroundStyle(.primary)
+              Text("\(albumContributorCount) \(albumContributorCount == 1 ? "person" : "people") across \(sortedSongs.count) \(sortedSongs.count == 1 ? "track" : "tracks")")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.tertiary)
+          }
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+      }
+      .listRowBackground(themeManager.cardBackgroundColor)
 
       ForEach(discGroups, id: \.disc) { group in
         Section {
@@ -152,6 +191,9 @@ struct AlbumView: View {
             .foregroundStyle(themeManager.accentColor)
         }
       }
+    }
+    .sheet(isPresented: $showingBackstage) {
+      BackstageView(album: album, songs: sortedSongs)
     }
   }
 

@@ -10,6 +10,9 @@ connection.
   Files, with optional live folder monitoring.
 - [x] Read embedded metadata and artwork, refresh missing metadata in bulk, and
   optionally enrich the library from online sources.
+- [x] Explore song and album credits in Backstage, combining embedded tags with
+  MusicKit artists/composers and MusicBrainz performer, writer, producer, and
+  engineering relationships.
 - [x] Import and export playlists, including M3U and M3U8 playlists, and create
   rule-based smart playlists.
 - [x] Play FLAC and other locally supported formats with queue management,
@@ -64,6 +67,20 @@ history engine with a private, cached analysis of the audio signal itself.
   - [ ] Restore playlist references when files move or are replaced.
 - [ ] **Perfect-Fit Queue** — Build a session for an exact amount of available
   time with a chosen energy curve and a natural ending.
+- [ ] **WaveLink** — Move playback between Ampwave devices and control the
+  active player from another device without losing the queue or listening
+  position.
+  - [ ] Discover trusted Ampwave devices without requiring an Ampwave account.
+  - [ ] Hand off the current song, position, queue, shuffle, repeat, and playback
+    state, pausing the source only after the destination confirms playback.
+  - [ ] Resolve Jellyfin and Plex tracks through stable provider IDs and match
+    local songs by file fingerprint, without silently copying audio between
+    devices.
+  - [ ] Let a secondary device remotely control transport and edit the active
+    queue.
+  - [ ] Show a clear fallback when the destination cannot access a queued song.
+  - [ ] Expand WaveLink into shared listening by integrating it with Nearby
+    Listening Room sessions.
 - [ ] **Nearby Listening Room** — Let nearby Ampwave users suggest songs, vote,
   and manage a shared queue without accounts or internet.
   - [ ] Use Wi-Fi Aware on supported iOS 26+ devices for encrypted, high-speed

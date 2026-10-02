@@ -235,6 +235,131 @@ final class ArtistCreditTests: XCTestCase {
   }
 }
 
+@MainActor
+final class BackstageCreditTests: XCTestCase {
+  func testCreditMergeKeepsDistinctRolesAndCombinesSources() {
+    let appleComposer = BackstageCredit(
+      name: "Quincy Jones",
+      role: "Producer",
+      category: .production,
+      sources: [.appleMusic]
+    )
+    let musicBrainzProducer = BackstageCredit(
+      name: "quincy jones",
+      role: "producer",
+      category: .production,
+      sources: [.musicBrainz],
+      musicBrainzArtistID: "producer-id"
+    )
+    let performer = BackstageCredit(
+      name: "Quincy Jones",
+      role: "Synthesizer",
+      category: .performance,
+      sources: [.musicBrainz]
+    )
+
+    let merged = BackstageCredit.merged([[appleComposer], [musicBrainzProducer, performer]])
+
+    XCTAssertEqual(merged.count, 2)
+    let producer = try? XCTUnwrap(merged.first { $0.role.caseInsensitiveCompare("Producer") == .orderedSame })
+    XCTAssertEqual(Set(producer?.sources ?? []), [.appleMusic, .musicBrainz])
+    XCTAssertEqual(producer?.musicBrainzArtistID, "producer-id")
+  }
+
+  func testEmbeddedArtistsComposersAndLyricistsSeedBackstage() {
+    let song = LibrarySong(
+      title: "Credits",
+      artist: "Artist One; Artist Two",
+      fileName: "credits.m4a",
+      fileHash: UUID().uuidString,
+      size: 1,
+      composer: "Writer One / Writer Two",
+      lyricist: "Writer One"
+    )
+
+    XCTAssertTrue(song.backstageCredits.contains { $0.name == "Artist One" && $0.role == "Artist" })
+    XCTAssertTrue(song.backstageCredits.contains { $0.name == "Artist Two" && $0.role == "Artist" })
+    XCTAssertTrue(song.backstageCredits.contains { $0.name == "Writer Two" && $0.role == "Composer" })
+    XCTAssertTrue(song.backstageCredits.contains { $0.name == "Writer One" && $0.role == "Lyricist" })
+  }
+
+  func testMusicBrainzWorkRelationsDecode() throws {
+    let json = #"""
+    {
+      "id": "recording-id",
+      "title": "A Song",
+      "artist-credit": [{"name":"The Artist","artist":{"id":"artist-id","name":"The Artist"}}],
+      "relations": [{
+        "type": "performance",
+        "target-type": "work",
+        "work": {
+          "id": "work-id",
+          "title": "A Song",
+          "relations": [{
+            "type": "composer",
+            "target-type": "artist",
+            "attributes": [],
+            "artist": {"id":"writer-id","name":"The Writer"}
+          }]
+        }
+      }]
+    }
+    """#.data(using: .utf8)!
+
+    let recording = try JSONDecoder().decode(MusicBrainzRecordingDetailResponse.self, from: json)
+    XCTAssertEqual(recording.relations?.first?.work?.relations?.first?.type, "composer")
+    XCTAssertEqual(recording.relations?.first?.work?.relations?.first?.artist?.name, "The Writer")
+  }
+}
+
+@MainActor
+final class RadioArtworkTests: XCTestCase {
+  func testSingleAlbumStationUsesFullAlbumArtwork() {
+    let first = makeSong(title: "One", album: "The Album", artwork: "artwork/cover.jpg")
+    let second = makeSong(title: "Two", album: "The Album", artwork: "artwork/cover.jpg")
+    let station = RadioStation(
+      name: "Album Radio",
+      subtitle: "Artist",
+      seedType: "dailyMix",
+      songs: [first, second],
+      artworkPaths: ["artwork/cover.jpg"],
+      colors: [.red]
+    )
+
+    XCTAssertTrue(station.isSingleAlbumStation)
+    XCTAssertEqual(station.singleAlbumArtworkPath, "artwork/cover.jpg")
+  }
+
+  func testMixedAlbumStationKeepsCollage() {
+    let first = makeSong(title: "One", album: "First", artwork: "artwork/first.jpg")
+    let second = makeSong(title: "Two", album: "Second", artwork: "artwork/second.jpg")
+    let station = RadioStation(
+      name: "Daily Mix",
+      subtitle: "Artist",
+      seedType: "dailyMix",
+      songs: [first, second],
+      artworkPaths: ["artwork/first.jpg", "artwork/second.jpg"],
+      colors: [.red]
+    )
+
+    XCTAssertFalse(station.isSingleAlbumStation)
+    XCTAssertNil(station.singleAlbumArtworkPath)
+  }
+
+  private func makeSong(title: String, album: String, artwork: String) -> LibrarySong {
+    LibrarySong(
+      title: title,
+      artist: "Artist",
+      fileName: "\(title).m4a",
+      fileHash: UUID().uuidString,
+      size: 1,
+      album: album,
+      albumArtist: "Artist",
+      artworkPath: artwork
+    )
+  }
+}
+
 final class WatchCatalogSnapshotTests: XCTestCase {
   func testMetadataOnlyCatalogRoundTripsWithPlaylistOrder() throws {
     let first = UUID()

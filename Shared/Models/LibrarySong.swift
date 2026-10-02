@@ -128,6 +128,13 @@ final class LibrarySong: Identifiable, Hashable {
   var lyricist: String?
   var isrc: String?
   var appleMusicURL: String?
+  var appleMusicId: String?
+  var musicBrainzId: String?
+  /// Detailed recording and work credits fetched for the Backstage view.
+  @Attribute(.externalStorage) var backstageCreditsData: Data?
+  /// Prevents the Backstage sheet from repeating a successful provider lookup
+  /// every time it opens. Manual refresh can always run another lookup.
+  var backstageMetadataCheckAttempted: Bool = false
   var artworkPath: String?
   var embeddedArtworkPath: String?
   var isRemoteArtwork: Bool = false
@@ -192,6 +199,79 @@ final class LibrarySong: Identifiable, Hashable {
     set {
       id3v2TagsData = newValue.isEmpty ? nil : try? JSONEncoder().encode(newValue)
     }
+  }
+
+  /// Provider credits plus the useful people already present in the file's
+  /// artist, composer, and lyricist tags. The seeded entries make Backstage
+  /// useful immediately, even before an online enrichment has completed.
+  var backstageCredits: [BackstageCredit] {
+    get {
+      let fetched = backstageCreditsData.flatMap {
+        try? JSONDecoder().decode([BackstageCredit].self, from: $0)
+      } ?? []
+      return BackstageCredit.merged([seededBackstageCredits, fetched])
+    }
+    set {
+      // Embedded credits are derived live from editable song fields; only
+      // provider-backed entries belong in the JSON snapshot or an old artist
+      // name would survive a later user edit.
+      let persistent = BackstageCredit.merged([newValue]).compactMap { credit -> BackstageCredit? in
+        let providerSources = credit.sources.filter { $0 != .embedded }
+        guard !providerSources.isEmpty else { return nil }
+        return BackstageCredit(
+          name: credit.name,
+          role: credit.role,
+          category: credit.category,
+          sources: providerSources,
+          musicBrainzArtistID: credit.musicBrainzArtistID
+        )
+      }
+      backstageCreditsData = persistent.isEmpty ? nil : try? JSONEncoder().encode(persistent)
+    }
+  }
+
+  private var seededBackstageCredits: [BackstageCredit] {
+    var credits = ArtistParser.normalizedArtists(artists, fallback: artist).map {
+      BackstageCredit(
+        name: $0,
+        role: "Artist",
+        category: .performance,
+        sources: [.embedded]
+      )
+    }
+
+    credits += Self.creditNames(from: composer).map {
+      BackstageCredit(
+        name: $0,
+        role: "Composer",
+        category: .songwriting,
+        sources: [.embedded]
+      )
+    }
+    credits += Self.creditNames(from: lyricist).map {
+      BackstageCredit(
+        name: $0,
+        role: "Lyricist",
+        category: .songwriting,
+        sources: [.embedded]
+      )
+    }
+    return credits
+  }
+
+  private static func creditNames(from value: String?) -> [String] {
+    guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return []
+    }
+    let normalized = value
+      .replacingOccurrences(of: " / ", with: ";")
+      .replacingOccurrences(of: "/", with: ";")
+      .replacingOccurrences(of: " & ", with: ";")
+    var seen = Set<String>()
+    return normalized
+      .split(separator: ";")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
   }
 
   // MARK: - Search Indexing

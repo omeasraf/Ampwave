@@ -3056,6 +3056,21 @@ extension Notification.Name {
       song.appleMusicURL = appleMusicURL.absoluteString
       needsSave = true
     }
+    if let appleMusicId = metadata.appleMusicId, song.appleMusicId != appleMusicId {
+      song.appleMusicId = appleMusicId
+      needsSave = true
+    }
+    if let musicBrainzId = metadata.musicBrainzId, song.musicBrainzId != musicBrainzId {
+      song.musicBrainzId = musicBrainzId
+      needsSave = true
+    }
+    if !metadata.backstageCredits.isEmpty {
+      song.backstageCredits = BackstageCredit.merged([
+        song.backstageCredits,
+        metadata.backstageCredits,
+      ])
+      needsSave = true
+    }
 
     // Update related models
     if let albumRef = song.albumReference {

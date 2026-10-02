@@ -496,7 +496,8 @@ struct RadioStationView: View {
   private let stationSubtitle: String
   private let stationLastUpdated: Date
   private let stationArtworkPaths: [String]
-  private let stationColors: [Color]
+  private let stationSingleAlbumArtworkPath: String?
+  private let stationIsSingleAlbum: Bool
   private let stationSongIDs: [UUID]
   @Environment(ThemeManager.self) private var themeManager
   @State private var visibleSongs: [LibrarySong] = []
@@ -509,7 +510,8 @@ struct RadioStationView: View {
     stationSubtitle = station.subtitle
     stationLastUpdated = station.lastUpdated
     stationArtworkPaths = station.artworkPaths
-    stationColors = station.colors
+    stationSingleAlbumArtworkPath = station.singleAlbumArtworkPath
+    stationIsSingleAlbum = station.isSingleAlbumStation
     stationSongIDs = station.songOrder
   }
 
@@ -565,7 +567,7 @@ struct RadioStationView: View {
     VStack(spacing: 20) {
       RadioArtworkCollage(
         artworkPaths: stationArtworkPaths,
-        colors: stationColors,
+        singleArtworkPath: stationSingleAlbumArtworkPath,
         size: 200
       )
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -580,6 +582,15 @@ struct RadioStationView: View {
           .font(.system(size: 15))
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
+
+        if stationIsSingleAlbum {
+          Label("Album radio", systemImage: "rectangle.stack.fill")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(themeManager.accentColor)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(themeManager.accentColor.opacity(0.13), in: Capsule())
+        }
 
         Text("Last updated \(stationLastUpdated.formatted(date: .abbreviated, time: .shortened))")
           .font(.system(size: 12))
@@ -657,35 +668,62 @@ struct RadioStationView: View {
 
 struct RadioArtworkCollage: View {
   let artworkPaths: [String]
-  let colors: [Color]
+  let singleArtworkPath: String?
   let size: CGFloat
+  @Environment(ThemeManager.self) private var themeManager
 
   var body: some View {
-    let half = size / 2
+    Group {
+      if let singleArtworkPath {
+        AlbumArtworkView(
+          artworkPath: singleArtworkPath,
+          size: size,
+          cornerRadius: 0
+        )
+      } else if artworkPaths.isEmpty {
+        radioPlaceholder(size: size, iconSize: size * 0.28)
+      } else {
+        let half = size / 2
+        LazyVGrid(
+          columns: [
+            GridItem(.fixed(half), spacing: 0),
+            GridItem(.fixed(half), spacing: 0),
+          ],
+          spacing: 0
+        ) {
+          ForEach(0..<4, id: \.self) { idx in
+            let path = idx < artworkPaths.count ? artworkPaths[idx] : nil
+            if let path {
+              AlbumArtworkView(
+                artworkPath: path,
+                size: half,
+                cornerRadius: 0
+              )
+            } else {
+              radioPlaceholder(size: half, iconSize: half * 0.26)
+            }
+          }
+        }
+      }
+    }
+    .frame(width: size, height: size)
+    .clipped()
+  }
+
+  private func radioPlaceholder(size: CGFloat, iconSize: CGFloat) -> some View {
     ZStack {
       LinearGradient(
-        colors: colors,
+        colors: [
+          themeManager.accentColor,
+          themeManager.accentColor.opacity(0.48),
+        ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
       )
-
-      LazyVGrid(
-        columns: [
-          GridItem(.fixed(half), spacing: 0),
-          GridItem(.fixed(half), spacing: 0),
-        ],
-        spacing: 0
-      ) {
-        ForEach(0..<4, id: \.self) { idx in
-          let path = idx < artworkPaths.count ? artworkPaths[idx] : nil
-          AlbumArtworkView(
-            artworkPath: path,
-            size: half,
-            cornerRadius: 0
-          )
-          .frame(width: half, height: half)
-        }
-      }
+      Image(systemName: "dot.radiowaves.left.and.right")
+        .font(.system(size: iconSize, weight: .semibold))
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
     }
     .frame(width: size, height: size)
   }

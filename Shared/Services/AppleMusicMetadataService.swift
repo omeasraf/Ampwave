@@ -448,6 +448,35 @@ final class AppleMusicMetadataService {
 
         let artists = song.artists?.compactMap { $0.name } ?? []
         let combinedArtist = artists.isEmpty ? song.artistName : artists.joined(separator: " & ")
+        let appleArtists = artists.isEmpty ? [song.artistName] : artists
+        let composerCreditNames: [String] = {
+            let related = song.composers?.compactMap { $0.name } ?? []
+            guard related.isEmpty, let composerName = song.composerName else { return related }
+            return composerName
+                .replacingOccurrences(of: " / ", with: ";")
+                .replacingOccurrences(of: " & ", with: ";")
+                .split(separator: ";")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }()
+        let appleCredits = BackstageCredit.merged([
+            appleArtists.map {
+                BackstageCredit(
+                    name: $0,
+                    role: "Artist",
+                    category: .performance,
+                    sources: [.appleMusic]
+                )
+            },
+            composerCreditNames.map {
+                BackstageCredit(
+                    name: $0,
+                    role: "Composer",
+                    category: .songwriting,
+                    sources: [.appleMusic]
+                )
+            },
+        ])
 
         // Use album artist from the album relationship when available
         let albumArtist = song.albums?.first?.artistName ?? combinedArtist
@@ -485,6 +514,7 @@ final class AppleMusicMetadataService {
             artworkPrimaryTextColor: hexString(from: song.artwork?.primaryTextColor),
             artworkSecondaryTextColor: hexString(from: song.artwork?.secondaryTextColor),
             artworkTertiaryTextColor: hexString(from: song.artwork?.tertiaryTextColor),
+            backstageCredits: appleCredits,
             source: .appleMusic
         )
     }
