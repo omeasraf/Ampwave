@@ -1,0 +1,38 @@
+Ampwave Proprietary Source License
+
+Copyright (c) 2026 Ome Asraf. All rights reserved.
+
+The Ampwave application source code and accompanying original materials in
+this repository are source-visible proprietary software, except for portions
+that are expressly identified as third-party or separately licensed material.
+
+No license or permission is granted to use, copy, modify, merge, publish,
+distribute, sublicense, sell, reverse engineer, or create derivative works
+from this source code without prior written permission from the copyright
+holder.
+
+Access to this repository, whether through GitHub or by any other means, does
+not grant any intellectual-property rights or permission beyond the limited
+right to view the source. Contributions and other work on Ampwave require
+express authorization from the copyright holder.
+
+Ampwave is a paid product. No person or automated system may use this source
+code to remove, bypass, disable, weaken, spoof, or otherwise circumvent any
+purchase, subscription, trial, StoreKit verification, receipt validation,
+entitlement check, access gate, or other paid-access restriction. Creating,
+assisting with, or distributing an unauthorized free or access-unlocked build
+of Ampwave is expressly prohibited.
+
+Third-party and separately licensed portions remain subject to their
+respective terms. See THIRD_PARTY_NOTICES.md.
+
+Historical revisions of Ampwave that were previously released under another
+license remain governed by the license terms applicable to those revisions at
+the time of publication. This license applies prospectively to this version
+and future versions unless a later written license states otherwise.
+
+THE SOFTWARE IS PROVIDED "AS IS," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING
+FROM OR RELATED TO THE SOFTWARE OR ITS USE.
