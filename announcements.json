@@ -1,4 +1,15 @@
 {
   "schemaVersion": 1,
-  "announcements": []
+  "announcements": [
+    {
+      "id": "2026-10-07-welcome",
+      "title": "An update from Ampwave",
+      "message": "Thanks for using Ampwave!\n\nYour music, in motion.",
+      "versions": ["1.6"],
+      "builds": ["1"],
+      "startsAt": "2026-10-07T00:00:00Z",
+      "expiresAt": "2026-11-01T00:00:00Z",
+      "showsUpdateButton": true
+    }
+  ]
 }
